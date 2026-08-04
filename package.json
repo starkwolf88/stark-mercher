@@ -9,7 +9,7 @@
   "main": "stark-mercher.js",
   "scripts": {
     "build": "node build.js",
-    "watch": "esbuild stark_mercher.ts --bundle --outfile=C:/Users/Zsus/.titanclient/plugins/stark_mercher.js --watch",
+    "watch": "esbuild stark-mercher.ts --bundle --outfile=C:/Users/Zsus/.titanclient/plugins/stark-mercher.js --watch",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {

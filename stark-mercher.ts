@@ -1,10 +1,9 @@
 /// <reference path="./titan-plugin-sdk.d.ts" />
 import { debug } from './general/debug.js';
 import { variables } from './general/variables.js';
-import testJson from './json/test.json';
 
 class StarkMercher extends titan.Plugin {
-    id = "stark_mercher";
+    id = "stark-mercher";
     name = "Stark Mercher";
     onGameTick = (tick: number) => gameTick(tick);
     onMenuOptionClicked(event: any) {
@@ -35,9 +34,6 @@ const gameTick = (tick: number) => {
 };
 
 const stateManager = () => {
-    titan.log(testJson[0].price.toString())
-    titan.log(testJson[0].price.toString())
-
     if (!test121) {
         const geSlot1BuyOffer = titan.state.widgets.find(30474247);
         if (geSlot1BuyOffer) {
