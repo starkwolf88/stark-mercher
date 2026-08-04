@@ -1,0 +1,27 @@
+{
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "typescript": "^7.0.2"
+  },
+  "name": "stark-mercher",
+  "version": "1.0.0",
+  "description": "",
+  "main": "stark-mercher.js",
+  "scripts": {
+    "build": "node build.js",
+    "watch": "esbuild stark_mercher.ts --bundle --outfile=C:/Users/Zsus/.titanclient/plugins/stark_mercher.js --watch",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/starkwolf88/stark-mercher.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/starkwolf88/stark-mercher/issues"
+  },
+  "homepage": "https://github.com/starkwolf88/stark-mercher#readme"
+}
