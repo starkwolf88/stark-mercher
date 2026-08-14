@@ -7,7 +7,7 @@ class StarkMercher extends titan.Plugin {
     name = "Stark Mercher";
     onGameTick = (tick: number) => gameTick(tick);
     onMenuOptionClicked(event: any) {
-        // debug.widgets(event);
+        debug.widgets(event);
     }
 }
 titan.register(new StarkMercher());
