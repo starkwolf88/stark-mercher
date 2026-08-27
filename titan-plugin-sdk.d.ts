@@ -70,6 +70,20 @@ interface WorldPoint {
     z: number;
     /** Owning WorldView id. `0` is top-level, `-1` is current sentinel. SDK 85+. */
     worldViewId?: number;
+    /**
+     * True when this world tile is inside the scene the client currently has
+     * loaded — i.e. when its objects, collision and clickable tiles can be
+     * read at all. A tile outside it can be walked TOWARD but never
+     * interacted with, so this is the guard to use before clicking a tile,
+     * resolving an object, or reading collision.
+     *
+     * Present on every WorldPoint the SDK returns (it is a getter on their
+     * shared prototype, so it never appears in `Object.keys` or
+     * `JSON.stringify`). Plain object literals you build yourself carry no
+     * derived properties — call `titan.worldPoint.isInScene(point)` for
+     * those, which also takes an explicit scene base/size. SDK 117+.
+     */
+    readonly isInScene?: boolean;
 }
 /**
  * Sub-tile precision scene-local coordinate. Mirrors `titan::LocalPoint`
@@ -98,7 +112,319 @@ interface ScreenPoint {
     y: number;
 }
 
+/**
+ * Immutable state of the visible native world map. `viewport*` coordinates
+ * are physical screen pixels; `logicalViewport*` coordinates are the game's
+ * widget-frame units before `interfaceScale*` and `canvasOrigin*` are applied.
+ * The host returns no snapshot unless both viewports are coherent and the
+ * generated analyzer field contract, renderer-validated scale, loaded map
+ * area, and visible viewport are all available. SDK 113+.
+ */
+interface WorldMapSnapshot {
+    readonly globalCenterX: number;
+    readonly globalCenterY: number;
+    /** Currently displayed, smoothly interpolated native zoom. */
+    readonly currentZoom: number;
+    readonly targetZoom: number;
+    /** Validated logical widget pixels per world tile; equals currentZoom in v113. */
+    readonly pixelsPerTile: number;
+    /** Physical viewport used for overlay drawing and clipping. */
+    readonly viewportX: number;
+    readonly viewportY: number;
+    readonly viewportWidth: number;
+    readonly viewportHeight: number;
+    /** Logical widget-frame viewport used by the native map projection. */
+    readonly logicalViewportX: number;
+    readonly logicalViewportY: number;
+    readonly logicalViewportWidth: number;
+    readonly logicalViewportHeight: number;
+    readonly interfaceScaleX: number;
+    readonly interfaceScaleY: number;
+    readonly canvasOriginX: number;
+    readonly canvasOriginY: number;
+}
+
+/** Read-only native world-map state and projection helpers. SDK 113+. */
+interface WorldMapFacade {
+    snapshot(): WorldMapSnapshot | null;
+    /** Project a global world tile onto the current map viewport. */
+    worldToScreen(point: WorldPoint): ScreenPoint | null;
+    /** Convert a physical screen pixel into a canonical global plane-0 tile. */
+    screenToWorld(point: ScreenPoint): WorldPoint | null;
+    /** Convert logical world-map pixels to tiles. */
+    pixelsToTiles(pixels: number): number | null;
+    /** Convert tiles to logical world-map pixels before interface scaling. */
+    tilesToPixels(tiles: number): number | null;
+}
+
 type InstanceTemplateChunks = number[][][] & { readonly instanced?: boolean };
+
+/** Status returned by the immutable bulk collision snapshot APIs. SDK 112+. */
+enum CollisionSnapshotStatus {
+    Unavailable = 0,
+    Ready = 1,
+    MissingRegion = 2,
+    BufferTooSmall = 3,
+    InvalidRequest = 4,
+}
+
+/** Immutable four-plane 64x64 cached mapsquare collision snapshot. SDK 112+. */
+interface CachedCollisionRegion {
+    readonly status: CollisionSnapshotStatus;
+    readonly regionId: number;
+    readonly flagCount: number;
+    readonly flags: Int32Array;
+    readonly ready: boolean;
+    /** Return the flag at [plane][regionX][regionY], or null when unavailable/out of bounds. */
+    flag(plane: number, regionX: number, regionY: number): number | null;
+}
+
+/** Immutable live-scene collision and canonical instance mapping snapshot. SDK 112+. */
+interface LiveCollisionScene {
+    readonly status: CollisionSnapshotStatus;
+    readonly baseX: number;
+    readonly baseY: number;
+    readonly width: number;
+    readonly height: number;
+    readonly worldViewId: number;
+    readonly instanced: boolean;
+    readonly flagCount: number;
+    readonly templateChunks: InstanceTemplateChunks;
+    readonly flags: Int32Array;
+    readonly ready: boolean;
+    /** Return the flag at [plane][sceneX][sceneY], or null when unavailable/out of bounds. */
+    flag(plane: number, sceneX: number, sceneY: number): number | null;
+}
+
+/** Coordinate domain used to construct a web path. SDK 112+. */
+enum WebPathRouteSpace {
+    Global = 0,
+    CurrentInstance = 1,
+}
+
+/** Current state of an asynchronous web-path request. SDK 112+. */
+enum WebPathPhase {
+    None = 0,
+    Queued = 1,
+    Running = 2,
+    Complete = 3,
+    Failed = 4,
+    Cancelled = 5,
+}
+
+/** Terminal path-generation result. SDK 112+. */
+enum WebPathResult {
+    None = 0,
+    Exact = 1,
+    PartialWithinThreeTiles = 2,
+    NoPath = 3,
+    Timeout = 4,
+    Cancelled = 5,
+    InvalidRequest = 6,
+    NotLoggedIn = 7,
+    CollisionUnavailable = 8,
+    ProviderUnavailable = 9,
+    Busy = 10,
+    InternalError = 11,
+}
+
+/** Typed edge kind in a generated route. SDK 112+. */
+enum WebPathStepKind {
+    Walk = 0,
+    Transport = 1,
+    Teleport = 2,
+}
+
+/** Raw option bits accepted by WebPathRequest.options. SDK 112+. */
+const WebPathOption: {
+    readonly Transports: number;
+    readonly Teleports: number;
+    readonly EquippedItemTeleports: number;
+    readonly MinigameTeleports: number;
+    readonly PohRoutes: number;
+    readonly Charters: number;
+    readonly AvoidWilderness: number;
+    readonly Default: number;
+};
+
+/**
+ * Web-path feature toggles. Omitted fields retain the documented defaults:
+ * transports, normal/equipped teleports, POH routes and wilderness avoidance
+ * are enabled; minigame teleports and charters are disabled.
+ */
+interface WebPathOptions {
+    transports?: boolean;
+    teleports?: boolean;
+    equippedItemTeleports?: boolean;
+    minigameTeleports?: boolean;
+    pohRoutes?: boolean;
+    charters?: boolean;
+    avoidWilderness?: boolean;
+}
+
+/** Read-only asynchronous route-generation request. SDK 112+. */
+interface WebPathRequest {
+    /** Ignored when useLocalPlayer is true (the default). */
+    start?: WorldPoint;
+    destination: WorldPoint;
+    routeSpace?: WebPathRouteSpace;
+    /** Feature toggles, or an explicitly composed WebPathOption bit mask. */
+    options?: WebPathOptions | number;
+    /** Defaults to 60 seconds and is capped at 10 minutes. */
+    timeoutMs?: number;
+    /** Snapshot the current local-player point instead of start. Defaults to true. */
+    useLocalPlayer?: boolean;
+    /** Additional exact points that walking must not enter (maximum 4096). */
+    forbiddenTiles?: readonly WorldPoint[];
+}
+
+interface WebPathSummary {
+    /** Opaque uint64 id; always a bigint to avoid precision loss. */
+    readonly requestId: bigint;
+    readonly phase: WebPathPhase;
+    readonly result: WebPathResult;
+    /** Integer cost points; normal walking contributes 5 points per tile. */
+    readonly totalCost: number;
+    /** Number of retained steps; at most 16,384. */
+    readonly stepCount: number;
+    readonly exploredNodes: number;
+    readonly elapsedMs: number;
+    readonly start: WorldPoint;
+    readonly requestedDestination: WorldPoint;
+    readonly reachedDestination: WorldPoint;
+    readonly message: string;
+    readonly finished: boolean;
+}
+
+interface WebPathStep {
+    /** Stable uint64 edge id; always a bigint to avoid precision loss. */
+    readonly edgeId: bigint;
+    readonly kind: WebPathStepKind;
+    readonly subtype: number;
+    readonly fromRouteSpace: WebPathRouteSpace;
+    readonly toRouteSpace: WebPathRouteSpace;
+    /** Integer edge cost points. */
+    readonly edgeCost: number;
+    /** Integer accumulated cost points. */
+    readonly accumulatedCost: number;
+    /** Exact instance-copy identity, or -1 for a global endpoint. */
+    readonly fromInstanceCopyId: number;
+    /** Exact instance-copy identity, or -1 for a global endpoint. */
+    readonly toInstanceCopyId: number;
+    readonly from: WorldPoint;
+    readonly to: WorldPoint;
+    readonly name: string;
+}
+
+interface WebWalkerFacade {
+    /** Queue a route job, or return null when the request cannot be accepted. */
+    submit(request: WebPathRequest): bigint | null;
+    /** Poll a retained request, or return null for an unknown/unavailable handle. */
+    poll(handle: bigint): WebPathSummary | null;
+    /** Copy the currently retained typed route steps. */
+    copySteps(handle: bigint): WebPathStep[] | null;
+    cancel(handle: bigint): boolean;
+    /** Release retained job state; handles must not be used after this succeeds. */
+    release(handle: bigint): boolean;
+    /**
+     * UTF-8 JSON action payload for one step of a completed, retained route
+     * (internal backend only), or null for unknown requests, out-of-range
+     * indices, or hosts before SDK 114.
+     */
+    stepPayload(handle: bigint, stepIndex: number): string | null;
+}
+
+/** Lifecycle phase of a host-driven web-walk session. SDK 114+. */
+enum WebWalkPhase {
+    None = 0,
+    Planning = 1,
+    Walking = 2,
+    Transiting = 3,
+    Arrived = 4,
+    Failed = 5,
+    Cancelled = 6,
+}
+
+/**
+ * Options for webWalk.walkTo. Omitted fields keep the defaults: run-energy
+ * management on, stamina drinking off, host-driven (automatic) ticking,
+ * exact-tile arrival, and no walk duration budget.
+ */
+interface WebWalkOptions {
+    routeSpace?: WebPathRouteSpace;
+    /** Route feature toggles, or an explicitly composed WebPathOption bit mask. */
+    pathOptions?: WebPathOptions | number;
+    /** Route-planning timeout. Defaults to 60 seconds and is capped at 10 minutes. */
+    timeoutMs?: number;
+    /** Toggle run and manage run energy during the walk. Defaults to true. */
+    manageRun?: boolean;
+    /** Drink a carried stamina potion below 50% energy. Defaults to false. */
+    drinkStamina?: boolean;
+    /**
+     * Advance only via webWalk.advance() once per game tick instead of the
+     * host's own game-tick pump. Defaults to false.
+     */
+    manualTick?: boolean;
+    /** Chebyshev arrival tolerance around the destination; 0 = exact tile. */
+    arriveRadius?: number;
+    /** Hard budget for the whole walk in game ticks; 0 = unlimited. */
+    maxDurationTicks?: number;
+    /** Additional exact points that walking must not enter (maximum 4096). */
+    forbiddenTiles?: readonly WorldPoint[];
+}
+
+/** Immutable status snapshot for a started web-walk session. SDK 114+. */
+interface WebWalkStatus {
+    /** Opaque uint64 walk id; always a bigint to avoid precision loss. */
+    readonly walkId: bigint;
+    readonly phase: WebWalkPhase;
+    /** Planning failure detail when the underlying route request failed. */
+    readonly pathResult: WebPathResult;
+    readonly currentStepIndex: number;
+    /** Number of retained steps; at most 16,384. */
+    readonly stepCount: number;
+    readonly ticksActive: number;
+    readonly replanCount: number;
+    /** Stable code of the follower's most recent decision, for overlays. */
+    readonly lastDecision: number;
+    readonly destination: WorldPoint;
+    readonly currentStepName: string;
+    readonly message: string;
+    readonly finished: boolean;
+}
+
+/**
+ * Host-driven web-walk executor over generated routes. Walking is
+ * centralized: at most one walk is live per client, and a new start from any
+ * plugin instantly cancels the walk in progress. status/cancel/advance may
+ * omit the handle to target the current walk, so the common single-driver
+ * plugin never touches handles; keeping the returned handle still lets a
+ * plugin tell "my walk" apart from a superseding one (a superseded handle
+ * polls as Cancelled until released). SDK 114+.
+ */
+interface WebWalkFacade {
+    /** Start walking the local player, or return null when the walk cannot start. */
+    walkTo(destination: WorldPoint | Tile, options?: WebWalkOptions): bigint | null;
+    walkTo(x: number, y: number, plane: number, options?: WebWalkOptions): bigint | null;
+    /**
+     * Poll a walk session, or null for an unknown handle. Omitting the
+     * handle reads the current walk: the most recently started session,
+     * which stays readable through its terminal state until released or
+     * evicted; null when no walk has been started.
+     */
+    status(handle?: bigint): WebWalkStatus | null;
+    /** Cancel a walk; omitting the handle cancels the live walk. */
+    cancel(handle?: bigint): boolean;
+    /** Release retained session state; handles must not be used after this succeeds. */
+    release(handle: bigint): boolean;
+    /**
+     * Advance a manualTick session by one follower tick (the live walk when
+     * the handle is omitted). Call once per game tick from the owning
+     * plugin's onGameTick. Returns false for unknown, terminal, or
+     * auto-ticked sessions.
+     */
+    advance(handle?: bigint): boolean;
+}
 
 interface InstanceConvertible {
     fromLocalInstance(): WorldPoint | null;
@@ -1122,9 +1448,9 @@ interface ItemContainerChangedEvent {
     readonly items: ItemContainerSlot[];
 }
 
-/** Runtime ItemDef snapshot (RuneLite's Client.getItemDefinition parity).
- * When `runtimeResolved` is true the fields came from the native
- * ITEM_DEF_LOOKUP (includes varbit/varp transforms and preserves runtime
+/** Runtime ItemDef snapshot (RuneLite Client parity).
+ * When `runtimeResolved` is true the fields came from the live game table or
+ * native ITEM_DEF_LOOKUP (includes resolved transforms and preserves runtime
  * inventory-action slots, including empty gaps); when false they came from
  * the cache file's raw 5-slot inventory-action array. Added in SDK 26. */
 interface ItemComposition {
@@ -1380,6 +1706,13 @@ class Plugin {
     onEnable?(): void;
     onDisable?(): void;
     onClientTick?(): void;
+    /**
+     * Fired once per outer client MAIN_LOOP iteration, including title/login
+     * screens. Static definition-cache reads are always available. Check
+     * `titan.state.login.isWorldReady` before live client, entity, widget,
+     * scene, or projection queries. SDK 118+.
+     */
+    onMainLoop?(): void;
     onGameTick?(tick: number): void;
     onSettingChanged?(key: string): void;
 
@@ -1714,7 +2047,24 @@ interface PanelElement {
         function toLocalInstance(point: WorldPoint): WorldPoint | null;
         /** Literal-safe RuneLite-style orthogonal melee adjacency check for two world/locatable targets. SDK 86+. */
         function isInMeleeDistance(a: SpatialTarget, b: SpatialTarget): boolean;
+        /**
+         * True when the world tile is inside the scene the client currently
+         * has loaded — i.e. when its objects, collision and clickable tiles
+         * can be read at all. A tile outside it can be walked TOWARD but
+         * never interacted with, so this is the guard to use before clicking
+         * a tile, resolving an object, or reading collision. Tested against
+         * the current WorldView's scene. Pass an explicit base/size to test
+         * against a snapshot you already hold. SDK 117+.
+         */
+        function isInScene(point: WorldPoint, baseX?: number, baseY?: number,
+                           sceneSizeX?: number, sceneSizeY?: number): boolean;
     }
+
+    /** Read-only asynchronous cost-based web-path generation. SDK 112+. */
+    const webWalker: WebWalkerFacade;
+
+    /** Host-driven web-walk executor over generated routes. SDK 114+. */
+    const webWalk: WebWalkFacade;
 
     // --- Geometry helpers (SDK 39) ---
     // Mirror the inline methods on `titan::WorldPos` in C++. Operate
@@ -1879,6 +2229,9 @@ interface PanelElement {
             /** Vertical interface-scale factor (1.0 when unavailable). SDK 109. */
             readonly interfaceScaleY: number;
         };
+
+        /** Visible native world-map display state and transforms. SDK 113+. */
+        const worldMap: WorldMapFacade;
 
         /** Entity hiding (render-function overrides). */
         const hider: {
@@ -2730,6 +3083,10 @@ interface PanelElement {
             setCharacter(displayName: string, characterId: string, sessionId: string): void;
             /** Clear every Jagex token and flip back to the standard login screen. */
             resetCharacter(): void;
+            /** Resolve an exact Account Profiles label and queue its credentials. */
+            stageCredentials(profileName: string): boolean;
+            /** Hold Enter through one login-screen MainLoop update, then release it. */
+            submitCredentials(): boolean;
         };
 
         /** Walking facade. */
@@ -2740,13 +3097,18 @@ interface PanelElement {
         };
 
         /**
-         * Per-tile collision map reads + one-tile step blocking
-         * (RouteFindSize1). SDK v39+. Mirrors
+         * Per-tile collision map reads, one-tile step blocking, and immutable
+         * bulk cache/live-scene snapshots. SDK v39+; snapshots are SDK 112+.
+         * Mirrors
          * `titan::state::collisions()` / `<titan/collision.h>`.
          */
         const collisions: {
             flag(plane: number, tileX: number, tileY: number): number;
             isBlocked(plane: number, x: number, y: number, dx: number, dy: number): boolean;
+            /** Copy all four planes of a 64x64 mapsquare. */
+            cachedRegion(regionId: number): CachedCollisionRegion | null;
+            /** Copy the full loaded scene and its instance-template mapping. */
+            currentScene(): LiveCollisionScene | null;
             readonly Flag: {
                 readonly WALL_SE_CORNER: number;
                 readonly WALL_SOUTH: number;
@@ -2772,6 +3134,9 @@ interface PanelElement {
             };
         };
     }
+
+    /** Account/login facade; alias of `titan.state.login`. */
+    const login: typeof state.login;
 
     // Plugin manager.
     const plugins: {
@@ -3079,20 +3444,20 @@ interface PanelElement {
 
     namespace state {
         /**
-         * Read a snapshot of the requested container. Returns null when
-         * the container id is unmapped on the current client rev OR the
-         * underlying widget isn't populated (bank closed, equipment
-         * screen not opened, etc.). Added in SDK 26.
+         * Read a snapshot of the requested container. Returns null when the
+         * native cache has no matching entry or its analyzer-provided layout
+         * fails validation. Added in SDK 26; export capacity raised to 2,048
+         * occupied entries in SDK 111.
          */
         function itemContainer(id: number): ItemContainerSnapshot | null;
 
         /**
-         * Resolve the RUNTIME ItemDef for the given id -- applies
-         * varbit/varp transforms and preserves inventory-action slots
-         * when the analyzer detected the native lookup on this
-         * revision (check the `runtimeResolved` flag). Returns null
-         * only when the id is entirely unknown to both the runtime and
-         * the cache. Added in SDK 26.
+         * Resolve the RUNTIME ItemDef for the given id. Game-thread calls may
+         * invoke the native resolver on a live-table miss. Off-thread calls
+         * emit a rate-limited warning, check the live table without invoking
+         * native code, then fall back to raw cache metadata when absent (check
+         * `runtimeResolved`). Returns null when neither source contains the id.
+         * Added in SDK 26.
          */
         function itemDef(id: number): ItemComposition | null;
     }
