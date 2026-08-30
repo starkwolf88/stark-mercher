@@ -1,0 +1,18 @@
+[
+  {
+    "itemId": 562,
+    "itemName": "Chaos rune",
+    "limit": 11000,
+    "purchasePrice": 104,
+    "salePrice": 107,
+    "quantityToPurchase": 50
+  },
+  {
+    "itemId": 453,
+    "itemName": "Coal",
+    "limit": 13000,
+    "purchasePrice": 144,
+    "salePrice": 148,
+    "quantityToPurchase": 75
+  }
+]
