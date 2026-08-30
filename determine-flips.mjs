@@ -621,7 +621,6 @@ const determineLongTermCrash = async (itemData) => {
         // 3. If the recent price dropped more than 10% from its realistic high baseline
         const MAX_ALLOWED_DROP = 0.10; 
         if ((highBaseline - recentPrice) / highBaseline > MAX_ALLOWED_DROP) {
-            console.log(`${itemData.itemName}, HIGH: ${highBaseline}, RECENT: ${recentPrice}, 5 MIN SALE: ${itemData.fiveMinuteSalePrice}, 5 MIN PURCHASE: ${itemData.fiveMinutePurchasePrice}, 3H PURCHASE: ${itemData.threeHourAverageHourlyPurchasePrice}, 3H SALE: ${itemData.threeHourAverageHourlySalePrice}`);
             longTermCrashFiltered++;
             return false;
         }
@@ -641,6 +640,12 @@ const determineFlipScore = () => {
 };
 
 async function getMerchableItems() {
+    // Capture the fetch timestamp — all items in this run share the same
+    // data fetch time. Used by the plugin to detect stale offer data
+    // (e.g. when the game was updating or the wiki API was down).
+    const dataFetchedAt = Date.now();
+    const dataFetchedAtIso = new Date(dataFetchedAt).toISOString();
+
     await getPriceData();
     console.log('Starting Item Count:', Object.entries(oneHourPriceData).length)
 
@@ -751,12 +756,26 @@ async function getMerchableItems() {
         // Determine if item is in a heavy multi-day downward spiral
         if (!await determineLongTermCrash(itemData)) continue;
 
+        // Add the data fetch timestamp so the plugin can detect stale data.
+        itemData.dataFetchedAt = dataFetchedAt;
+        itemData.dataFetchedAtIso = dataFetchedAtIso;
+
         // Push to merchableItems.
         merchableItems.push(itemData);
     };
 
     // Determine sorting for most flippable items to be at the top.
     determineFlipScore();
+
+    // If no items were found, preserve the existing file rather than wiping
+    // it. This handles cases where the wiki API is down or the game is
+    // updating — the plugin can still use the previous run's data (subject
+    // to the 10-minute staleness check in merchable-items.ts).
+    if (merchableItems.length === 0) {
+        console.log(`${'\x1b[33m'}WARNING: 0 merchable items found — preserving existing merchableItems.json${'\x1b[0m'}`);
+        console.log('-------------------------------------------------------------------------------------------------------------------------------------------------------------');
+        return;
+    }
 
     // Write to JSON file.
     await fs.writeFile('C:\\Users\\Zsus\\Documents\\GitHub\\stark-mercher\\merchableItems.json', JSON.stringify(merchableItems, null, 2), 'utf-8');

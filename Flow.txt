@@ -1,0 +1,52 @@
+Now we have those flows, we need to plan and then develop the script logic. I'll give a full overview but then we'll discuss the implementation before making any changes, as I want to make sure you understand in full.
+
+Script premise:
+
+- Advanced profit calculations occur in `determine-flips.mjs`. This outputs merchable items to `merchableItems.json`, which we will need to import for use in main script logic.
+- `merchableItems.json` will contain a buy price, sell price, ETA and more.
+- The script will buy items for the price set in `merchableItems.json` and then aim to sell them for the price also in the file in order to profit GP.
+- The ETA is used to determine stale sale offers.
+- We will store sale offer data in a cache/global variable that can persist between script restarts. This will hold original sale price, offer placed timestamp, and revised price values.
+
+This is how the script flow will need to be in general:
+
+Script loop:
+
+- Get all slot states.
+- If the collect button is showing:
+    - If any slot contains a 100% completed sell offer, meaning it will be cleared when we collect on the next step, remove the item from the sale offer data cache/global variable.
+    - Click collect, delay 1 tick, then return from the loop and re-loop.
+- If the collect button isnt showing:
+    - Get all items in inventory.
+    - Stale offers flow.
+    - Selling slow.
+    - Buying flow.
+
+Stale Offers Flow:
+
+- For any slot that contains an item being sold, check the timestamp for the slot item for when it was listed/last revised, and compare with current timestamp to determine offer duration.
+- Compare offer duration with ETA for the item using data from `merchableITems.json`:
+- Sale offers: If 75% of the ETA has passed with less than 25% quantity sold = abort. (discuss with me if this is a good strategy, as I'm just guessing at numbers)
+- Buy offers: If the ETA has passed entirely with 0 bought = abort.
+- Buy offers: If the buy offer is for more than 1 quantity and less than 50% has bought after 50% of the ETA has passed = abort. (discuss with me if these values are a good strategy also)
+
+Selling Flow:
+
+- Check if we have any empty slots.
+- If there are any empty slots, check the inventory for ANY items.
+- If the inventory contains items that are not coins, they are items we will be selling. Get the first non coins item to sell.
+- The condition to determine if an item is to be sold is whether we are selling that same item. If that same item is in a buying slot already, then skip that item. The reason we need to have that condition is that when the "Collect" button is pressed, the game collects partially bought/sold offers. So for example if we are buying 10,000 of an item, and it is partially bought at 3000/10000, we don't want to make the sale for it until it either becomes stale or has completed in full.
+- If the item isn't being bought, get the first empty slot and set up a sale offer.
+- Offer the item.
+- The price to set needs to be determined by whether the item has already been listed recently by checking the cache/global variable for sale offer data.
+- If the item does not exist in the cached/global variable data, list price using the sale price from `merchableItems.json`.
+- If the item already exists in the cached/global variable data take the last used revised price and reduce the price by 0.05%, rounded down. (Discuss this with me as I don't want to revise prices drastivcally too quickly. Need to consider items that are for large quantity but for example only 90gp each, and therefore 0.05% rounded down would be a 1gp reduction, vs high priced items for say 5 million, where 0.05% could be most of our profit if the expected profie is only 100k GP, so I need you to think through the revised price reduction strategy with me).
+- If the item is no longer in `merchableItems.json`, the 1 hour price will need to be fetched from the 1 hour OSRS price wiki API, so that we can determine the active sale price. I'll provide wiki API link later when we build this flow.
+- The sale offer data cache/global variable will need to be updated to store the offer placed start timestamp and the original sale price. If the item already exists in the data, the price will need to be appended to the revised price array values.
+
+Buying Flow:
+
+- Check if we have any empty slots.
+- If there are any empty slots, retrieve data from `merchableITems.json`.
+- Get the first empty slot and set up a buy offer.
+- Store buy price, sale price, and offer placed start timestamp in cache/global variable. We'll need to use this stored data when calculating offer duration and revised sale offer prices once the item buys.
