@@ -346,7 +346,7 @@ export class BuyOfferFlow {
             this.fail(`Slot ${this.slotIndex + 1} is already occupied`);
             return false;
         }
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true; // resolved, set a delay before clicking
     }
@@ -357,7 +357,7 @@ export class BuyOfferFlow {
         if (!clickBuySlot(this.slotIndex)) {
             return this.waitTick(); // widget not ready, retry
         }
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(2, 35, 5);
         this.advance();
         return true;
     }
@@ -368,7 +368,7 @@ export class BuyOfferFlow {
             return this.waitTick();
         }
         // Set a delay before the next action (typing).
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true;
     }
@@ -381,11 +381,11 @@ export class BuyOfferFlow {
                 return this.waitTick(); // typing couldn't start, retry
             }
             this.typingStarted = true;
-            this.computeDelay(1, 100, 3);
+            this.computeDelay(1, 35, 5);
             return true; // typing started, set a delay
         }
         // Already started — shouldn't reach here, but advance just in case.
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true;
     }
@@ -395,7 +395,7 @@ export class BuyOfferFlow {
         if (isTyping()) {
             return this.waitTick();
         }
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true;
     }
@@ -420,7 +420,7 @@ export class BuyOfferFlow {
         if (!clickSearchResult(matchIndex)) {
             return this.waitTick();
         }
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(2, 35, 5);
         this.advance();
         return true;
     }
@@ -453,7 +453,7 @@ export class BuyOfferFlow {
         }
         this.log(`Item validated: "${loadedName}"`);
         // Set a delay before the next action (clicking qty enter).
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true;
     }
@@ -464,7 +464,7 @@ export class BuyOfferFlow {
         if (!clickQtyEnter()) {
             return this.waitTick();
         }
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(2, 35, 5);
         this.advance();
         return true;
     }
@@ -479,7 +479,7 @@ export class BuyOfferFlow {
             return false;
         }
         // Set a delay before the next action (typing the quantity).
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true;
     }
@@ -492,10 +492,10 @@ export class BuyOfferFlow {
                 return this.waitTick();
             }
             this.typingStarted = true;
-            this.computeDelay(1, 100, 3);
+            this.computeDelay(1, 35, 5);
             return true;
         }
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true;
     }
@@ -506,7 +506,7 @@ export class BuyOfferFlow {
             return this.waitTick();
         }
         // Set a delay before the next action (pressing Enter).
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true;
     }
@@ -517,7 +517,7 @@ export class BuyOfferFlow {
         if (!pressEnter()) {
             return this.waitTick();
         }
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true;
     }
@@ -528,7 +528,7 @@ export class BuyOfferFlow {
         if (!clickPriceEnter()) {
             return this.waitTick();
         }
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(2, 35, 5);
         this.advance();
         return true;
     }
@@ -539,7 +539,7 @@ export class BuyOfferFlow {
             return this.waitTick();
         }
         // Set a delay before the next action (typing the price).
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true;
     }
@@ -552,10 +552,10 @@ export class BuyOfferFlow {
                 return this.waitTick();
             }
             this.typingStarted = true;
-            this.computeDelay(1, 100, 3);
+            this.computeDelay(1, 35, 5);
             return true;
         }
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true;
     }
@@ -566,7 +566,7 @@ export class BuyOfferFlow {
             return this.waitTick();
         }
         // Set a delay before the next action (pressing Enter).
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true;
     }
@@ -577,7 +577,7 @@ export class BuyOfferFlow {
         if (!pressEnter()) {
             return this.waitTick();
         }
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true;
     }
@@ -618,7 +618,7 @@ export class BuyOfferFlow {
 
         this.log(`Offer validated: ${this.quantity}x ${this._itemName} @ ${this.price}gp each`);
         // Set a delay before the next action (clicking confirm).
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(1, 35, 5);
         this.advance();
         return true;
     }
@@ -629,7 +629,7 @@ export class BuyOfferFlow {
         if (!clickConfirm()) {
             return this.waitTick();
         }
-        this.computeDelay(1, 100, 3);
+        this.computeDelay(2, 35, 5);
         this.advance();
         return true;
     }

@@ -27,7 +27,7 @@ const LINE_HEIGHT = 16;
 const HORIZONTAL_PADDING = 12;
 const RIGHT_PADDING = 10;
 const VERTICAL_PADDING = 8;
-const KEY_COLUMN = 130;
+const KEY_COLUMN = 150;
 const CHAR_WIDTH = 8;
 
 const BG_COLOR = 0xCC000000;
@@ -146,6 +146,20 @@ export const renderBotOverlay = (bot: StarkMercher): void => {
     // Status
     lines.push({ text: 'Status:', key: 'Status:', value: status, valueColor: statusColor });
 
+    // Delay — live countdown of the current action's delay
+    let delayStr = '-';
+    let delayColor = GREY_COLOR;
+    if (bot.currentAction && bot.currentAction !== 'idle' && bot.actionDelay > 0) {
+        const tick = titan.state.client.tick;
+        const elapsed = tick - bot.actionStartTime;
+        const remaining = bot.actionDelay - elapsed;
+        if (remaining > 0) {
+            delayStr = `${remaining}t (${(remaining * 0.6).toFixed(1)}s)`;
+            delayColor = TEXT_COLOR;
+        }
+    }
+    lines.push({ text: 'Delay:', key: 'Delay:', value: delayStr, valueColor: delayColor });
+
     // Inventory Coins
     lines.push({ text: 'Inventory Coins:', key: 'Inventory Coins:', value: `${formatGp(coins)} gp` });
 
@@ -217,13 +231,28 @@ export const renderBotOverlay = (bot: StarkMercher): void => {
     }
 
     // --- Compute panel dimensions ---
-    const maxLineLen = Math.max(...lines.map(l => {
-        if (l.isSectionHeader) return l.text.length;
-        if (l.value === undefined || l.value === '') return l.text.length;
-        // key + ": " + value
-        return (l.key?.length ?? l.text.length) + 2 + l.value.length;
-    }));
-    const panelWidth = Math.max(280, maxLineLen * CHAR_WIDTH + HORIZONTAL_PADDING + RIGHT_PADDING);
+    // Width is based on actual render positions: keys start at HORIZONTAL_PADDING,
+    // values start at HORIZONTAL_PADDING + KEY_COLUMN. The panel must be wide
+    // enough for the longest key (in case it overflows KEY_COLUMN) AND for the
+    // value column + longest value.
+    const valueX = PANEL_X + HORIZONTAL_PADDING + KEY_COLUMN;
+    let panelWidth = 0;
+    for (const l of lines) {
+        if (l.isSectionHeader) {
+            panelWidth = Math.max(panelWidth, HORIZONTAL_PADDING + l.text.length * CHAR_WIDTH + RIGHT_PADDING);
+        } else if (l.value === undefined || l.value === '') {
+            const keyLen = (l.key ?? l.text).length;
+            panelWidth = Math.max(panelWidth, HORIZONTAL_PADDING + keyLen * CHAR_WIDTH + RIGHT_PADDING);
+        } else {
+            // Value is drawn at valueX; key is drawn at HORIZONTAL_PADDING.
+            // Width must fit both the key (in case it's wider than KEY_COLUMN)
+            // and the value column.
+            const keyLen = (l.key ?? l.text.split(':')[0] + ':').length;
+            const keyRight = HORIZONTAL_PADDING + keyLen * CHAR_WIDTH;
+            const valueRight = valueX + l.value.length * CHAR_WIDTH;
+            panelWidth = Math.max(panelWidth, Math.max(keyRight, valueRight) + RIGHT_PADDING);
+        }
+    }
     const panelHeight = lines.length * LINE_HEIGHT + VERTICAL_PADDING * 2;
 
     // Draw background panel.

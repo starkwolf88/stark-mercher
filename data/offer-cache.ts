@@ -21,34 +21,28 @@ import { getMerchableItem, type MerchableItem } from './merchable-items.js';
 // --- Price revision constants ----------------------------------------------
 // The revision strategy reduces the sale price by a small amount each time
 // an offer is re-listed after not selling. The reduction is:
-//   1. 0.05% of the current sale price (the "percent reduction")
-//   2. Capped at 5% of the gross profit (buyPrice vs current sale price)
-//   3. Minimum 1 gp (so even very cheap items get a meaningful reduction)
-//   4. Never goes below buyPrice + 1 (safety floor — never sell at a loss)
+//   1. 5% of the gross profit (sellPrice - buyPrice)
+//   2. Minimum 1 gp (so even very thin-margin items get a nudge)
+//   3. Never goes below buyPrice + 1 (safety floor — never sell at a loss)
+//
+// There is no profit threshold — even items with 1-2gp margins get revised
+// (by the 1gp minimum) so they don't sit in a slot forever.
 //
 // Examples:
-//   90 gp item, buy=85, sell=90, profit=5:
-//     percentReduction = 0.045 → floors to 0, but min 1 gp
-//     maxReduction = 5 * 0.05 = 0.25 → floors to 0
-//     reduction = max(1, min(0, 0)) = 1 gp
-//     new sell = 89 gp
+//   91 gp item, buy=87, sell=91, profit=4:
+//     reduction = max(1, floor(4 * 0.05)) = max(1, 0) = 1 gp
+//     new sell = 90 gp
+//
+//   1743 gp item, buy=1685, sell=1743, profit=58:
+//     reduction = max(1, floor(58 * 0.05)) = max(1, 2) = 2 gp
+//     new sell = 1741 gp
 //
 //   5m item, buy=4.9m, sell=5m, profit=100k:
-//     percentReduction = 2500 gp
-//     maxReduction = 100000 * 0.05 = 5000 gp
-//     reduction = min(2500, 5000) = 2500 gp
-//     new sell = 4,997,500 gp
-//
-//   5m item, buy=4.99m, sell=5m, profit=10k:
-//     percentReduction = 2500 gp
-//     maxReduction = 10000 * 0.05 = 500 gp
-//     reduction = min(2500, 500) = 500 gp
-//     new sell = 4,999,500 gp
+//     reduction = max(1, floor(100000 * 0.05)) = 5000 gp
+//     new sell = 4,995,000 gp
 
-const PERCENT_REDUCTION_RATE = 0.0005;  // 0.05% of current sale price
-const MAX_PROFIT_REDUCTION_RATE = 0.05; // 5% of gross profit
+const PROFIT_REDUCTION_RATE = 0.05;     // 5% of gross profit
 const MIN_REDUCTION_GP = 1;             // never reduce by 0
-const PROFIT_THRESHOLD_FOR_REVISION = 5; // skip revision if profit < 5 gp
 
 // --- Wiki API stub ---------------------------------------------------------
 // When an item is no longer in merchableItems.json, we need to fetch the
@@ -178,6 +172,11 @@ export class OfferCacheManager {
         const key = item.itemName;
         const existing = this.get(key);
         const revisedPrices = existing?.revisedPrices ?? [];
+        // Preserve buy-limit tracking from the previous cycle so the bot
+        // knows how much of the 4-hour buy limit has been consumed.
+        const totalBought = existing?.totalBought;
+        const firstBoughtAt = existing?.firstBoughtAt;
+        const limitReachedAt = existing?.limitReachedAt;
         this.cache[key] = {
             mode: 'buy',
             buyPrice: item.purchasePrice,
@@ -185,6 +184,11 @@ export class OfferCacheManager {
             originalSellPrice: item.salePrice,
             offerPlacedAt: Date.now(),
             revisedPrices,
+            purchaseEtaMinutes: item.purchaseEtaMinutes,
+            saleEtaMinutes: item.saleEtaMinutes,
+            totalBought,
+            firstBoughtAt,
+            limitReachedAt,
         };
         this.dirty = true;
         titan.logf('[Stark Mercher] Cache: recorded buy offer for %s (buy=%d, sell=%d)',
@@ -243,17 +247,29 @@ export class OfferCacheManager {
         // Track cumulative bought quantity for the GE 4-hour buy limit.
         // The sell quantity = actual bought quantity. We add it to totalBought
         // and if it reaches the limit, we start the 4-hour cooldown timer.
+        // Only count on the FIRST sell recording for a buy cycle — if
+        // sellQuantity is already set, this is a re-list after abort/revision
+        // and the quantity was already counted.
         if (quantity !== undefined && limit !== undefined && limit > 0) {
             const entry = this.get(key)!;
-            const total = (entry.totalBought ?? 0) + quantity;
-            entry.totalBought = total;
-            if (total >= limit && entry.limitReachedAt === undefined) {
-                entry.limitReachedAt = now;
-                titan.logf('[Stark Mercher] Cache: %s buy limit reached (%d/%d) — 4h cooldown started',
-                    key, total, limit);
-            } else {
-                titan.logf('[Stark Mercher] Cache: %s bought qty tracked (%d/%d towards limit)',
-                    key, total, limit);
+            const alreadyTracked = entry.sellQuantity !== undefined;
+            if (!alreadyTracked) {
+                const prevTotal = entry.totalBought ?? 0;
+                const total = prevTotal + quantity;
+                entry.totalBought = total;
+                // The 4-hour window starts from the FIRST purchase. Only set
+                // firstBoughtAt when transitioning from 0 to >0.
+                if (prevTotal === 0) {
+                    entry.firstBoughtAt = now;
+                }
+                if (total >= limit && entry.limitReachedAt === undefined) {
+                    entry.limitReachedAt = now;
+                    titan.logf('[Stark Mercher] Cache: %s buy limit reached (%d/%d) — 4h cooldown started',
+                        key, total, limit);
+                } else {
+                    titan.logf('[Stark Mercher] Cache: %s bought qty tracked (%d/%d towards limit)',
+                        key, total, limit);
+                }
             }
         }
 
@@ -272,6 +288,24 @@ export class OfferCacheManager {
             entry.sellQuantity = undefined;
             this.dirty = true;
         }
+    }
+
+    /**
+     * Clears sell-specific fields after a completed sell cycle, preserving
+     * buy-limit tracking (totalBought, firstBoughtAt, limitReachedAt) so the
+     * bot knows how much of the 4-hour buy limit has been consumed.
+     * Resets mode to 'idle' and clears sellQuantity, partialSales, and
+     * revisedPrices. Buy/sell price fields are left as-is (overwritten by the
+     * next recordBuyOffer).
+     */
+    clearSellFields(itemName: string): void {
+        const entry = this.get(itemName);
+        if (!entry) return;
+        entry.mode = 'idle';
+        entry.sellQuantity = undefined;
+        entry.partialSales = undefined;
+        entry.revisedPrices = [];
+        this.dirty = true;
     }
 
     // --- Partial sale tracking (for merch history) ---
@@ -317,12 +351,14 @@ export class OfferCacheManager {
      * Computes a revised sell price for an item that hasn't sold.
      *
      * Strategy:
-     *   1. If gross profit < 5 gp, skip revision (too thin to cut).
-     *   2. reduction = 0.05% of current sell price, capped at 5% of gross profit, min 1 gp.
-     *   3. newPrice = currentSellPrice - reduction, floored to buyPrice + 1.
+     *   1. reduction = 5% of gross profit, minimum 1 gp.
+     *   2. newPrice = currentSellPrice - reduction, floored to buyPrice + 1.
      *
-     * Returns the new price, or null if no revision is possible (profit too
-     * thin or price already at floor).
+     * No profit threshold — even thin-margin items get a 1gp nudge so they
+     * don't sit in a slot forever.
+     *
+     * Returns the new price, or null if the price is already at the floor
+     * (buyPrice + 1) and can't be reduced further.
      */
     computeRevisedSellPrice(itemName: string): number | null {
         const entry = this.get(itemName);
@@ -332,22 +368,8 @@ export class OfferCacheManager {
         const buyPrice = entry.buyPrice;
         const grossProfit = currentSell - buyPrice;
 
-        // If profit is too thin, don't revise — the item should be aborted
-        // instead of continually undercutting into a loss.
-        if (grossProfit < PROFIT_THRESHOLD_FOR_REVISION) {
-            titan.logf('[Stark Mercher] Cache: %s profit too thin (%dgp) — skipping price revision',
-                itemName, grossProfit);
-            return null;
-        }
-
-        // 0.05% of current sale price.
-        const percentReduction = Math.floor(currentSell * PERCENT_REDUCTION_RATE);
-
-        // 5% of gross profit.
-        const maxReduction = Math.floor(grossProfit * MAX_PROFIT_REDUCTION_RATE);
-
-        // The actual reduction is the smaller of the two, but at least 1 gp.
-        const reduction = Math.max(MIN_REDUCTION_GP, Math.min(percentReduction, maxReduction));
+        // 5% of gross profit, minimum 1 gp.
+        const reduction = Math.max(MIN_REDUCTION_GP, Math.floor(grossProfit * PROFIT_REDUCTION_RATE));
 
         // Never go below buyPrice + 1 (never sell at a loss).
         const floor = buyPrice + 1;
@@ -408,6 +430,46 @@ export class OfferCacheManager {
     }
 
     /**
+     * Post-login cleanup sweep. Removes 'idle' entries whose buy-limit
+     * window has expired (totalBought was reset to 0 by the lazy reset
+     * in getRemainingBuyLimit/isBuyLimited, or the window is older than
+     * 4 hours). Also removes 'idle' entries with no buy-limit data at
+     * all (totalBought undefined or 0). Called on the first auto-loop
+     * tick after logging back in from a break.
+     *
+     * Returns the number of entries removed.
+     */
+    cleanupExpiredIdleEntries(): number {
+        const now = Date.now();
+        let removed = 0;
+        for (const key in this.cache) {
+            const entry = this.cache[key];
+            if (entry.mode !== 'idle') continue;
+            const total = entry.totalBought ?? 0;
+            if (total <= 0) {
+                // No buy-limit data — safe to remove.
+                delete this.cache[key];
+                removed++;
+                continue;
+            }
+            // Has buy-limit data — check if the window has expired.
+            const windowStart = entry.firstBoughtAt ?? entry.limitReachedAt ?? entry.offerPlacedAt;
+            if (now - windowStart >= OfferCacheManager.BUY_LIMIT_COOLDOWN_MS) {
+                delete this.cache[key];
+                removed++;
+            }
+        }
+        if (removed > 0) {
+            this.dirty = true;
+            titan.logf('[Stark Mercher] Cache: post-login cleanup removed %d expired idle entr%s',
+                removed, removed === 1 ? 'y' : 'ies');
+        } else {
+            titan.log('[Stark Mercher] Cache: post-login cleanup — no expired idle entries to remove');
+        }
+        return removed;
+    }
+
+    /**
      * Returns all cached item names.
      */
     getAllItemNames(): string[] {
@@ -434,12 +496,16 @@ export class OfferCacheManager {
         const entry = this.get(itemName);
         if (!entry || entry.limitReachedAt === undefined) return false;
         const now = Date.now();
-        if (now - entry.limitReachedAt >= OfferCacheManager.BUY_LIMIT_COOLDOWN_MS) {
-            // Cooldown expired — reset the limit tracking.
+        // The limit was reached — check if the 4-hour window has expired.
+        // Use firstBoughtAt if available; fall back to limitReachedAt for
+        // entries created before firstBoughtAt was tracked.
+        const windowStart = entry.firstBoughtAt ?? entry.limitReachedAt;
+        if (now - windowStart >= OfferCacheManager.BUY_LIMIT_COOLDOWN_MS) {
             entry.totalBought = 0;
             entry.limitReachedAt = undefined;
+            entry.firstBoughtAt = undefined;
             this.dirty = true;
-            titan.logf('[Stark Mercher] Cache: %s buy limit cooldown expired — limit reset', itemName);
+            titan.logf('[Stark Mercher] Cache: %s buy limit window expired — limit reset', itemName);
             return false;
         }
         return true;
@@ -458,6 +524,56 @@ export class OfferCacheManager {
             }
         }
         return limited;
+    }
+
+    /**
+     * Returns the remaining buy quantity allowed for an item, given its GE
+     * buy limit. The GE 4-hour window starts from the FIRST purchase of the
+     * item, and resets completely after 4 hours regardless of how many were
+     * bought. Within the window, remaining = limit - totalBought.
+     */
+    getRemainingBuyLimit(itemName: string, limit: number): number {
+        const entry = this.get(itemName);
+        if (!entry) return limit;
+        const total = entry.totalBought ?? 0;
+        if (total <= 0) return limit;
+        const now = Date.now();
+        // Use firstBoughtAt if available; fall back to limitReachedAt or
+        // offerPlacedAt for entries created before firstBoughtAt was tracked.
+        const windowStart = entry.firstBoughtAt ?? entry.limitReachedAt ?? entry.offerPlacedAt;
+        if (now - windowStart >= OfferCacheManager.BUY_LIMIT_COOLDOWN_MS) {
+            entry.totalBought = 0;
+            entry.firstBoughtAt = undefined;
+            entry.limitReachedAt = undefined;
+            this.dirty = true;
+            titan.logf('[Stark Mercher] Cache: %s buy limit window expired — limit reset', itemName);
+            return limit;
+        }
+        return Math.max(0, limit - total);
+    }
+
+    /**
+     * Returns a set of item names (lowercase) where the remaining buy limit
+     * is below the given threshold percentage of the item's full limit.
+     * Used to skip items that have been mostly bought in the current 4-hour
+     * window but haven't triggered the full-limit cooldown yet.
+     *
+     * @param items - Array of { itemName, limit } to check.
+     * @param thresholdPercent - Skip if remaining < this % of limit (e.g. 20).
+     */
+    getBuyLimitThresholdItemNames(
+        items: { itemName: string; limit: number }[],
+        thresholdPercent: number,
+    ): Set<string> {
+        const result = new Set<string>();
+        for (const item of items) {
+            const remaining = this.getRemainingBuyLimit(item.itemName, item.limit);
+            const threshold = item.limit * (thresholdPercent / 100);
+            if (remaining < threshold) {
+                result.add(item.itemName.trim().toLowerCase());
+            }
+        }
+        return result;
     }
 
     /**

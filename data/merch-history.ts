@@ -46,6 +46,10 @@ export interface MerchHistoryData {
 
 const EMPTY: MerchHistoryData = { profits: [], losses: [] };
 
+/** Maximum number of entries to keep per category (profits/losses) per
+ *  account. Older entries are trimmed when the cap is exceeded. */
+const MAX_HISTORY_PER_CATEGORY = 200;
+
 const loadAll = (bot: StarkMercher): Record<string, MerchHistoryData> => {
     const raw = bot.merchHistorySetting.value;
     if (!raw || raw === '{}') return {};
@@ -100,8 +104,15 @@ export const recordMerchCycle = (
 
     if (totalProfit > 0) {
         acct.profits.push(fullEntry);
+        // Trim oldest entries if over the cap.
+        if (acct.profits.length > MAX_HISTORY_PER_CATEGORY) {
+            acct.profits = acct.profits.slice(-MAX_HISTORY_PER_CATEGORY);
+        }
     } else {
         acct.losses.push(fullEntry);
+        if (acct.losses.length > MAX_HISTORY_PER_CATEGORY) {
+            acct.losses = acct.losses.slice(-MAX_HISTORY_PER_CATEGORY);
+        }
     }
 
     all[accountName] = acct;

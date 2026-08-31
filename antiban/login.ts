@@ -73,11 +73,13 @@ function tryClickTitle(bot: StarkMercher): boolean {
             // Store as wall-clock timestamp (not setAction) because the
             // tick counter resets on first tick after login, which would
             // wipe the action delay.
-            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, 50);
+            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, 50, 8);
+            // Reset login state BEFORE setting settle values, otherwise
+            // resetLoginState wipes postLoginResumeAtMs/loginSettled.
+            resetLoginState(bot);
             bot.postLoginResumeAtMs = now + (settleTicks * 600);
             bot.titleWaitingForGone = false;
             bot.loginSettled = true;
-            resetLoginState(bot);
             humanLog(bot, 'In-world with stale title widget; resuming in %d ticks', settleTicks);
             return true;
         }
@@ -86,11 +88,13 @@ function tryClickTitle(bot: StarkMercher): boolean {
     if (!titleExists) {
         if (isInWorld() && !bot.loginSettled) {
             debugLog(bot, 'Title screen gone; player in-world; settling');
-            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, 50);
+            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, 50, 8);
+            // Reset login state BEFORE setting settle values, otherwise
+            // resetLoginState wipes postLoginResumeAtMs/loginSettled.
+            resetLoginState(bot);
             bot.postLoginResumeAtMs = now + (settleTicks * 600);
             bot.titleWaitingForGone = false;
             bot.loginSettled = true;
-            resetLoginState(bot);
             humanLog(bot, 'Title screen gone; resuming in %d ticks', settleTicks);
         }
         return false;
@@ -105,6 +109,20 @@ function tryClickTitle(bot: StarkMercher): boolean {
         return false;
     }
 
+    // Humanised reaction delay — wait before clicking the title widget
+    // the first time it's seen. A human doesn't click instantly when the
+    // "Click here to play" screen appears; they have a reaction time.
+    if (bot.titleFirstSeenAtMs <= 0) {
+        const delayTicks = createDelay(2, 50, 8);
+        bot.titleFirstSeenAtMs = now;
+        bot.titleClickDelayMs = delayTicks * 600;
+        debugLog(bot, 'Title screen visible; waiting %d ticks (%dms) before clicking', delayTicks, bot.titleClickDelayMs);
+        return false;
+    }
+    if (now < bot.titleFirstSeenAtMs + bot.titleClickDelayMs) {
+        return false; // still within the reaction delay
+    }
+
     const clicked = titleW.interact(titan.MenuAction.CC_OP, 1);
     if (!clicked) {
         debugLog(bot, 'Title widget interact returned false; will retry');
@@ -114,6 +132,7 @@ function tryClickTitle(bot: StarkMercher): boolean {
 
     bot.titleWaitingForGone = true;
     bot.titleNextClickAt = now + LOGIN_SUCCESS_LOCKOUT_MS;
+    bot.titleFirstSeenAtMs = 0; // clear so a retry gets a fresh delay
     bot.postLoginResumeAtMs = Number.MAX_SAFE_INTEGER;
     humanLog(bot, 'Clicked title screen "Click here to play"');
     return true;
@@ -245,10 +264,12 @@ export function loginStep(bot: StarkMercher): void {
         if (!titleExists) {
             if (isInWorld()) {
                 const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, 50);
+                // Reset login state BEFORE setting settle values, otherwise
+                // resetLoginState wipes postLoginResumeAtMs/loginSettled.
+                resetLoginState(bot);
                 bot.postLoginResumeAtMs = Date.now() + (settleTicks * 600);
                 bot.titleWaitingForGone = false;
                 bot.loginSettled = true;
-                resetLoginState(bot);
                 humanLog(bot, 'Title screen gone; resuming in %d ticks', settleTicks);
             }
             return;
@@ -268,6 +289,8 @@ export function loginStep(bot: StarkMercher): void {
 /** Reset login state (called on enable, break start, break end). */
 export function resetLoginState(bot: StarkMercher): void {
     bot.titleNextClickAt = 0;
+    bot.titleFirstSeenAtMs = 0;
+    bot.titleClickDelayMs = 0;
     bot.postLoginResumeAtMs = -1;
     bot.titleWaitingForGone = false;
     bot.loginSettled = false;

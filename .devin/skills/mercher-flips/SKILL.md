@@ -1,5 +1,27 @@
 # Stark Mercher — `determine-flips.mjs` deep analysis
 
+## Native handle exhaustion — NEVER loop over native SDK queries
+
+**CRITICAL rule for all Titan plugins (mercher, mixology, herblore).** Do NOT write `for`/`while` loops that call `titan.queries.widgets(grp).toArray()`, `titan.queries.objects().toArray()`, `titan.queries.npcs().toArray()`, or any other `titan.queries.*().toArray()` per iteration. Each `toArray()` creates native handle objects. The JS engine does NOT GC between loop iterations, so handles accumulate simultaneously. The native handle table is FINITE — once exhausted, EVERY subsequent native SDK call (overlay, `onGameTick`, `onMainLoop`, `onClientTick`, widget/object lookups) throws `null` simultaneously, producing the cascade:
+
+```
+onMainLoop error: null
+onGameTick error: null
+onClientTick error: null
+onDisable error: null
+auto-disabled after 3 consecutive failures
+```
+
+The ONLY recovery is toggling the plugin off/on (reinitialises the native context).
+
+**Historical cause (mixology)**: A "diagnostic" 1200-group widget scan in `antiban/login.ts` `findTitleWidget()` iterated groups 0-1199 calling `titan.queries.widgets(grp).toArray()` each iteration. Each scan created 12,000-60,000 native widget handles; after a few 60-second-throttled scans, the handle table was corrupted and every callback threw `null`. The scan was removed; `findTitleWidget()` now uses `titan.state.widgets.find(packedId)` then `findByText(text)` as fallback.
+
+**Rules**:
+1. Use targeted lookups — `titan.state.widgets.find(packedId)`, `titan.state.widgets.findByText(text)`, `titan.queries.widgets(specificGroup).toArray()` — never unscoped or looped queries.
+2. If a diagnostic scan is ever needed, run it ONCE via Titan Shell (`titan.log(...)`) from the user's manual input, NOT from plugin callback code.
+3. Any `toArray()` call inside a loop is a bug.
+4. `titan.queries.widgets().textContains(...).toArray()` (unscoped recursive widget query) is also expensive (500-1000ms+) and should be replaced with `findByText`.
+
 > Source file: `determine-flips.mjs`
 > Output files: `merchableItems.json` (inlined into the plugin bundle at build time), `priceHistory.json` (fallback price lookup, also inlined)
 > Related plugin files: `data/merchable-items.ts`, `data/price-history.ts`

@@ -75,22 +75,11 @@ export interface MerchableItem {
 // The JSON is inlined at build time, so we just cast and cache it once.
 let cachedItems: MerchableItem[] | null = null;
 
-/** Maximum age in ms before item data is considered stale (10 minutes). */
-const STALE_DATA_MAX_AGE_MS = 10 * 60 * 1000;
-
-/** Returns true if the item's data is still fresh (within 10 minutes). */
-const isItemFresh = (item: MerchableItem): boolean => {
-    if (!item.dataFetchedAt) return false; // no timestamp = stale
-    return (Date.now() - item.dataFetchedAt) < STALE_DATA_MAX_AGE_MS;
-};
-
-/** Returns all items, filtering out stale ones (data older than 10 minutes). */
+/** Returns all merchable items from the build-time-inlined JSON. */
 const ensureLoaded = (): MerchableItem[] => {
     if (cachedItems) return cachedItems;
     // The raw import is an array of objects; cast to the typed interface.
-    const raw = merchableItemsRaw as unknown as MerchableItem[];
-    // Filter out stale items — data older than 10 minutes is not trusted.
-    cachedItems = raw.filter(isItemFresh);
+    cachedItems = merchableItemsRaw as unknown as MerchableItem[];
     return cachedItems;
 };
 
@@ -130,7 +119,8 @@ export const getMerchableItemById = (itemId: number): MerchableItem | null => {
 /**
  * Returns the first merchable item that is not currently being bought or sold
  * in any GE slot AND whose totalPurchasePrice we can afford with the available
- * coins AND is not currently buy-limited (within the GE 4-hour cooldown).
+ * coins AND is not currently buy-limited (within the GE 4-hour cooldown) AND
+ * is not currently frozen (recently aborted buy offer).
  * Used by the buying flow to pick the next item to buy.
  *
  * @param occupiedItemNames - Set of item names (lowercase) currently in GE slots.
@@ -141,18 +131,22 @@ export const getMerchableItemById = (itemId: number): MerchableItem | null => {
  *   buy-limited (within the 4-hour GE cooldown). These are skipped. Optional.
  * @param isMembersWorld - If false, members-only items are skipped. Defaults to
  *   true so P2P worlds consider every item.
+ * @param frozenItemNames - Set of item names (lowercase) that are temporarily
+ *   frozen from buying (recently aborted buy offer). These are skipped. Optional.
  */
 export const getFirstUnoccupiedMerchableItem = (
     occupiedItemNames: Set<string>,
     availableCoins: number = Infinity,
     buyLimitedItemNames: Set<string> = new Set(),
     isMembersWorld: boolean = true,
+    frozenItemNames: Set<string> = new Set(),
 ): MerchableItem | null => {
     const items = ensureLoaded();
     for (const item of items) {
         const lower = item.itemName.trim().toLowerCase();
         if (occupiedItemNames.has(lower)) continue;
         if (buyLimitedItemNames.has(lower)) continue;
+        if (frozenItemNames.has(lower)) continue;
         if (item.totalPurchasePrice > availableCoins) continue;
         if (!isMembersWorld && item.members) continue;
         return item;

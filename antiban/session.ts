@@ -538,6 +538,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
                 bot.loopIdleSinceTick = -1;
                 bot.shortBreakDelayTicks = -1;
                 resetLoginState(bot);
+                bot.autoLoop.needsPostLoginCleanup = true;
                 humanLog(bot, 'Logged back in, resuming auto-loop');
                 clearBreakState(bot);
             }
@@ -549,14 +550,26 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
             bot.unexpectedLogoutAtMs = now;
             saveBreakState(bot);
         }
-        // After 5 seconds, start trying to log in
-        if (now - bot.unexpectedLogoutAtMs > 5000) {
-            loginStep(bot);
-        }
+        loginStep(bot);
         return true;
     }
 
     // --- Player is logged in ---
+
+    // If the persisted break state says we're logged out but the player is
+    // actually in-world (e.g. script restarted while logged in during a
+    // break, or the user logged in manually), the break is over — clear it.
+    if (bot.breakPhase === 'logged_out' && isInWorld()) {
+        humanLog(bot, 'Break state was logged_out but player is in-world — clearing stale break state');
+        bot.breakPhase = 'none';
+        bot.breakType = 'none';
+        bot.loopIdleForBreak = false;
+        bot.loopIdleSinceTick = -1;
+        bot.shortBreakDelayTicks = -1;
+        bot.unexpectedLogoutAtMs = 0;
+        resetLoginState(bot);
+        clearBreakState(bot);
+    }
 
     // Clear unexpected logout
     if (bot.unexpectedLogoutAtMs > 0) {
@@ -582,6 +595,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
             bot.loopIdleSinceTick = -1;
             bot.shortBreakDelayTicks = -1;
             resetLoginState(bot);
+            bot.autoLoop.needsPostLoginCleanup = true;
             humanLog(bot, 'Logged back in, resuming auto-loop');
             clearBreakState(bot);
         }
@@ -723,7 +737,7 @@ export function wallClockStep(bot: StarkMercher): void {
         // above handles cancelling a stuck hop before allowing login).
         if (bot.breakPhase === 'none' && !bot.hopInProgress && bot.unexpectedLogoutAtMs === 0) {
             bot.unexpectedLogoutAtMs = now;
-            humanLog(bot, 'Logged out (not a break) — attempting login in 5s');
+            humanLog(bot, 'Logged out (not a break) — attempting login');
             saveBreakState(bot);
         }
 
@@ -759,7 +773,7 @@ export function wallClockStep(bot: StarkMercher): void {
             }
         }
 
-        if (bot.breakPhase === 'logging_in' || (bot.unexpectedLogoutAtMs > 0 && now - bot.unexpectedLogoutAtMs > 5000)) {
+        if (bot.breakPhase === 'logging_in' || bot.unexpectedLogoutAtMs > 0) {
             if (!bot.hopInProgress) loginStep(bot);
         }
     }

@@ -9,7 +9,7 @@ import { setDelayProfileForAccount, createDelay, getActiveDelayProfile } from '.
 import { setClickJitterProfile, generateClickJitterProfile, setClickJitterDebugLog } from './antiban/click-jitter.js';
 import { autoLoopTick, createAutoLoopState, resetAutoLoop, type AutoLoopState } from './grand_exchange/auto-loop.js';
 import { breakStep, wallClockStep, resetBreakState, saveBreakState, initSessionProfile, markNightlyBreakFinished, resetHop, forceHop, shouldPauseForHopBoundary } from './antiban/session.js';
-import { resetLoginState } from './antiban/login.js';
+import { resetLoginState, loginStep } from './antiban/login.js';
 import { resetLogoutState } from './antiban/logout.js';
 import { hopStep, completeHop, onChatMessage as onHopChatMessage } from './antiban/hopper.js';
 import { renderBotOverlay } from './widgets/bot-overlay.js';
@@ -111,6 +111,8 @@ export class StarkMercher extends titan.Plugin {
     unexpectedLogoutAtMs = 0;
     // Login FSM fields
     titleNextClickAt = 0;
+    titleFirstSeenAtMs = 0;
+    titleClickDelayMs = 0;
     postLoginResumeAtMs = -1;
     titleWaitingForGone = false;
     loginSettled = false;
@@ -246,6 +248,26 @@ export class StarkMercher extends titan.Plugin {
         },
     });
 
+    // --- End Logout button ---
+    // Forwards the break timer to 0s so the bot logs back in immediately
+    // instead of waiting for the break to end naturally. Useful for
+    // manually resuming during a short break or nightly sleep.
+    endLogout: titan.Setting<void> = this.buttonSetting({
+        key: 'endLogout',
+        name: 'End Logout',
+        position: 0,
+        tooltip: 'Forwards the break timer to 0s — logs back in immediately.',
+        onClick: () => {
+            if (this.breakPhase === 'logged_out' || this.breakPhase === 'logging_out') {
+                this.breakTargetEndMs = Date.now();
+                saveBreakState(this);
+                titan.log('[Stark Mercher] End Logout clicked — break timer forwarded to now, logging back in next tick.');
+            } else {
+                titan.logf('[Stark Mercher] End Logout clicked — not in a break (phase=%s), nothing to do.', this.breakPhase);
+            }
+        },
+    });
+
     // --- Auto / Manual mode toggle ---
     // 0 = Manual Test (idle, respond to test buttons only)
     // 1 = Auto Merch (run the automated merching loop)
@@ -342,11 +364,12 @@ export class StarkMercher extends titan.Plugin {
                 const placed = new Date(e.offerPlacedAt).toISOString();
                 const revisions = e.revisedPrices.join(' -> ');
                 const totalBought = e.totalBought !== undefined ? `, totalBought=${e.totalBought}` : '';
+                const firstBought = e.firstBoughtAt !== undefined ? `, firstBought=${new Date(e.firstBoughtAt).toISOString()}` : '';
                 const limitReached = e.limitReachedAt !== undefined ? `, limitReachedAt=${new Date(e.limitReachedAt).toISOString()}` : '';
                 const sellQty = e.sellQuantity !== undefined ? `, sellQty=${e.sellQuantity}` : '';
-                titan.logf('[Stark Mercher]   %s: mode=%s, buy=%d, sell=%d (orig=%d), placed=%s, revisions=[%s]%s%s%s',
+                titan.logf('[Stark Mercher]   %s: mode=%s, buy=%d, sell=%d (orig=%d), placed=%s, revisions=[%s]%s%s%s%s',
                     key, e.mode, e.buyPrice, e.sellPrice, e.originalSellPrice, placed, revisions,
-                    totalBought, limitReached, sellQty);
+                    totalBought, firstBought, limitReached, sellQty);
             }
             titan.logf('[Stark Mercher] Cache dump complete (%d entries).', keys.length);
         },
@@ -589,7 +612,6 @@ export class StarkMercher extends titan.Plugin {
             event.opcode, event.identifier, event.param0, event.param1, event.actionText);
     }
     onGameTick = (tick: number) => {
-        titan.log(`Tick: ${tick}`);
         if (this.terminated) return;
         // Duplicate-tick guard: the SDK can fire onGameTick more than once
         // per tick in some edge cases.
@@ -613,9 +635,11 @@ export class StarkMercher extends titan.Plugin {
             this.autoLoop.activeBuyFlow = null;
             this.autoLoop.activeSellFlow = null;
             this.autoLoop.activeAbortFlow = null;
+            this.autoLoop.abortSlotInfo = null;
             this.autoLoop.phase = 'idle';
             this.autoLoop.sellAttemptedItems.clear();
             this.autoLoop.buyAttemptedItems.clear();
+            this.autoLoop.cacheReconciled = false;
         }
 
         // --- Startup audit ---
@@ -713,10 +737,25 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
     // time to render the world and clear any promo/overlay widgets. Uses a
     // wall-clock timestamp (not setAction) because the tick counter resets
     // on the first tick after login, which would wipe an action-based delay.
+    //
+    // After the title click, postLoginResumeAtMs is set to MAX_SAFE_INTEGER
+    // to block until the title screen disappears. loginStep() (called from
+    // breakStep while logged out) detects the title disappearing and sets
+    // the real settle timestamp. But after an unexpected logout, breakStep
+    // stops calling loginStep once the player is in-world. So we call
+    // loginStep here to ensure the title disappearance is detected.
     if (bot.postLoginResumeAtMs > 0) {
-        if (Date.now() < bot.postLoginResumeAtMs) return;
+        if (Date.now() < bot.postLoginResumeAtMs) {
+            // Still waiting. If we're waiting for the title screen to
+            // disappear, call loginStep to check and set the real settle.
+            if (bot.titleWaitingForGone) {
+                loginStep(bot);
+            }
+            return;
+        }
         bot.postLoginResumeAtMs = -1;
         bot.loginSettled = true;
+        bot.autoLoop.needsPostLoginCleanup = true;
         titan.log('[Stark Mercher] Post-login settle complete — resuming');
     }
 

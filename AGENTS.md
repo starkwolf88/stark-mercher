@@ -1,5 +1,9 @@
 # Stark Mercher Bot — Strict Rules
 
+## Native handle exhaustion — NEVER loop over native SDK queries
+
+**CRITICAL.** Do NOT write `for`/`while` loops that call `titan.queries.widgets(grp).toArray()`, `titan.queries.objects().toArray()`, `titan.queries.npcs().toArray()`, or any other `titan.queries.*().toArray()` per iteration. Each `toArray()` creates native handle objects. The JS engine does NOT GC between loop iterations, so handles accumulate simultaneously. The native handle table is FINITE — once exhausted, EVERY subsequent native SDK call (overlay, `onGameTick`, `onMainLoop`, `onClientTick`) throws `null` simultaneously, producing the cascade `onMainLoop error: null` → `onGameTick error: null` → `onClientTick error: null` → `onDisable error: null` → `auto-disabled after 3 consecutive failures`. The ONLY recovery is toggling the plugin off/on. This bug was caused in the mixology plugin by a 1200-group widget scan in `findTitleWidget()`; the mercher must never introduce the same pattern. Use targeted lookups (`titan.state.widgets.find(packedId)`, `titan.state.widgets.findByText(text)`, `titan.queries.widgets(specificGroup).toArray()`) — never unscoped or looped queries. Any `toArray()` call inside a loop is a bug. If a diagnostic scan is needed, run it ONCE via Titan Shell from the user's manual input, NOT from plugin callback code.
+
 ## User build preference
 
 - Do **not** run `npm run build`, `npm run watch`, or any other build/compilation command unless the user explicitly asks. The user will build the plugin manually when they are ready.
@@ -19,7 +23,7 @@
 - `general/variables.ts` — shared variables.
 - `data/merchable-items.ts` — typed reader for `merchableItems.json` (inlined at build time by esbuild). `getMerchableItems`, `getMerchableItem`, `isMerchable`, `getFirstUnoccupiedMerchableItem`, `MerchableItem`.
 - `data/price-history.ts` — typed reader for `priceHistory.json` (inlined at build time). `getPriceHistoryEntry`. Fallback sell-price lookup for items not in merchableItems.json or the offer cache (e.g. orphaned inventory items after a long script stop or JSON refresh during sleep). Uses 1h average prices — no extra API calls.
-- `data/offer-cache.ts` — `OfferCacheManager` wrapping the persisted cache with price revision logic (0.05% reduction capped at 5% of gross profit, min 1 gp, never below buyPrice+1) and Wiki API stub. `fetchWikiPrice` (stub — URL not yet configured).
+- `data/offer-cache.ts` — `OfferCacheManager` wrapping the persisted cache with price revision logic (5% of gross profit, min 1 gp, never below buyPrice+1) and Wiki API stub. `fetchWikiPrice` (stub — URL not yet configured).
 - `data/daily-profit.ts` — per-account daily profit tracking. `addDailyProfit`, `getDailyProfit`, `resetDailyProfit`, `getDayStartMs`. Persisted in hidden JSON setting. Resets at UK midnight via day-rollover comparison on read/write.
 - `widgets/bot-overlay.ts` — HUD overlay panel. `renderBotOverlay` draws Status, Inventory Coins, and Daily Profit. Registered via `this.overlay({ layer: 'AboveWidgets' })` in `stark-mercher.ts`.
 - `antiban/humanised-delay.ts` — `DelayProfile`, `generateDelayProfile`, `setDelayProfileForAccount`, `createDelay`; per-account deterministic humanised delay function inspired by mixology's anti-ban layers (jitter, hesitation, outlier, jitter amplification).
@@ -219,29 +223,50 @@ The JSON is imported at the top of `data/merchable-items.ts` and inlined by esbu
 
 ### GE 4-hour buy limit tracking
 
-The GE enforces a per-item buy limit (from `merchableItems.json` `limit` field). The 4-hour cooldown only starts when the FULL limit has been purchased — partial purchases don't start the timer. For example, an item with limit 11000: buy 10999, wait 5 hours, buy 1 more → the 4-hour timer starts from that last purchase.
+The GE enforces a per-item buy limit (from `merchableItems.json` `limit` field). The 4-hour window starts from the **first** item bought — not when the full limit is reached. After 4 hours from the first purchase, the limit completely resets regardless of how many were bought. For example, an item with limit 13000: buy 100 at 2:00 PM, buy 1000 more at 3:00 PM → at 6:00 PM (4 hours after first purchase) the full 13000 limit is available again.
 
-- **Tracking**: `OfferCacheEntry` has `totalBought` (cumulative bought qty in the current window) and `limitReachedAt` (timestamp when `totalBought >= limit`).
-- **Recording**: `recordSellOffer()` in `data/offer-cache.ts` accepts `quantity` and `limit` params. The sell quantity = actual bought quantity (a buy offer may partially fill). It's added to `totalBought`; when `totalBought >= limit`, `limitReachedAt` is set.
-- **Checking**: `isBuyLimited(itemName)` returns true if `limitReachedAt` is set and < 4 hours ago. Lazily resets (clears `totalBought` and `limitReachedAt`) if the cooldown has expired.
-- **Buying flow**: `getBuyLimitedItemNames()` returns all currently-limited item names. This set is passed to `getFirstUnoccupiedMerchableItem()` which skips limited items.
-- **Cache retention**: Cache entries are NOT removed when a sell completes. The entry is kept so buy-limit data persists across buy/sell cycles. The entry's mode/sellPrice fields are overwritten by the next `recordBuyOffer()`.
+- **Tracking**: `OfferCacheEntry` has `totalBought` (cumulative bought qty in the current window), `firstBoughtAt` (timestamp of the first purchase in the window), and `limitReachedAt` (timestamp when `totalBought >= limit`).
+- **Recording**: `recordSellOffer()` in `data/offer-cache.ts` accepts `quantity` and `limit` params. The sell quantity = actual bought quantity (a buy offer may partially fill). It's added to `totalBought`; `firstBoughtAt` is set only when `totalBought` transitions from 0 to >0; when `totalBought >= limit`, `limitReachedAt` is set.
+- **Checking**: `isBuyLimited(itemName)` returns true if `limitReachedAt` is set and the 4-hour window (from `firstBoughtAt`) hasn't expired. Lazily resets all tracking if the window has expired.
+- **Remaining limit**: `getRemainingBuyLimit(itemName, limit)` returns `limit - totalBought` within the current window, or the full `limit` if the window has expired (resetting lazily).
+- **Threshold skip**: `getBuyLimitThresholdItemNames(items, 20)` returns items where remaining < 20% of the limit. These are merged into the buy-limited set so `getFirstUnoccupiedMerchableItem()` skips them. This prevents buying tiny remaining quantities (e.g. 1280/13000 remaining).
+- **Quantity adjustment**: After selecting an item to buy, the quantity is adjusted to `min(quantityToPurchase, remaining)`. The log notes when this happens: `(reduced from 13000 — buy limit remaining)`.
+- **Buying flow**: `getBuyLimitedItemNames()` returns all currently-limited item names (full limit hit + threshold-skipped). This set is passed to `getFirstUnoccupiedMerchableItem()` which skips limited items.
+- **Cache retention**: Cache entries are NOT removed when a sell completes. `clearSellFields()` resets `mode` to `'idle'` and clears `sellQuantity`, `partialSales`, and `revisedPrices`, but preserves buy-limit tracking (`totalBought`, `firstBoughtAt`, `limitReachedAt`). `recordBuyOffer()` also preserves these fields from the existing entry. The entry's mode/price fields are overwritten by the next `recordBuyOffer()`. Startup reconciliation skips entries with active buy-limit windows (totalBought > 0 within 4 hours of `firstBoughtAt`).
+- **Post-login cleanup**: On the first auto-loop tick after logging back in from a break, `cleanupExpiredIdleEntries()` removes 'idle' entries whose buy-limit window has expired (keeping the cache bounded). Expired `buyFreezeUntil` entries are also cleaned up at this point.
+- **Merch history cap**: `recordMerchCycle()` trims to the most recent 200 entries per category (profits/losses) per account, preventing unbounded growth.
 
 ### Price revision strategy
 
 When a sell offer doesn't sell and is re-listed (after abort + collect), the price is revised downward:
 
 ```
-reduction = max(1, min(floor(currentSell * 0.0005), floor(grossProfit * 0.05)))
+reduction = max(1, floor(grossProfit * 0.05))
 newPrice  = max(buyPrice + 1, currentSell - reduction)
 ```
 
-- 0.05% of the current sale price (the "percent reduction").
-- Capped at 5% of gross profit (currentSell - buyPrice).
-- Minimum 1 gp reduction (so even cheap items get a meaningful cut).
+- 5% of gross profit (currentSell - buyPrice).
+- Minimum 1 gp reduction (so even thin-margin items get a nudge).
 - Never goes below buyPrice + 1 (never sell at a loss).
-- If gross profit < 5 gp, revision is skipped (too thin to cut — abort instead).
+- No profit threshold — even 1-2gp margins get revised by the 1gp minimum.
 - The sale price in `merchableItems.json` already includes the GE tax, so no additional tax calculation is performed during revision.
+
+### Dynamic sell ETA abort ratio
+
+The sell ETA abort ratio scales with profit margin so thin-margin items get more time to sell before being revised (a 1gp cut on a 2gp margin is 50% of profit), while high-margin items are revised sooner (a 5k cut on 100k is only 5%):
+
+```
+ratio = clamp(0.95 - log10(profit) * 0.075, 0.50, 0.95)
+```
+
+- 2gp margin → 93% of ETA before abort
+- 50gp margin → 82% of ETA before abort
+- 500gp margin → 75% of ETA before abort (matches the old fixed ratio)
+- 10k margin → 65% of ETA before abort
+- 100k margin → 58% of ETA before abort
+- 1m+ margin → 50% of ETA before abort (capped)
+
+The stalled-near-completion ratio (100% of ETA) remains fixed — that's about offers that are nearly done but stuck, not about price revisions.
 
 ### Sell-price fallback chain
 

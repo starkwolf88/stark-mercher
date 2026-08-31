@@ -32,15 +32,15 @@ export function isPlayerIdle(bot: StarkMercher): boolean {
     return !isAnimating || stationaryFor >= IDLE_ANIMATION_GRACE_TICKS;
 }
 
-/** Format a quantity compactly: 18000 → "18k", 1000000 → "1M". */
+/** Format a quantity compactly: 18000 → "18k", 25000 → "25k", 1000000 → "1M". */
 export function formatQty(n: number): string {
     if (n >= 1_000_000) {
         const m = n / 1_000_000;
-        return m >= 10 ? `${Math.round(m)}M` : `${m.toFixed(1)}M`;
+        return m >= 10 ? `${Math.round(m)}M` : `${m.toFixed(1).replace(/\.0$/, '')}M`;
     }
     if (n >= 1000) {
         const k = n / 1000;
-        return k >= 100 ? `${Math.round(k)}k` : `${k.toFixed(1)}k`;
+        return k >= 100 ? `${Math.round(k)}k` : `${k.toFixed(1).replace(/\.0$/, '')}k`;
     }
     return String(n);
 }
@@ -48,4 +48,25 @@ export function formatQty(n: number): string {
 /** Format a gp amount compactly: 102 → "102", 100000 → "100k", 1500000 → "1.5M". */
 export function formatGpShort(n: number): string {
     return formatQty(n);
+}
+
+/**
+ * Formats a number using OSRS GE "k" notation for typing into quantity/price
+ * fields. Only uses "k" when the result is exact (no rounding needed):
+ *   18000 → "18k", 1800 → "1.8k", 180000 → "180k"
+ *   1251 → "1251" (not a clean k value, keep as-is)
+ *   1000 → "1k", 100 → "100"
+ * This shortens the number of keystrokes for humanised typing.
+ */
+export function formatGeInput(n: number): string {
+    if (n >= 1000 && n % 1000 === 0) {
+        // Exact thousands: 18000 → "18k", 1000 → "1k"
+        return `${n / 1000}k`;
+    }
+    if (n >= 1000 && n % 100 === 0) {
+        // Exact hundreds (divisible by 100): 1800 → "1.8k", 2500 → "2.5k"
+        const k = n / 1000;
+        return `${k.toFixed(1)}k`;
+    }
+    return String(n);
 }

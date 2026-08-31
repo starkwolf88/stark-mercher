@@ -33,8 +33,10 @@ export interface OfferCacheData {
 }
 
 export interface OfferCacheEntry {
-    /** 'buy' or 'sell' — the mode of the offer this entry tracks. */
-    mode: 'buy' | 'sell';
+    /** 'buy', 'sell', or 'idle' — the mode of the offer this entry tracks.
+     *  'idle' means the sell completed and the entry is kept only for
+     *  buy-limit tracking (totalBought/firstBoughtAt/limitReachedAt). */
+    mode: 'buy' | 'sell' | 'idle';
     /** Buy price per item (from merchableItems.json). */
     buyPrice: number;
     /** Current target sell price per item. */
@@ -65,6 +67,20 @@ export interface OfferCacheEntry {
      *  offer was aborted/re-listed or completed. Cleared when the sell
      *  cycle completes and the summary is recorded to merch history. */
     partialSales?: { price: number; qty: number; timestamp: number }[];
+    /** Estimated time to fill the buy offer, in minutes. Cached from
+     *  merchableItems.json at buy time so staleness checks still work
+     *  if the item is later removed from the merchable list. */
+    purchaseEtaMinutes?: number;
+    /** Estimated time to fill the sell offer, in minutes. Cached from
+     *  merchableItems.json at buy time so staleness checks still work
+     *  if the item is later removed from the merchable list. */
+    saleEtaMinutes?: number;
+    /** Timestamp (ms) of the FIRST purchase in the current 4-hour buy
+     *  limit window. The GE resets the buy limit 4 hours after the first
+     *  item is bought, regardless of how many were purchased. Set when
+     *  totalBought transitions from 0 to >0; cleared when the window
+     *  expires and totalBought resets. */
+    firstBoughtAt?: number;
 }
 
 // --- Load / Save -----------------------------------------------------------

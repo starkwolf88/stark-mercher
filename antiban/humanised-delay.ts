@@ -68,7 +68,7 @@ const sampleFloat = (rng: () => number, min: number, max: number): number =>
 // Ranges inspired by the mixology bot's humanisation layers.
 const REACTION_BIAS_MIN = -1;
 const REACTION_BIAS_MAX = 1;
-const JITTER_TICKS_MIN = 0;
+const JITTER_TICKS_MIN = 1;
 const JITTER_TICKS_MAX = 2;
 const HESITATION_MULT_MIN = 1.5;
 const HESITATION_MULT_MAX = 3.0;
@@ -124,10 +124,27 @@ export const getActiveDelayProfile = (): DelayProfile | null => activeProfile;
 
 // --- createDelay() ---------------------------------------------------------
 // base:        guaranteed minimum delay in ticks (clamped to >= 1).
-// triggerChance: 0-100, % chance that humanisation layers fire on top of base.
-// max:          optional ceiling — if provided, the final delay is clipped to
-//               this value (after all humanisation layers). Useful for testing.
-// Returns the tick count to wait.
+// triggerChance: 0-100, % chance that hesitation/outlier/amplify layers fire.
+// max:          optional ceiling — clips the final delay after all layers
+//               EXCEPT the rare distraction event (which bypasses max).
+//
+// Structure:
+//   ALWAYS applies (independent of triggerChance):
+//     1. Reaction bias — ±2 ticks based on account speed profile
+//     2. Jitter — ±0-2 ticks of noise on every call
+//   ONLY when triggerChance fires:
+//     3. Hesitation — 1.5-3x multiplier ("paused to think")
+//     4. Outlier — 3-8% chance of 1.3-1.8x (nested 1.3-1.5x)
+//     5. Amplify — 0.5-2% chance of +5-30 ticks ("looked away")
+//   RARE (independent of everything, bypasses max):
+//     6. Distraction — 0.1% chance of +20-60 ticks (12-36s "tabbed out")
+//        Fires roughly once per ~1000 delay calls (~once per hour of active
+//        play). This breaks any hard ceiling pattern that would otherwise
+//        make the delay distribution look artificial over long sessions.
+//
+// This ensures every step has micro-variance (never identical consecutive
+// delays) while the heavier "human paused" effects fire at the trigger rate.
+// Use max to cap mechanical steps so triggered delays don't exceed 3-6 ticks.
 export const createDelay = (base: number, triggerChance: number, max?: number): number => {
     // Clamp base to minimum 1 — never return 0 or negative.
     const b = Math.max(1, Math.floor(base));
@@ -136,12 +153,9 @@ export const createDelay = (base: number, triggerChance: number, max?: number): 
     // function still works (e.g. during development without a player name).
     const p = activeProfile ?? defaultProfile;
 
-    // Roll the trigger chance. If it doesn't fire, return just the base.
-    if (roll() * 100 > triggerChance) return b;
-
-    // --- Humanisation layers fire (triggerChance succeeded) ---
-
     let delay = b;
+
+    // --- ALWAYS: micro-variance layers (independent of triggerChance) ---
 
     // 1. Reaction bias — shift the base up or down based on the account's
     //    inherent speed. A bias of +0.8 moves ~80% toward a +2 tick extension;
@@ -150,35 +164,57 @@ export const createDelay = (base: number, triggerChance: number, max?: number): 
     delay = Math.max(1, delay + biasShift);
 
     // 2. Jitter — small ±noise to prevent identical consecutive delays.
+    //    Always applies so every step has micro-variance.
     if (p.jitterTicks > 0) {
         const jitter = sampleInt(roll2rng, -p.jitterTicks, p.jitterTicks);
         delay = Math.max(1, delay + jitter);
     }
 
-    // 3. Hesitation — stretch the delay by the profile's hesitation multiplier.
-    //    This is the main "human paused to think" effect.
-    delay = Math.max(1, Math.round(delay * p.hesitationMultiplier));
+    // --- TRIGGERED: heavier humanisation layers (only if triggerChance fires) ---
 
-    // 4. Delay outlier — long-tail stretch (inspired by applyDelayOutlier).
-    //    3-8% chance of multiplying by 1.3-1.8x, with a nested 15-25% chance
-    //    of a further 1.3-1.5x (total up to ~2.7x).
-    if (roll() < p.outlierChance) {
-        delay = Math.round(delay * p.outlierMultiplier);
-        if (roll() < p.outlierNestedChance) {
-            delay = Math.round(delay * p.outlierNestedMultiplier);
+    if (roll() * 100 <= triggerChance) {
+        // 3. Hesitation — stretch the delay by the profile's hesitation multiplier.
+        //    This is the main "human paused to think" effect.
+        delay = Math.max(1, Math.round(delay * p.hesitationMultiplier));
+
+        // 4. Delay outlier — long-tail stretch (inspired by applyDelayOutlier).
+        //    3-8% chance of multiplying by 1.3-1.8x, with a nested 15-25% chance
+        //    of a further 1.3-1.5x (total up to ~2.7x).
+        if (roll() < p.outlierChance) {
+            delay = Math.round(delay * p.outlierMultiplier);
+            if (roll() < p.outlierNestedChance) {
+                delay = Math.round(delay * p.outlierNestedMultiplier);
+            }
+        }
+
+        // 5. Jitter amplification — spontaneous longer pause (inspired by
+        //    getJitterAmplification). 0.5-2% chance of adding 5-30 extra ticks,
+        //    simulating "looked away from the screen for a moment."
+        if (roll() < p.jitterAmplifyChance) {
+            const amplify = sampleInt(roll2rng, p.jitterAmplifyMinTicks, p.jitterAmplifyMaxTicks);
+            delay += amplify;
         }
     }
 
-    // 5. Jitter amplification — spontaneous longer pause (inspired by
-    //    getJitterAmplification). 0.5-2% chance of adding 5-30 extra ticks,
-    //    simulating "looked away from the screen for a moment."
-    if (roll() < p.jitterAmplifyChance) {
-        const amplify = sampleInt(roll2rng, p.jitterAmplifyMinTicks, p.jitterAmplifyMaxTicks);
-        delay += amplify;
+    // --- RARE: distraction event (bypasses max) ---
+    // 0.1% chance per call of a 20-60 tick (12-36s) pause, simulating
+    // "tabbed out to check something." This fires independently of
+    // triggerChance and is NOT clipped by max, ensuring the delay
+    // distribution has an unbounded long tail that no hard ceiling
+    // could produce. Over ~1000 calls (roughly an hour of active play),
+    // this fires ~1 time.
+    let distracted = false;
+    if (roll() < 0.001) {
+        const distraction = sampleInt(roll2rng, 20, 60);
+        delay += distraction;
+        distracted = true;
     }
 
     // Final clamp — never below 1, and clip to max if provided.
+    // The distraction event bypasses the max cap so the long tail
+    // is preserved even on mechanical steps with low max values.
     const result = Math.max(1, delay);
+    if (distracted) return result;
     return (max !== undefined && max > 0) ? Math.min(result, max) : result;
 };
 
