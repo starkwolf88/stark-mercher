@@ -208,7 +208,7 @@ export function completeHop(bot: StarkMercher, tick: number): void {
     humanLog(bot, 'World hop completed, waiting %d ms before resuming', resumeMs);
 }
 
-function cancelHop(bot: StarkMercher, tick: number, reason: string): void {
+export function cancelHop(bot: StarkMercher, tick: number, reason: string): void {
     bot.hopInProgress = false;
     bot.hopSawLoggedOut = false;
     bot.forceHopPending = false;

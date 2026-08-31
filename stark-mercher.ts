@@ -8,11 +8,13 @@ import { getOfferSlotStateWithProgress, offerSlotCount, auditGeState } from './g
 import { setDelayProfileForAccount, createDelay, getActiveDelayProfile } from './antiban/humanised-delay.js';
 import { setClickJitterProfile, generateClickJitterProfile, setClickJitterDebugLog } from './antiban/click-jitter.js';
 import { autoLoopTick, createAutoLoopState, resetAutoLoop, type AutoLoopState } from './grand_exchange/auto-loop.js';
-import { breakStep, wallClockStep, resetBreakState, initSessionProfile, markNightlyBreakFinished, resetHop, forceHop, shouldPauseForHopBoundary } from './antiban/session.js';
+import { breakStep, wallClockStep, resetBreakState, saveBreakState, initSessionProfile, markNightlyBreakFinished, resetHop, forceHop, shouldPauseForHopBoundary } from './antiban/session.js';
 import { resetLoginState } from './antiban/login.js';
 import { resetLogoutState } from './antiban/logout.js';
 import { hopStep, completeHop, onChatMessage as onHopChatMessage } from './antiban/hopper.js';
 import { renderBotOverlay } from './widgets/bot-overlay.js';
+import { loadOfferCache } from './general/state-persist.js';
+import { getMerchHistory } from './data/merch-history.js';
 import type { SessionProfile } from './antiban/session-profile.js';
 
 export class StarkMercher extends titan.Plugin {
@@ -91,6 +93,18 @@ export class StarkMercher extends titan.Plugin {
     /** Set by the auto-loop when it has nothing to do — signals that a
      *  short logout break can be taken. */
     loopIdleForBreak = false;
+    /** Tick when the auto-loop first became idle. Used to enforce a
+     *  randomised tick-based delay before taking a short break. Reset
+     *  whenever the auto-loop performs an action. */
+    loopIdleSinceTick = -1;
+    /** Randomised delay in ticks before a short break triggers after the
+     *  bot goes idle. Computed once when the bot first becomes idle:
+     *    base 5-20 ticks
+     *    + 3 ticks (20% chance)
+     *    + 1-10 ticks (10% chance)
+     *    + 5-15 ticks (1% chance)
+     *  This replaces the old 60-second wall-clock grace period. */
+    shortBreakDelayTicks = -1;
     // Login state
     currentPlayerName = '';
     sessionProfile: SessionProfile | null = null;
@@ -186,6 +200,41 @@ export class StarkMercher extends titan.Plugin {
         hidden: true,
     });
 
+    // --- Hidden last active account setting ---
+    // Stores the last active account name. Used as a fallback when the
+    // login snapshot doesn't have a displayName (e.g. account not staged
+    // yet at script start). Survives client restarts and plugin reloads.
+    lastActiveAccountSetting: titan.Setting<string> = this.stringSetting({
+        key: 'lastActiveAccount',
+        name: 'Last active account (hidden)',
+        default: '',
+        hidden: true,
+    });
+
+    // --- Hidden break state setting ---
+    // Stores the current break/login state as JSON so it survives plugin
+    // restarts and hot reloads. Includes breakPhase, breakType, breakTargetEndMs,
+    // nightly sleep schedule, session start, and unexpected logout timestamp.
+    // Restored on enable so the overlay shows the correct countdown and the
+    // bot knows to continue sleeping / wait for login.
+    breakStateSetting: titan.Setting<string> = this.stringSetting({
+        key: 'breakState',
+        name: 'Break state (hidden)',
+        default: '{}',
+        hidden: true,
+    });
+
+    // --- Hidden merch history setting ---
+    // Stores per-account merch history (profits and losses) as JSON.
+    // Each entry records item, qty, profit/loss, date, buy price, avg sold
+    // price, and revision count for a completed merch cycle.
+    merchHistorySetting: titan.Setting<string> = this.stringSetting({
+        key: 'merchHistory',
+        name: 'Merch history (hidden)',
+        default: '{}',
+        hidden: true,
+    });
+
     // --- Overlay HUD registration ---
     // The overlay renders every frame while isHudActive is true. It draws
     // the Status, Inventory Coins, and Daily Profit fields.
@@ -267,6 +316,85 @@ export class StarkMercher extends titan.Plugin {
     // --- Sell test parameters ---
     // Reuses the same item name, quantity, and price settings as the buy test.
     // The item must be in the inventory for the sell flow to work.
+
+    // --- Log cache data button ---
+    // Click to dump the current account's offer cache to the log. Useful for
+    // debugging cached buy/sell prices, revision history, and buy-limit state.
+    logCacheData: titan.Setting<void> = this.buttonSetting({
+        key: 'logCacheData',
+        name: 'Log Cache Data',
+        position: -1,
+        onClick: () => {
+            const accountName = this.currentPlayerName || titan.state.client.localPlayer?.name || '';
+            if (!accountName) {
+                titan.log('[Stark Mercher] Cannot log cache — no account name available.');
+                return;
+            }
+            const cache = loadOfferCache(this, accountName);
+            const keys = Object.keys(cache);
+            if (keys.length === 0) {
+                titan.logf('[Stark Mercher] Offer cache for %s is empty.', accountName);
+                return;
+            }
+            titan.logf('[Stark Mercher] Offer cache for %s (%d entries):', accountName, keys.length);
+            for (const key of keys) {
+                const e = cache[key];
+                const placed = new Date(e.offerPlacedAt).toISOString();
+                const revisions = e.revisedPrices.join(' -> ');
+                const totalBought = e.totalBought !== undefined ? `, totalBought=${e.totalBought}` : '';
+                const limitReached = e.limitReachedAt !== undefined ? `, limitReachedAt=${new Date(e.limitReachedAt).toISOString()}` : '';
+                const sellQty = e.sellQuantity !== undefined ? `, sellQty=${e.sellQuantity}` : '';
+                titan.logf('[Stark Mercher]   %s: mode=%s, buy=%d, sell=%d (orig=%d), placed=%s, revisions=[%s]%s%s%s',
+                    key, e.mode, e.buyPrice, e.sellPrice, e.originalSellPrice, placed, revisions,
+                    totalBought, limitReached, sellQty);
+            }
+            titan.logf('[Stark Mercher] Cache dump complete (%d entries).', keys.length);
+        },
+    });
+
+    // --- Log merch history button ---
+    // Click to dump the merch history (profits and losses) to the log.
+    // Shows completed merch cycles with item, qty, profit/loss, avg sell
+    // price, buy price, and revision count.
+    logMerchHistory: titan.Setting<void> = this.buttonSetting({
+        key: 'logMerchHistory',
+        name: 'Log Merch History',
+        position: -1,
+        onClick: () => {
+            const accountName = this.currentPlayerName || titan.state.client.localPlayer?.name || '';
+            if (!accountName) {
+                titan.log('[Stark Mercher] Cannot log merch history — no account name available.');
+                return;
+            }
+            const history = getMerchHistory(this, accountName);
+            if (history.profits.length === 0 && history.losses.length === 0) {
+                titan.logf('[Stark Mercher] No merch history for %s.', accountName);
+                return;
+            }
+            titan.logf('[Stark Mercher] Merch history for %s:', accountName);
+            if (history.profits.length > 0) {
+                titan.logf('[Stark Mercher] === PROFITS (%d) ===', history.profits.length);
+                let totalProfit = 0;
+                for (const e of history.profits) {
+                    titan.logf('[Stark Mercher]   %s: qty=%d, profit=+%dgp, buy=%d, avgSold=%d, revisions=%d, date=%s',
+                        e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, e.date);
+                    totalProfit += e.profit;
+                }
+                titan.logf('[Stark Mercher]   Total profit: +%dgp', totalProfit);
+            }
+            if (history.losses.length > 0) {
+                titan.logf('[Stark Mercher] === LOSSES (%d) ===', history.losses.length);
+                let totalLoss = 0;
+                for (const e of history.losses) {
+                    titan.logf('[Stark Mercher]   %s: qty=%d, loss=%dgp, buy=%d, avgSold=%d, revisions=%d, date=%s',
+                        e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, e.date);
+                    totalLoss += e.profit;
+                }
+                titan.logf('[Stark Mercher]   Total loss: %dgp', totalLoss);
+            }
+            titan.logf('[Stark Mercher] Merch history dump complete.');
+        },
+    });
 
     // --- Configurable test parameters ---
     testItemName: titan.Setting<string> = this.stringSetting({
@@ -530,6 +658,7 @@ export class StarkMercher extends titan.Plugin {
             if (this.unexpectedLogoutAtMs === 0) {
                 this.unexpectedLogoutAtMs = Date.now();
                 titan.logf('[Stark Mercher] Unexpected logout detected (gameState=%s)', String(event.newState));
+                saveBreakState(this);
             }
         }
         // When logged back in after a nightly break, mark it as finished
@@ -576,6 +705,19 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
     if (bot.hopResumeAtMs > 0 && Date.now() < bot.hopResumeAtMs) return;
     if (bot.hopResumeAtMs > 0 && Date.now() >= bot.hopResumeAtMs) {
         bot.hopResumeAtMs = -1;
+    }
+
+    // Post-login settle delay — after the title screen disappears, login.ts
+    // sets postLoginResumeAtMs to now + createDelay(2, 50) ticks. This blocks
+    // tickLogic until the humanised settle delay elapses, giving the client
+    // time to render the world and clear any promo/overlay widgets. Uses a
+    // wall-clock timestamp (not setAction) because the tick counter resets
+    // on the first tick after login, which would wipe an action-based delay.
+    if (bot.postLoginResumeAtMs > 0) {
+        if (Date.now() < bot.postLoginResumeAtMs) return;
+        bot.postLoginResumeAtMs = -1;
+        bot.loginSettled = true;
+        titan.log('[Stark Mercher] Post-login settle complete — resuming');
     }
 
     // Pause new actions while a hop or break is pending (waiting for a safe

@@ -1,8 +1,8 @@
 # Stark Mercher — `determine-flips.mjs` deep analysis
 
 > Source file: `determine-flips.mjs`
-> Output file: `merchableItems.json` (inlined into the plugin bundle at build time)
-> Related plugin file: `data/merchable-items.ts`
+> Output files: `merchableItems.json` (inlined into the plugin bundle at build time), `priceHistory.json` (fallback price lookup, also inlined)
+> Related plugin files: `data/merchable-items.ts`, `data/price-history.ts`
 
 ## Purpose
 
@@ -17,6 +17,7 @@ to decide which GE offers to place.
 |----------|---------|---------|
 | `MAX_RESULTS` | 100 (was 20) | Max items kept after sorting by `flipScore`. JSON size grows, but plugin still iterates the whole list. |
 | `GE_TAX_PERCENTAGE` | 2 | GE sale tax deducted from raw sell price when computing `salePriceExcludingTax`. |
+| `GE_TAX_EXEMPTION_THRESHOLD` | 50 | Items with a `rawSalePrice` below 50gp are exempt from GE sales tax — `saleTaxAmount` is set to 0 instead of `floor(price * 0.02)`. This matches the OSRS game rule and allows low-priced items (e.g. Fire rune at 4-5gp) to have a viable margin. |
 | `CASH_STACK_MILLIONS` | 10 (was 87) | Total GP available for flipping. User tunes this to the account's actual cash. |
 | `CASH_STACK` | `CASH_STACK_MILLIONS * 1e6` | Numeric cash stack. |
 | `SALE_BUFFER_PERCENTAGE` | 0.01 | Extra 1% safety margin removed from sell price to protect against downward movement. |
@@ -25,7 +26,7 @@ to decide which GE offers to place.
 | `MARKET_SHARE_ASSUMPTION_PERCENTAGE` | 35 | Used in ETA calculation: assume the bot captures 35% of the observed buy/sell volume. |
 | `MAX_TURNOVER_HOURS` | 2.5 | Reject items whose combined buy+sell ETA exceeds 150 minutes. |
 | `TWO_HOUR_VOLUME_BUFFER_PERCENTAGE` | 15 | Reduce 2h volume by 15% before using it for ETAs (safety margin). |
-| `PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD` | 30000 | `actualProfitPerSlotHour` must be ≥ 30k. |
+| `PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD` | 20000 | `actualProfitPerSlotHour` must be ≥ 20k. |
 | `ROI_MINIMUM_PERCENTAGE_THRESHOLD` | 1 | `returnOnInvestmentPercentage` must be ≥ 1%. |
 
 ## API sources
@@ -40,7 +41,7 @@ All endpoints are on `https://prices.runescape.wiki/api/v1/osrs/` except
 | `24h` | Latest 24-hour average low/high prices and volumes. |
 | `mapping` | Item names, GE limits, item IDs. |
 | `timeseries?timestep=1h&id={id}` | Hourly time series for the last ~7 days. Cached in `item_time_series_data.json`. |
-| `timeseries?lookback=30d&id={id}` (v2) | 30-day time series for long-term crash detection. |
+| `timeseries?lookback=30d&id={id}` (v2) | 30-day time series for long-term crash detection. Cached per-item in `item_long_term_crash_data.json` with a 24h TTL (`LONG_TERM_CRASH_CACHE_TTL_MS`); only refetched when the cached entry is older than 24h. A 200ms delay (`LONG_TERM_CRASH_FETCH_DELAY_MS`) is inserted between v2 calls to avoid the OSRS Wiki load balancer dropping connections (`ECONNABORTED`) when many items need a fresh fetch in one run. |
 
 ## High-level pipeline
 
@@ -53,7 +54,8 @@ getMerchableItems()
   │   excludeNameStrings()                   name filters
   │   determinePurchaseAndSalePrices()       use 5m price if available; cap at CASH_STACK
   │   determineFiveMinuteVsOneHour*Change()  reject large 5m vs 1h price spikes/drops
-  │   calculateSalePrice()                   tax + buffer
+  │   applyLowball()                         volume-scaled lowball on buy price (1h vol proxy)
+  │   calculateSalePrice()                   tax (0 if < 50gp) + buffer
   │   calculateProfitMargin()                profitMargin; filter if < 1 or limit*profit < 10k
   │   → filteredItems[]
   ├─ getTimeSeriesData()                     fetch/update hourly series, cached locally
@@ -62,6 +64,7 @@ getMerchableItems()
   │   validatePurchasePrice()                fall back to 2h/3h averages if no 5m
   │   validateSalePrice()
   │   clampPrices()                          cap price at 2h average + 5%/50k
+  │   applyLowball()                         re-apply lowball with accurate 3h volume (resets to base first)
   │   calculateSalePrice()                   recompute tax/buffer after clamping
   │   calculateProfitMargin()
   │   determineIrregularVolumes()            reject 3h volume too far from 7d baseline
@@ -74,14 +77,51 @@ getMerchableItems()
   ├─ for each item:
   │   calculateSlotCashAllocation()          core cash allocation logic
   │   calculateQuantityToPurchase()          quantity, totalPurchasePrice
-  │   calculateEtas()                        buy/sell/turnover ETAs
+  │   calculateEtas()                        buy/sell/turnover ETAs (reduced buy vol for lowball)
   │   calculateProfitability()               actualProfitPerSlotHour, ROI, totalProfit
   │   determineLongTermCrash()               reject if 30d recent price > 10% below 90th percentile baseline
   │   add dataFetchedAt / dataFetchedAtIso
   │   → merchableItems[]
   ├─ determineFlipScore()                    score and sort
-  └─ write merchableItems.json (skip if 0 results)
+  ├─ write merchableItems.json (skip if 0 results)
+  └─ write priceHistory.json (always — uses 1h data already fetched)
 ```
+
+## `priceHistory.json`
+
+A lightweight fallback price lookup written every run alongside `merchableItems.json`. Uses the 1h average prices already fetched in `getPriceData()` — **no extra API calls**.
+
+```json
+{
+  "2": { "name": "Steel cannonball", "buy": 249, "sell": 256, "fetchedAt": 1788175308405 },
+  ...
+}
+```
+
+- ~1,800–3,000 entries (every item with valid 1h data + mapping name)
+- Written every run regardless of `merchableItems.length` (the 1h data is always available)
+- Consumed by `data/price-history.ts` in the plugin as a fallback sell-price source for inventory items that aren't in `merchableItems.json` or the offer cache (e.g. orphaned items after a long script stop or a JSON refresh during sleep)
+
+## Volume-scaled lowball
+
+Instead of buying at the 5m average low (instant-buy price), the script applies a small lowball to the buy price. High-volume items have a wide price distribution — many trades happen below the average low, so a small lowball still fills quickly.
+
+**Lowball tiers** (based on 3h average hourly volume, 1h volume as fallback in first pass):
+
+| 3h avg volume | Lowball % |
+|---|---|
+| > 200k/hr | 2% |
+| 50k–200k/hr | 1.5% |
+| 10k–50k/hr | 1% |
+| < 10k/hr | 0% (buy at market) |
+
+**Gate**: Only applied when `min(volume, limit) >= 5000` — targets high-quantity items where a small per-unit margin adds up.
+
+**ETA adjustment**: Effective buy volume is reduced by `1.5x lowball%` (e.g., 2% lowball → 97% of volume fills the offer). This is conservative.
+
+**Idempotency**: `applyLowball` stores `lowballBasePrice` (the pre-lowball price) so the second pass can reset and re-apply without stacking.
+
+**Output fields**: `lowballPercent`, `lowballAmount`, `lowballBasePrice` are written to `merchableItems.json`.
 
 ## Cash allocation and quantity logic (core of Odium-ward / high-price issue)
 
@@ -231,7 +271,11 @@ allocation per item does not account for simultaneous slots.
 
 `determineLongTermCrash` returns `false` (filters the item) if the API request
 fails for any reason (network, rate limit, empty response). This is safe but can
-silently remove otherwise good items.
+silently remove otherwise good items. The 30d v2 response is cached per-item in
+`item_long_term_crash_data.json` with a 24h TTL, so a transient network failure
+on a given run falls back to the previous day's cached data rather than filtering
+the item — only items with no cache entry (or a stale one) are at risk of being
+filtered by a network blip.
 
 ### 5. `MAX_TURNOVER_HOURS = 2.5` is strict
 

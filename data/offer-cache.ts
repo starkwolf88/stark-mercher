@@ -274,6 +274,43 @@ export class OfferCacheManager {
         }
     }
 
+    // --- Partial sale tracking (for merch history) ---
+
+    /**
+     * Records a partial sale batch — a quantity sold at a specific price
+     * before the offer was aborted/re-listed or completed. Appended to
+     * entry.partialSales. Used to compute weighted average sell price
+     * and total profit/loss when the merch cycle completes.
+     */
+    recordPartialSale(itemName: string, price: number, qty: number): void {
+        if (qty <= 0) return;
+        const entry = this.get(itemName);
+        if (!entry) return;
+        if (!entry.partialSales) entry.partialSales = [];
+        entry.partialSales.push({ price, qty, timestamp: Date.now() });
+        this.dirty = true;
+    }
+
+    /**
+     * Returns the partial sales array for an item, or empty array if none.
+     */
+    getPartialSales(itemName: string): { price: number; qty: number; timestamp: number }[] {
+        const entry = this.get(itemName);
+        return entry?.partialSales ?? [];
+    }
+
+    /**
+     * Clears partial sales for an item. Called after the merch cycle
+     * completes and the summary has been recorded to merch history.
+     */
+    clearPartialSales(itemName: string): void {
+        const entry = this.get(itemName);
+        if (entry && entry.partialSales) {
+            entry.partialSales = undefined;
+            this.dirty = true;
+        }
+    }
+
     // --- Price revision ---
 
     /**

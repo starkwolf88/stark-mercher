@@ -1,5 +1,6 @@
-const ITEM_ID = 1513;
+const ITEM_ID = 2;
 const GE_TAX_PERCENTAGE = 2;
+const GE_TAX_EXEMPTION_THRESHOLD = 50; // Items with a sale price below 50gp are exempt from GE sales tax
 const SALE_BUFFER_PERCENTAGE = 0.01;
 
 // Price data variables
@@ -157,7 +158,7 @@ const determineCurrentSalePrice = () => {
     }
 
     itemData.calculatedData.rawCurrentSalePrice = liveHighPrice;
-    itemData.calculatedData.saleTaxAmount = Math.floor((liveHighPrice / 100) * GE_TAX_PERCENTAGE);
+    itemData.calculatedData.saleTaxAmount = liveHighPrice < GE_TAX_EXEMPTION_THRESHOLD ? 0 : Math.floor((liveHighPrice / 100) * GE_TAX_PERCENTAGE);
     itemData.calculatedData.saleBufferAmount = Math.floor((liveHighPrice / 100) * SALE_BUFFER_PERCENTAGE);
     
     // Recommended price to put into the GE slot to sell instantly/safely without unnecessary lag

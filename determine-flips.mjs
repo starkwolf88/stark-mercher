@@ -35,6 +35,7 @@ const ESTIMATED_LIMIT_FIXES = {
 
 // Price data variables
 let itemTimeSeriesData = {};
+let itemLongTermCrashData = {}; // Cached 30d v2 timeseries for determineLongTermCrash()
 let oneHourPriceData = {};
 let mappingItemData = {};
 let fiveMinuteDataMap = {};
@@ -77,6 +78,22 @@ try {
 } catch (err) {
     if (err.code !== 'ENOENT') throw err; // ignore if file doesn't exist
 }
+
+try {
+    const crashFile = await fs.readFile('item_long_term_crash_data.json', 'utf-8');
+    itemLongTermCrashData = JSON.parse(crashFile);
+} catch (err) {
+    if (err.code !== 'ENOENT') throw err; // ignore if file doesn't exist
+}
+
+// 30-day crash data is cached per item and only refetched if older than this TTL.
+// The 30d lookback window barely shifts over 3-minute cycles, so a 24h TTL is
+// more than sufficient and avoids bursting the v2 API every run.
+const LONG_TERM_CRASH_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+// Small delay between v2 API calls to avoid the OSRS Wiki load balancer dropping
+// connections (ECONNABORTED) when many items need a fresh fetch in one run.
+const LONG_TERM_CRASH_FETCH_DELAY_MS = 200;
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 
 async function getPriceData() {
@@ -197,8 +214,10 @@ const determineFiveMinuteVsOneHourSalePriceChange = (itemData) => {
     return true;
 };
 
+const GE_TAX_EXEMPTION_THRESHOLD = 50; // Items with a sale price below 50gp are exempt from GE sales tax
+
 const calculateSalePrice = (itemData) => {
-    itemData.saleTaxAmount = Math.floor((itemData.rawSalePrice / 100) * GE_TAX_PERCENTAGE);
+    itemData.saleTaxAmount = itemData.rawSalePrice < GE_TAX_EXEMPTION_THRESHOLD ? 0 : Math.floor((itemData.rawSalePrice / 100) * GE_TAX_PERCENTAGE);
     itemData.saleBufferAmount = Math.floor((itemData.rawSalePrice / 100) * SALE_BUFFER_PERCENTAGE);
     itemData.salePriceExcludingTax = Math.floor(itemData.rawSalePrice - itemData.saleTaxAmount);
     itemData.salePriceExcludingTaxAndBuffer = Math.floor(itemData.salePriceExcludingTax - itemData.saleBufferAmount);
@@ -442,6 +461,67 @@ const clampPrices = (itemData) => {
     itemData.salePrice = clampPrice(itemData.salePrice, itemData.twoHourAverageHourlySalePrice);
 };
 
+// --- Volume-scaled lowball -------------------------------------------------
+// Instead of buying at the 5m average low (instant-buy price), place a buy
+// offer slightly below market. High-volume items have a wide price
+// distribution — many trades happen below the average low, so a small
+// lowball still fills quickly. The lowball % scales with volume:
+//   > 200k/hr → 2%, 50k–200k → 1.5%, 10k–50k → 1%, < 10k → 0%
+// Only applied to high-quantity items (min(volume, limit) >= 5000) where
+// we're buying enough units that a small per-unit margin adds up.
+//
+// In the first pass, 3h volume isn't available yet (it comes from timeseries
+// data between passes). We fall back to 1h purchase volume as a proxy so
+// items with thin raw margins can survive the first-pass profit filter and
+// reach the second pass where the accurate 3h volume is used.
+//
+// IMPORTANT: applyLowball must be idempotent within a single pass. The second
+// pass resets purchasePrice to its pre-lowball value (stored in
+// lowballBasePrice) before re-applying, so the lowball doesn't stack.
+const LOWBALL_QUANTITY_GATE = 5000;
+const LOWBALL_VOLUME_TIERS = [
+    { minVolume: 200000, percent: 2.0 },
+    { minVolume: 50000,  percent: 1.5 },
+    { minVolume: 10000,  percent: 1.0 },
+];
+
+const applyLowball = (itemData) => {
+    // Use 3h volume if available (second pass), otherwise fall back to 1h
+    // purchase volume (first pass — timeseries data not fetched yet).
+    const volume = itemData.threeHourAverageHourlyVolume || itemData.oneHourPurchaseVolume || 0;
+    const effectiveQty = Math.min(volume, itemData.limit || 0);
+    if (effectiveQty < LOWBALL_QUANTITY_GATE) {
+        itemData.lowballPercent = 0;
+        itemData.lowballAmount = 0;
+        itemData.lowballBasePrice = itemData.purchasePrice;
+        return;
+    }
+
+    let percent = 0;
+    for (const tier of LOWBALL_VOLUME_TIERS) {
+        if (volume >= tier.minVolume) {
+            percent = tier.percent;
+            break;
+        }
+    }
+
+    if (percent <= 0) {
+        itemData.lowballPercent = 0;
+        itemData.lowballAmount = 0;
+        itemData.lowballBasePrice = itemData.purchasePrice;
+        return;
+    }
+
+    // If a previous lowball was applied (second pass after first pass),
+    // reset to the base price before re-applying so the lowball doesn't stack.
+    const basePrice = itemData.lowballBasePrice ?? itemData.purchasePrice;
+    const amount = Math.max(1, Math.floor(basePrice * percent / 100));
+    itemData.lowballPercent = percent;
+    itemData.lowballAmount = amount;
+    itemData.lowballBasePrice = basePrice;
+    itemData.purchasePrice = Math.max(1, basePrice - amount);
+};
+
 const determineIrregularVolumes = (itemData) => {
     if (itemData.sevenDayAverageHourlyVolume < 5) return true; // Ignore low volume items
 
@@ -542,10 +622,14 @@ const computeQuantityForAllocation = (itemData, cashAllocation) => {
 };
 
 const computeEtasForQuantity = (itemData, quantity) => {
+    // Lowball reduces the effective buy volume: a buy offer below market
+    // only captures the portion of trades that happen at or below the
+    // lowballed price. Conservative factor: 1.5x the lowball %.
+    const lowballVolumeFactor = 1 - ((itemData.lowballPercent || 0) * 1.5 / 100);
     const effectivePurchaseVolume = Math.min(
         itemData.twoHourAverageHourlyPurchaseVolume * (1 - TWO_HOUR_VOLUME_BUFFER_PERCENTAGE / 100),
         itemData.oneHourPurchaseVolume
-    ) * (MARKET_SHARE_ASSUMPTION_PERCENTAGE / 100);
+    ) * (MARKET_SHARE_ASSUMPTION_PERCENTAGE / 100) * lowballVolumeFactor;
     const effectiveSaleVolume = Math.min(
         itemData.twoHourAverageHourlySaleVolume * (1 - TWO_HOUR_VOLUME_BUFFER_PERCENTAGE / 100),
         itemData.oneHourSaleVolume
@@ -639,7 +723,7 @@ const calculateEtas = (itemData) => {
     return true;
 };
 
-const PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD = 30000 // Minimum profit per hour an item could make before being filtered
+const PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD = 20000 // Minimum profit per hour an item could make before being filtered
 const ROI_MINIMUM_PERCENTAGE_THRESHOLD = 1; // Minimum R.O.I %
 const calculateProfitability = (itemData) => {
     if (!itemData.turnoverEtaMinutes || itemData.turnoverEtaMinutes <= 0) {
@@ -662,14 +746,32 @@ const calculateProfitability = (itemData) => {
 
 const determineLongTermCrash = async (itemData) => {
     try {
-        const response = await fetchFromAPIV2(`timeseries?lookback=30d&id=${itemData.itemId}`);
+        // Check the per-item cache first. The 30d lookback window barely moves
+        // between 3-minute cycles, so a cached entry younger than the TTL is
+        // reused instead of hitting the v2 API.
+        const cached = itemLongTermCrashData[itemData.itemId];
+        let data;
+        if (cached && cached.fetchedAt && (Date.now() - cached.fetchedAt) < LONG_TERM_CRASH_CACHE_TTL_MS) {
+            data = cached.data;
+        } else {
+            const response = await fetchFromAPIV2(`timeseries?lookback=30d&id=${itemData.itemId}`);
+            // Pace v2 calls so the Wiki load balancer doesn't drop connections
+            // (ECONNABORTED) when many items need a fresh fetch in one run.
+            await sleep(LONG_TERM_CRASH_FETCH_DELAY_MS);
+            if (!response || !response.data || response.data.length === 0) {
+                longTermCrashFiltered++;
+                return false;
+            }
+            data = response.data;
+            itemLongTermCrashData[itemData.itemId] = { fetchedAt: Date.now(), data };
+        }
 
-        if (!response || !response.data || response.data.length === 0) {
+        if (!data || data.length === 0) {
             longTermCrashFiltered++;
             return false;
         }
 
-        const prices = response.data.map(entry => entry.avgLowPrice ?? entry.avgHighPrice).filter(p => p != null && p > 0);
+        const prices = data.map(entry => entry.avgLowPrice ?? entry.avgHighPrice).filter(p => p != null && p > 0);
 
         if (prices.length < 10) {
             longTermCrashFiltered++;
@@ -751,6 +853,13 @@ async function getMerchableItems() {
         // Calculate price data if it exists.
         if (itemData.rawSalePrice && itemData.purchasePrice) {
 
+            // Apply volume-scaled lowball to the buy price (first pass).
+            // Uses 1h purchase volume as a proxy since 3h data isn't
+            // available yet. This lets thin-margin high-volume items
+            // survive the first-pass profit filter and reach the second
+            // pass where the accurate 3h volume is used.
+            applyLowball(itemData);
+
             // Calculate sale price.
             calculateSalePrice(itemData);
 
@@ -779,6 +888,11 @@ async function getMerchableItems() {
 
         // Clamp prices 3 hour averages.
         clampPrices(itemData);
+
+        // Apply volume-scaled lowball to the buy price (after clamping,
+        // before tax/margin calculation so margins reflect the lowballed
+        // buy price).
+        applyLowball(itemData);
 
         // Calculate tax and sale buffer amount.
         calculateSalePrice(itemData);
@@ -852,6 +966,11 @@ async function getMerchableItems() {
     // Determine sorting for most flippable items to be at the top.
     determineFlipScore();
 
+    // Persist the 30d crash cache so subsequent runs can reuse it instead of
+    // re-fetching every item every cycle. Saved regardless of whether any items
+    // survived to merchableItems, since the cache work is valuable either way.
+    await fs.writeFile('item_long_term_crash_data.json', JSON.stringify(itemLongTermCrashData, null, 2), 'utf-8');
+
     // If no items were found, preserve the existing file rather than wiping
     // it. This handles cases where the wiki API is down or the game is
     // updating — the plugin can still use the previous run's data (subject
@@ -864,6 +983,26 @@ async function getMerchableItems() {
 
     // Write to JSON file.
     await fs.writeFile('C:\\Users\\Zsus\\Documents\\GitHub\\stark-mercher\\merchableItems.json', JSON.stringify(merchableItems, null, 2), 'utf-8');
+
+    // Write priceHistory.json — a lightweight fallback price lookup for
+    // items that end up in inventory but aren't in merchableItems.json or
+    // the offer cache (e.g. after a long script stop or a JSON refresh
+    // during sleep). Uses the 1h average prices already fetched above —
+    // no extra API calls. Written every run regardless of merchableItems
+    // count, since the 1h data is always available.
+    const priceHistory = {};
+    for (const [itemIdString, oneHourEntry] of Object.entries(oneHourPriceData)) {
+        const mapping = mappingItemData.get(Number(itemIdString));
+        if (!mapping || !mapping.name) continue;
+        if (!oneHourEntry.avgLowPrice || !oneHourEntry.avgHighPrice) continue;
+        priceHistory[itemIdString] = {
+            name: mapping.name,
+            buy: oneHourEntry.avgLowPrice,
+            sell: oneHourEntry.avgHighPrice,
+            fetchedAt: dataFetchedAt,
+        };
+    }
+    await fs.writeFile('C:\\Users\\Zsus\\Documents\\GitHub\\stark-mercher\\priceHistory.json', JSON.stringify(priceHistory, null, 2), 'utf-8');
 
     console.log('-------------------------------------------------------------------------------------------------------------------------------------------------------------');
     if (debug) {

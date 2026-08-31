@@ -18,6 +18,7 @@
 - `general/debug.ts` — debug widget logging.
 - `general/variables.ts` — shared variables.
 - `data/merchable-items.ts` — typed reader for `merchableItems.json` (inlined at build time by esbuild). `getMerchableItems`, `getMerchableItem`, `isMerchable`, `getFirstUnoccupiedMerchableItem`, `MerchableItem`.
+- `data/price-history.ts` — typed reader for `priceHistory.json` (inlined at build time). `getPriceHistoryEntry`. Fallback sell-price lookup for items not in merchableItems.json or the offer cache (e.g. orphaned inventory items after a long script stop or JSON refresh during sleep). Uses 1h average prices — no extra API calls.
 - `data/offer-cache.ts` — `OfferCacheManager` wrapping the persisted cache with price revision logic (0.05% reduction capped at 5% of gross profit, min 1 gp, never below buyPrice+1) and Wiki API stub. `fetchWikiPrice` (stub — URL not yet configured).
 - `data/daily-profit.ts` — per-account daily profit tracking. `addDailyProfit`, `getDailyProfit`, `resetDailyProfit`, `getDayStartMs`. Persisted in hidden JSON setting. Resets at UK midnight via day-rollover comparison on read/write.
 - `widgets/bot-overlay.ts` — HUD overlay panel. `renderBotOverlay` draws Status, Inventory Coins, and Daily Profit. Registered via `this.overlay({ layer: 'AboveWidgets' })` in `stark-mercher.ts`.
@@ -114,6 +115,23 @@ The only blocker for a hop is the player actively animating or moving. `getSafeB
 3. **Idle buffer** — player has been idle for less than 2 ticks.
 
 All other state (held items, GE interface, location) either persists across hops/logouts or is transient. `shouldPauseForHopBoundary(bot)` pauses `tickLogic()` to prevent starting new actions while a forced hop is waiting to dispatch.
+
+## Break system
+
+The mercher takes two types of logout breaks:
+
+- **Short breaks** (2-5 min): Triggered when the auto-loop has nothing to do (all slots occupied, nothing to collect/sell/buy). The auto-loop sets `bot.loopIdleForBreak = true` and `bot.loopIdleSinceTick = tick` when it reaches the idle branch. The break system in `breakStep()` checks these flags but enforces a **randomised tick-based delay** before actually logging out:
+  - Base: 5-20 ticks
+  - + 3 ticks (20% chance)
+  - + 1-10 ticks (10% chance)
+  - + 5-15 ticks (1% chance)
+  
+  The delay is computed once when the bot first becomes idle and stored in `bot.shortBreakDelayTicks`. This prevents logging out immediately while adding humanised randomness. The idle tick is reset whenever the auto-loop performs an action (set at the top of `autoLoopTick`).
+- **Nightly sleep** (3.5-6.5h): Per-account profile with wake-first scheduling. Bedtime = wake time − sleep duration.
+
+Both break types log the player out via `logoutForBreak()`. GE offers continue filling while logged out. After the break duration elapses (wall-clock), `wallClockStep()` → `loginStep()` logs the account back in.
+
+`loopIdleSinceTick` and `shortBreakDelayTicks` are reset in all the same places as `loopIdleForBreak`: `resetBreakState()`, login recovery, nightly break start, short break start, and at the top of `autoLoopTick()`.
 
 ## Login retry timeout (for future implementation)
 
@@ -225,9 +243,15 @@ newPrice  = max(buyPrice + 1, currentSell - reduction)
 - If gross profit < 5 gp, revision is skipped (too thin to cut — abort instead).
 - The sale price in `merchableItems.json` already includes the GE tax, so no additional tax calculation is performed during revision.
 
-### Wiki API fallback (stub)
+### Sell-price fallback chain
 
-When an item is no longer in `merchableItems.json` and has no cache entry, `fetchWikiPrice(itemId)` is called to get the 1-hour OSRS Wiki price. The URL is currently a stub (`WIKI_API_URL = ''`) — the function returns `null` and the sell flow skips the item. The logic structure is in place; only the URL needs to be filled in later.
+When the auto-loop's selling flow (Step 5) needs a sell price for an inventory item, it checks sources in order:
+
+1. **Offer cache** (`cache.getSellPrice`) — primary source. Includes price revision logic for re-listed items.
+2. **`priceHistory.json`** (`getPriceHistoryEntry`) — fallback. Written by `determine-flips.mjs` every run using the 1h average prices already fetched (no extra API calls). Used when an item is in inventory but has no cache entry and no `merchableItems.json` entry — e.g. after a long script stop or a JSON refresh during sleep. The 1h average high price is used as the sell price; the 1h average low price is used as the buy price for profit tracking.
+3. **Skip** — if neither source has a price, the item is skipped (logged in debug) to avoid selling at an unknown price.
+
+The Wiki API fallback (`fetchWikiPrice` in `data/offer-cache.ts`) remains a stub — the `priceHistory.json` fallback now covers the use case it was intended for, without requiring a runtime API call from the plugin.
 
 ### State lifecycle for auto-loop fields
 
@@ -257,6 +281,10 @@ When an item is no longer in `merchableItems.json` and has no cache entry, `fetc
 | `CASH_STACK_MILLIONS` | 10 | Total GP available for flipping. |
 | `AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO` | 0.20 | Target base cash per slot (20% = 2m with 10m stack). |
 | `MAX_TURNOVER_HOURS` | 2.5 | Max combined buy+sell ETA. |
+| `GE_TAX_EXEMPTION_THRESHOLD` | 50 | Items with `rawSalePrice < 50gp` are exempt from GE sales tax (`saleTaxAmount = 0`). Matches the OSRS game rule. |
+| `PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD` | 20000 | Minimum `actualProfitPerSlotHour` to pass. |
+| `LOWBALL_QUANTITY_GATE` | 5000 | Only lowball items where `min(volume, limit) >= 5000`. |
+| `LOWBALL_VOLUME_TIERS` | 200k→2%, 50k→1.5%, 10k→1% | Volume-scaled lowball percentages. |
 
 ### Cash-allocation implementation
 

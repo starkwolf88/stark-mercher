@@ -1,6 +1,6 @@
 import type { StarkMercher } from '../stark-mercher.js';
 import { resetAutoLoop } from '../grand_exchange/auto-loop.js';
-import { resetBreakState, initSessionProfile, resetHopState } from '../antiban/session.js';
+import { resetBreakState, restoreBreakState, initSessionProfile, resetHopState } from '../antiban/session.js';
 
 // onEnable()
 export const onEnable = (bot: StarkMercher) => {
@@ -47,10 +47,13 @@ const resetState = (bot: StarkMercher) => {
     // survives restarts and hot reloads. The cache is re-loaded from the
     // hidden setting on the first autoLoopTick via OfferCacheManager.
     resetAutoLoop(bot);
-    // Reset break/login/logout state. The persisted session profile (hidden
-    // setting) is NOT cleared — it survives restarts. The profile is re-loaded
-    // on the first tick when the player name is available.
-    resetBreakState(bot);
+    // Restore break/login state from the hidden setting if a valid saved
+    // state exists (e.g. hot reload during a sleep or short break). Otherwise
+    // reset to defaults. The persisted session profile is NOT cleared — it
+    // survives restarts and is re-loaded on the first tick.
+    if (!restoreBreakState(bot)) {
+        resetBreakState(bot);
+    }
     // Reset hop state (in-memory only; persisted timers are restored separately).
     resetHopState(bot);
     // If the player is already in-world, load the session profile immediately.

@@ -28,6 +28,7 @@ import { loadOrCreateSessionProfile, formatTime } from './session-profile.js';
 import { logoutForBreak, resetLogoutState } from './logout.js';
 import { loginStep, resetLoginState } from './login.js';
 import { isPlayerIdle } from '../general/helpers.js';
+import { cancelHop } from './hopper.js';
 
 const MS_PER_MINUTE = 60000;
 const MS_PER_DAY = 1440 * MS_PER_MINUTE;
@@ -265,6 +266,12 @@ export function initSessionProfile(bot: StarkMercher): void {
     }
     bot.currentPlayerName = playerName;
     bot.sessionProfile = loadOrCreateSessionProfile(bot, playerName);
+    // Persist the last active account name so it can be used as a fallback
+    // when the login snapshot doesn't have a displayName (e.g. account not
+    // staged yet at script start while logged out).
+    if (bot.lastActiveAccountSetting.value !== playerName) {
+        bot.lastActiveAccountSetting.value = playerName;
+    }
 }
 
 /** Reset all break/login state. Called on enable. */
@@ -277,12 +284,123 @@ export function resetBreakState(bot: StarkMercher): void {
     bot.nightlySleepMinutes = -1;
     bot.nightlyBreakFinished = -1;
     bot.loopIdleForBreak = false;
+    bot.loopIdleSinceTick = -1;
+    bot.shortBreakDelayTicks = -1;
     bot.sessionPlayStartMs = -1;
     bot.currentPlayerName = '';
     bot.sessionProfile = null;
     bot.unexpectedLogoutAtMs = 0;
     resetLogoutState(bot);
     resetLoginState(bot);
+}
+
+// --- Break state persistence -------------------------------------------------
+// The break state (phase, target end time, nightly schedule, session start,
+// unexpected logout timestamp) is persisted in a hidden JSON setting so it
+// survives plugin restarts and hot reloads. Without this, a hot reload during
+// a sleep or short break would reset the countdown and the bot would either
+// log in immediately or show a wrong timer.
+
+interface SavedBreakState {
+    breakPhase: string;
+    breakType: string;
+    breakStartMs: number;
+    breakTargetEndMs: number;
+    nightlyBreakTargetTime: number;
+    nightlySleepMinutes: number;
+    nightlyBreakFinished: number;
+    sessionPlayStartMs: number;
+    unexpectedLogoutAtMs: number;
+    savedAt: number;
+}
+
+/** Save the current break state to the hidden setting. Called at every
+ *  break phase transition and when an unexpected logout is detected. */
+export function saveBreakState(bot: StarkMercher): void {
+    const state: SavedBreakState = {
+        breakPhase: bot.breakPhase,
+        breakType: bot.breakType,
+        breakStartMs: bot.breakStartMs,
+        breakTargetEndMs: bot.breakTargetEndMs,
+        nightlyBreakTargetTime: bot.nightlyBreakTargetTime,
+        nightlySleepMinutes: bot.nightlySleepMinutes,
+        nightlyBreakFinished: bot.nightlyBreakFinished,
+        sessionPlayStartMs: bot.sessionPlayStartMs,
+        unexpectedLogoutAtMs: bot.unexpectedLogoutAtMs,
+        savedAt: Date.now(),
+    };
+    try {
+        bot.breakStateSetting.value = JSON.stringify(state);
+    } catch (e) {
+        titan.logf('[Stark Mercher] Failed to save break state: %s', String(e));
+    }
+}
+
+/** Clear the saved break state. Called when a break fully ends and the bot
+ *  is back in-world and active. */
+export function clearBreakState(bot: StarkMercher): void {
+    if (bot.breakStateSetting.value !== '{}') {
+        bot.breakStateSetting.value = '{}';
+    }
+}
+
+/** Restore break state from the hidden setting. Called on enable / hot reload.
+ *  If a valid saved state exists, restores it and returns true. Otherwise
+ *  returns false (caller should call resetBreakState). */
+export function restoreBreakState(bot: StarkMercher): boolean {
+    const raw = bot.breakStateSetting.value;
+    if (!raw || raw === '{}') return false;
+    try {
+        const s = JSON.parse(raw) as SavedBreakState;
+        if (!s || typeof s.breakPhase !== 'string') return false;
+
+        // Validate: if the break target has already passed and we're not
+        // in a nightly sleep window, the saved state is stale — discard it.
+        const now = Date.now();
+        if (s.breakPhase === 'logged_out' && s.breakTargetEndMs > 0 && now >= s.breakTargetEndMs) {
+            // The break was supposed to end in the past. If it was a nightly
+            // sleep, check if we're still within the sleep window.
+            if (s.breakType === 'nightly' && s.nightlyBreakTargetTime > 0) {
+                const sleepMs = s.nightlySleepMinutes > 0 ? s.nightlySleepMinutes * MS_PER_MINUTE : 0;
+                const wakeMs = s.nightlyBreakTargetTime + sleepMs;
+                if (now >= wakeMs) {
+                    // Sleep window has fully passed — discard.
+                    clearBreakState(bot);
+                    return false;
+                }
+            } else {
+                // Short break target has passed — discard.
+                clearBreakState(bot);
+                return false;
+            }
+        }
+
+        bot.breakPhase = s.breakPhase as typeof bot.breakPhase;
+        bot.breakType = s.breakType as typeof bot.breakType;
+        bot.breakStartMs = s.breakStartMs;
+        bot.breakTargetEndMs = s.breakTargetEndMs;
+        bot.nightlyBreakTargetTime = s.nightlyBreakTargetTime;
+        bot.nightlySleepMinutes = s.nightlySleepMinutes;
+        bot.nightlyBreakFinished = s.nightlyBreakFinished;
+        bot.sessionPlayStartMs = s.sessionPlayStartMs;
+        bot.unexpectedLogoutAtMs = s.unexpectedLogoutAtMs;
+
+        // If we were in a logging_out phase, we're now logged out (the
+        // plugin restarted), so transition to logged_out directly.
+        if (bot.breakPhase === 'logging_out') {
+            bot.breakPhase = 'logged_out';
+            bot.logoutComplete = true;
+        }
+
+        titan.logf('[Stark Mercher] Restored break state: phase=%s, type=%s, targetEnd=%s',
+            bot.breakPhase, bot.breakType,
+            bot.breakTargetEndMs > 0 ? new Date(bot.breakTargetEndMs).toISOString() : '(none)');
+        return true;
+    } catch (e) {
+        titan.logf('[Stark Mercher] Failed to restore break state: %s', String(e));
+        clearBreakState(bot);
+        return false;
+    }
 }
 
 /** Reset hop state (in-memory). Called on enable. Persisted timers are
@@ -387,6 +505,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
             if (bot.logoutComplete) {
                 bot.breakPhase = 'logged_out';
                 debugLog(bot, `Break: logged out, waiting until ${new Date(bot.breakTargetEndMs).toISOString()}`);
+                saveBreakState(bot);
             }
 
             // Check if break duration has elapsed
@@ -396,6 +515,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
                 resetLogoutState(bot);
                 resetLoginState(bot);
                 humanLog(bot, 'Break ended (%s), logging back in', bot.breakType);
+                saveBreakState(bot);
             }
 
             // If still waiting, just return true (skip auto-loop)
@@ -415,8 +535,11 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
                 bot.breakPhase = 'none';
                 bot.breakType = 'none';
                 bot.loopIdleForBreak = false;
+                bot.loopIdleSinceTick = -1;
+                bot.shortBreakDelayTicks = -1;
                 resetLoginState(bot);
                 humanLog(bot, 'Logged back in, resuming auto-loop');
+                clearBreakState(bot);
             }
             return true;
         }
@@ -424,6 +547,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
         // Unexpected logout — try to log back in
         if (bot.unexpectedLogoutAtMs === 0) {
             bot.unexpectedLogoutAtMs = now;
+            saveBreakState(bot);
         }
         // After 5 seconds, start trying to log in
         if (now - bot.unexpectedLogoutAtMs > 5000) {
@@ -442,7 +566,10 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
             bot.breakPhase = 'none';
             bot.breakType = 'none';
             bot.loopIdleForBreak = false;
+            bot.loopIdleSinceTick = -1;
+            bot.shortBreakDelayTicks = -1;
             resetLoginState(bot);
+            clearBreakState(bot);
         }
     }
 
@@ -452,8 +579,11 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
             bot.breakPhase = 'none';
             bot.breakType = 'none';
             bot.loopIdleForBreak = false;
+            bot.loopIdleSinceTick = -1;
+            bot.shortBreakDelayTicks = -1;
             resetLoginState(bot);
             humanLog(bot, 'Logged back in, resuming auto-loop');
+            clearBreakState(bot);
         }
         return true;
     }
@@ -475,10 +605,13 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
             bot.breakStartMs = now;
             bot.breakTargetEndMs = bot.nightlyBreakTargetTime + (bot.nightlySleepMinutes * MS_PER_MINUTE);
             bot.loopIdleForBreak = false;
+            bot.loopIdleSinceTick = -1;
+            bot.shortBreakDelayTicks = -1;
             resetLogoutState(bot);
             const wakeTime = new Date(bot.breakTargetEndMs);
             humanLog(bot, 'Nightly sleep starting — wake at %s (%d min sleep)',
                 wakeTime.toISOString(), bot.nightlySleepMinutes);
+            saveBreakState(bot);
         }
         // While logging out, dispatch logout
         if (bot.breakPhase === 'logging_out') {
@@ -492,16 +625,41 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
     //   1. We're not already in a break
     //   2. The auto-loop has signalled it's idle (nothing to do)
     //   3. Auto mode is enabled
+    //   4. The bot has been idle for a randomised tick delay:
+    //        base 5-20 ticks
+    //        + 3 ticks (20% chance)
+    //        + 1-10 ticks (10% chance)
+    //        + 5-15 ticks (1% chance)
+    //      The delay is computed once when the bot first becomes idle and
+    //      stored in shortBreakDelayTicks. This prevents logging out
+    //      immediately while adding humanised randomness to the timing.
     if (bot.breakPhase === 'none' && bot.loopIdleForBreak && bot.autoMode.value === 1) {
+        if (bot.loopIdleSinceTick < 0) {
+            bot.loopIdleSinceTick = tick;
+            // Compute the randomised delay once.
+            let delay = 5 + Math.floor(Math.random() * 16); // 5-20 ticks
+            if (Math.random() < 0.20) delay += 3;             // +3 ticks (20%)
+            if (Math.random() < 0.10) delay += 1 + Math.floor(Math.random() * 10); // +1-10 (10%)
+            if (Math.random() < 0.01) delay += 5 + Math.floor(Math.random() * 11); // +5-15 (1%)
+            bot.shortBreakDelayTicks = delay;
+            humanLog(bot, 'Idle — short break in %d ticks', delay);
+        }
+        const elapsed = tick - bot.loopIdleSinceTick;
+        if (elapsed < bot.shortBreakDelayTicks) {
+            return false;
+        }
         const duration = sampleShortBreakDuration(bot);
         bot.breakPhase = 'logging_out';
         bot.breakType = 'short';
         bot.breakStartMs = now;
         bot.breakTargetEndMs = now + duration;
         bot.loopIdleForBreak = false;
+        bot.loopIdleSinceTick = -1;
+        bot.shortBreakDelayTicks = -1;
         resetLogoutState(bot);
         humanLog(bot, 'Short break starting — %d min logout', Math.round(duration / MS_PER_MINUTE));
         logoutForBreak(bot, 'short');
+        saveBreakState(bot);
         return true;
     }
 
@@ -521,21 +679,88 @@ export function wallClockStep(bot: StarkMercher): void {
     const now = Date.now();
     const playerName = titan.state.client.localPlayer?.name;
 
+    // Detect a disconnect during a world hop. A normal hop transitions
+    // through HoppingWorld (45), not LoginScreen (10). If the client is on
+    // the login screen while a hop is in progress, the connection was lost.
+    // onGameTick (which runs hopStep's 45s timeout) does not fire on the
+    // login screen, so without this check the bot would stay stuck with
+    // hopInProgress=true forever, blocking loginStep() from running.
+    // 10 seconds is enough for any brief transition; a real disconnect will
+    // be clearly past that.
+    if (bot.hopInProgress &&
+        titan.state.login.state === titan.LoginGameState.LoginScreen &&
+        bot.lastHopMs > 0 && now - bot.lastHopMs > 10000) {
+        cancelHop(bot, titan.state.client.tick, 'Disconnect during world hop (login screen detected); cancelling hop to allow auto-login');
+    }
+
     // If logged out and in a break, check if break is over
     if (!playerName || !titan.state.login.isLoggedIn) {
+        // Transition logging_out → logged_out. This normally happens in
+        // breakStep (onGameTick), but onGameTick doesn't fire while logged
+        // out, so we must also handle it here in wallClockStep.
+        if (bot.breakPhase === 'logging_out' && bot.logoutComplete) {
+            bot.breakPhase = 'logged_out';
+            debugLog(bot, `Break: logged out, waiting until ${new Date(bot.breakTargetEndMs).toISOString()}`);
+            saveBreakState(bot);
+        }
+
         if (bot.breakPhase === 'logged_out' && now >= bot.breakTargetEndMs) {
             bot.breakPhase = 'logging_in';
             resetLogoutState(bot);
             resetLoginState(bot);
             humanLog(bot, 'Break ended (%s), logging back in', bot.breakType);
+            saveBreakState(bot);
         }
 
         if (bot.breakPhase === 'logging_out') {
             logoutForBreak(bot, bot.breakType, true);
         }
 
+        // Not in a break but logged out — initialise the unexpected-logout
+        // timer if it hasn't been set yet (e.g. script started while logged
+        // out). After 5 seconds, loginStep will be called to log back in.
+        // Skip if a world hop is in progress (the hop disconnect detection
+        // above handles cancelling a stuck hop before allowing login).
+        if (bot.breakPhase === 'none' && !bot.hopInProgress && bot.unexpectedLogoutAtMs === 0) {
+            bot.unexpectedLogoutAtMs = now;
+            humanLog(bot, 'Logged out (not a break) — attempting login in 5s');
+            saveBreakState(bot);
+        }
+
+        // Detect the selected account at the login screen. The login
+        // snapshot's displayName is available before the player is logged
+        // in, so we can set currentPlayerName and load the session profile
+        // before loginStep tries to stage credentials. Without this,
+        // tryStageAndSubmitLogin fails with "no character name found".
+        // Fallback: if the snapshot has no displayName (e.g. account not
+        // staged yet), use the last active account from the hidden setting.
+        if (!bot.currentPlayerName) {
+            const snap = titan.state.login.snapshot();
+            const accountName = snap?.displayName?.trim() || null;
+            if (accountName) {
+                debugLog(bot, `Account selected at login screen: ${accountName}`);
+                bot.currentPlayerName = accountName;
+                if (bot.lastActiveAccountSetting.value !== accountName) {
+                    bot.lastActiveAccountSetting.value = accountName;
+                }
+                if (!bot.sessionProfile) {
+                    bot.sessionProfile = loadOrCreateSessionProfile(bot, accountName);
+                }
+            } else {
+                // No displayName in snapshot — try the last active account.
+                const lastActive = bot.lastActiveAccountSetting.value.trim();
+                if (lastActive) {
+                    debugLog(bot, `No account in login snapshot — using last active: ${lastActive}`);
+                    bot.currentPlayerName = lastActive;
+                    if (!bot.sessionProfile) {
+                        bot.sessionProfile = loadOrCreateSessionProfile(bot, lastActive);
+                    }
+                }
+            }
+        }
+
         if (bot.breakPhase === 'logging_in' || (bot.unexpectedLogoutAtMs > 0 && now - bot.unexpectedLogoutAtMs > 5000)) {
-            loginStep(bot);
+            if (!bot.hopInProgress) loginStep(bot);
         }
     }
 }

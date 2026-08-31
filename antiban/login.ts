@@ -9,6 +9,7 @@
 // ============================================================================
 
 import type { StarkMercher } from '../stark-mercher.js';
+import { createDelay } from './humanised-delay.js';
 
 const LOGIN_THROTTLE_MS = 1000;
 const LOGIN_SUCCESS_LOCKOUT_MS = 5 * 600; // re-check title every 5 ticks (~3s)
@@ -68,13 +69,16 @@ function tryClickTitle(bot: StarkMercher): boolean {
         if (titleVisible) {
             // Fall through to click
         } else {
-            // Stale title widget — settle immediately
-            const waitTicks = sampleInt(POST_LOGIN_RESUME_TICKS_MIN, POST_LOGIN_RESUME_TICKS_MAX);
-            bot.postLoginResumeAtMs = now + (waitTicks * 600);
+            // Stale title widget — settle via humanised delay.
+            // Store as wall-clock timestamp (not setAction) because the
+            // tick counter resets on first tick after login, which would
+            // wipe the action delay.
+            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, 50);
+            bot.postLoginResumeAtMs = now + (settleTicks * 600);
             bot.titleWaitingForGone = false;
             bot.loginSettled = true;
             resetLoginState(bot);
-            humanLog(bot, 'In-world with stale title widget; resuming in %d ticks', waitTicks);
+            humanLog(bot, 'In-world with stale title widget; resuming in %d ticks', settleTicks);
             return true;
         }
     }
@@ -82,12 +86,12 @@ function tryClickTitle(bot: StarkMercher): boolean {
     if (!titleExists) {
         if (isInWorld() && !bot.loginSettled) {
             debugLog(bot, 'Title screen gone; player in-world; settling');
-            const waitTicks = sampleInt(POST_LOGIN_RESUME_TICKS_MIN, POST_LOGIN_RESUME_TICKS_MAX);
-            bot.postLoginResumeAtMs = now + (waitTicks * 600);
+            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, 50);
+            bot.postLoginResumeAtMs = now + (settleTicks * 600);
             bot.titleWaitingForGone = false;
             bot.loginSettled = true;
             resetLoginState(bot);
-            humanLog(bot, 'Title screen gone; resuming in %d ticks', waitTicks);
+            humanLog(bot, 'Title screen gone; resuming in %d ticks', settleTicks);
         }
         return false;
     }
@@ -240,13 +244,12 @@ export function loginStep(bot: StarkMercher): void {
     if (bot.titleWaitingForGone) {
         if (!titleExists) {
             if (isInWorld()) {
-                const now = Date.now();
-                const waitTicks = sampleInt(POST_LOGIN_RESUME_TICKS_MIN, POST_LOGIN_RESUME_TICKS_MAX);
-                bot.postLoginResumeAtMs = now + (waitTicks * 600);
+                const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, 50);
+                bot.postLoginResumeAtMs = Date.now() + (settleTicks * 600);
                 bot.titleWaitingForGone = false;
                 bot.loginSettled = true;
                 resetLoginState(bot);
-                humanLog(bot, 'Title screen gone; resuming in %d ticks', waitTicks);
+                humanLog(bot, 'Title screen gone; resuming in %d ticks', settleTicks);
             }
             return;
         }

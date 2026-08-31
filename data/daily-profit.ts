@@ -41,16 +41,13 @@ export interface DailyProfitState {
  * handling inherited from Mixology).
  */
 export const getDayStartMs = (now: number): number => {
+    // Use UTC midnight as the day boundary. The Titan plugin runtime does
+    // not expose `Intl`, so we can't use timezone-aware formatting. UTC
+    // is fine here because we only compare dayStartedAt values for
+    // equality (same day vs. a different day) — the exact wall-clock
+    // boundary doesn't matter as long as it's consistent.
     const d = new Date(now);
-    // Use Europe/London timezone via Intl to handle BST/GMT correctly.
-    const ukDateStr = d.toLocaleString('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' });
-    const [year, month, day] = ukDateStr.split('/').map(Number);
-    // Construct a Date at UTC midnight for that UK calendar day. This is
-    // an approximation — the actual UTC offset varies with BST, but since
-    // we only compare dayStartedAt values for equality (same day vs. a
-    // different day), the exact offset doesn't matter as long as it's
-    // consistent within the same day.
-    return Date.UTC(year, month - 1, day, 0, 0, 0);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0);
 };
 
 // --- Load / Save -----------------------------------------------------------
@@ -113,6 +110,10 @@ export const addDailyProfit = (bot: StarkMercher, accountName: string, amount: n
         state[accountName] = { dayStartedAt: todayStart, profit: amount };
     }
     saveState(bot, state);
+    if (bot.logDebug.value) {
+        titan.logf('[Stark Mercher] Daily profit: stored %dgp for %s (dayStartedAt=%d, total=%d)',
+            amount, accountName, todayStart, state[accountName].profit);
+    }
 };
 
 /**

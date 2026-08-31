@@ -60,6 +60,11 @@ export interface OfferCacheEntry {
      *    soldQty = sellQuantity (at completed-sell sweep, when item is
      *              no longer in any GE slot or inventory). */
     sellQuantity?: number;
+    /** Partial sales tracked across price revisions for merch history.
+     *  Each entry records a batch sold at a specific price before the
+     *  offer was aborted/re-listed or completed. Cleared when the sell
+     *  cycle completes and the summary is recorded to merch history. */
+    partialSales?: { price: number; qty: number; timestamp: number }[];
 }
 
 // --- Load / Save -----------------------------------------------------------

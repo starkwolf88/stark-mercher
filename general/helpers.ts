@@ -31,3 +31,21 @@ export function isPlayerIdle(bot: StarkMercher): boolean {
 
     return !isAnimating || stationaryFor >= IDLE_ANIMATION_GRACE_TICKS;
 }
+
+/** Format a quantity compactly: 18000 → "18k", 1000000 → "1M". */
+export function formatQty(n: number): string {
+    if (n >= 1_000_000) {
+        const m = n / 1_000_000;
+        return m >= 10 ? `${Math.round(m)}M` : `${m.toFixed(1)}M`;
+    }
+    if (n >= 1000) {
+        const k = n / 1000;
+        return k >= 100 ? `${Math.round(k)}k` : `${k.toFixed(1)}k`;
+    }
+    return String(n);
+}
+
+/** Format a gp amount compactly: 102 → "102", 100000 → "100k", 1500000 → "1.5M". */
+export function formatGpShort(n: number): string {
+    return formatQty(n);
+}

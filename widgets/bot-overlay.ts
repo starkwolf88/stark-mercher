@@ -21,10 +21,11 @@ import { formatUKTime } from '../antiban/session.js';
 
 // --- Layout constants ------------------------------------------------------
 
-const PANEL_X = 50;
-const PANEL_Y = 50;
+const PANEL_X = 0;
+const PANEL_Y = 0;
 const LINE_HEIGHT = 16;
 const HORIZONTAL_PADDING = 12;
+const RIGHT_PADDING = 10;
 const VERTICAL_PADDING = 8;
 const KEY_COLUMN = 130;
 const CHAR_WIDTH = 8;
@@ -77,7 +78,7 @@ function fmtCountdownMs(ms: number): string {
  * Priority:
  *   1. Terminated → "Stopped"
  *   2. Hop in progress → "Hopping" / "Resuming"
- *   3. Break phase with countdown → "Sleeping (Xm Ys)" / "Breaking (Xm Ys)"
+ *   3. Break phase with countdown → "Logged Out (Xm Ys)"
  *   4. Break phase (logging_out / logging_in) → transition status
  *   5. Auto mode off → "Manual test mode"
  *   6. bot.statusText (set by the auto-loop or test flows)
@@ -86,16 +87,26 @@ const getStatusText = (bot: StarkMercher): string => {
     if (bot.terminated) return 'Stopped';
     if (bot.hopInProgress) return 'Hopping';
     if (bot.hopResumeAtMs > 0 && Date.now() < bot.hopResumeAtMs) return 'Resuming';
-    if (bot.breakPhase === 'logging_out') return 'Logging out for break...';
+    if (bot.breakPhase === 'logging_out') return 'Logging out...';
     if (bot.breakPhase === 'logged_out') {
-        const label = bot.breakType === 'nightly' ? 'Sleeping' : 'Breaking';
         if (bot.breakTargetEndMs > 0) {
             const remainingMs = Math.max(0, bot.breakTargetEndMs - Date.now());
-            return `${label} (${fmtCountdownMs(remainingMs)})`;
+            return `Logged Out (${fmtCountdownMs(remainingMs)})`;
         }
-        return label;
+        return 'Logged Out';
     }
     if (bot.breakPhase === 'logging_in') return 'Logging in...';
+    // Not in a break phase but logged out (e.g. plugin started while logged
+    // out, or unexpected disconnect). Show "Logged Out" with a countdown
+    // if we're waiting to re-login.
+    if (!titan.state.login.isLoggedIn) {
+        if (bot.unexpectedLogoutAtMs > 0) {
+            const elapsed = Math.max(0, Date.now() - bot.unexpectedLogoutAtMs);
+            const remaining = Math.max(0, 5000 - elapsed);
+            if (remaining > 0) return `Logged Out (in ${fmtCountdownMs(remaining)})`;
+        }
+        return 'Logged Out';
+    }
     if (bot.autoMode.value === 0) return 'Manual test mode';
     return bot.statusText || 'Idle';
 };
@@ -116,15 +127,13 @@ export const renderBotOverlay = (bot: StarkMercher): void => {
     const playerName = bot.currentPlayerName || titan.state.client.localPlayer?.name || '';
     const dailyProfit = playerName ? getDailyProfit(bot, playerName) : 0;
 
-    const isSleeping = bot.breakPhase === 'logged_out' && bot.breakType === 'nightly';
-    const isOnBreak = bot.breakPhase === 'logged_out' && bot.breakType === 'short';
+    const isLoggedOut = bot.breakPhase === 'logged_out';
 
     // --- Status color ---
     let statusColor = TEXT_COLOR;
     if (status === 'Stopped') statusColor = RED_COLOR;
     else if (status === 'Hopping' || status === 'Resuming') statusColor = ORANGE_COLOR;
-    else if (isSleeping || status.startsWith('Sleeping')) statusColor = ORANGE_COLOR;
-    else if (isOnBreak || status.startsWith('Breaking')) statusColor = ORANGE_COLOR;
+    else if (isLoggedOut || status.startsWith('Logged Out') || status === 'Logging out...' || status === 'Logging in...') statusColor = ORANGE_COLOR;
     else if (status === 'Idle' || status === 'Manual test mode') statusColor = GREY_COLOR;
     else statusColor = GREEN_COLOR;
 
@@ -150,10 +159,8 @@ export const renderBotOverlay = (bot: StarkMercher): void => {
     // --- TIMERS section ---
     lines.push({ text: 'TIMERS', isSectionHeader: true });
 
-    // Session (Day)
-    if (isSleeping) {
-        lines.push({ text: 'Session (Day):', key: 'Session (Day):', value: 'Sleeping', valueColor: ORANGE_COLOR });
-    } else if (bot.sessionPlayStartMs > 0) {
+    // Session (Day) — continuous elapsed timer, keeps running while logged out
+    if (bot.sessionPlayStartMs > 0) {
         const dayMs = Math.max(0, Date.now() - bot.sessionPlayStartMs);
         const dayStr = fmtHms(Math.floor(dayMs / 1000));
         if (bot.nightlyBreakTargetTime > 0) {
@@ -170,14 +177,14 @@ export const renderBotOverlay = (bot: StarkMercher): void => {
     // Next Hop
     if (!bot.hopWorlds || !bot.hopWorlds.value) {
         lines.push({ text: 'Next Hop:', key: 'Next Hop:', value: 'Disabled', valueColor: RED_COLOR });
-    } else if (isSleeping) {
-        lines.push({ text: 'Next Hop:', key: 'Next Hop:', value: 'Sleeping', valueColor: ORANGE_COLOR });
+    } else if (isLoggedOut) {
+        lines.push({ text: 'Next Hop:', key: 'Next Hop:', value: 'Logged Out', valueColor: ORANGE_COLOR });
     } else if (bot.hopInProgress) {
         lines.push({ text: 'Next Hop:', key: 'Next Hop:', value: 'Hopping...', valueColor: ORANGE_COLOR });
     } else if (bot.hopResumeAtMs > 0 && Date.now() < bot.hopResumeAtMs) {
         lines.push({ text: 'Next Hop:', key: 'Next Hop:', value: 'Resuming...', valueColor: ORANGE_COLOR });
     } else if (bot.breakPhase !== 'none') {
-        lines.push({ text: 'Next Hop:', key: 'Next Hop:', value: 'On Break', valueColor: ORANGE_COLOR });
+        lines.push({ text: 'Next Hop:', key: 'Next Hop:', value: 'Logged Out', valueColor: ORANGE_COLOR });
     } else if (bot.nextHopAtMs > 0) {
         const remainingMs = Math.max(0, bot.nextHopAtMs - Date.now());
         if (remainingMs <= 0) {
@@ -192,13 +199,13 @@ export const renderBotOverlay = (bot: StarkMercher): void => {
     // Sleep Time + Wake Time
     if (bot.nightlyBreakTargetTime > 0) {
         const sleepMs = bot.nightlyBreakTargetTime;
-        const wakeMs = isSleeping && bot.breakTargetEndMs > 0
+        const wakeMs = isLoggedOut && bot.breakType === 'nightly' && bot.breakTargetEndMs > 0
             ? bot.breakTargetEndMs
             : sleepMs + (bot.nightlySleepMinutes > 0 ? bot.nightlySleepMinutes * 60000 : 0);
-        if (isSleeping) {
+        if (isLoggedOut && bot.breakType === 'nightly') {
             const remainingSec = Math.max(0, Math.ceil((wakeMs - Date.now()) / 1000));
             const wakeStr = remainingSec === 0 ? 'now' : formatUKTime(wakeMs);
-            lines.push({ text: 'Sleep Time:', key: 'Sleep Time:', value: 'Sleeping', valueColor: ORANGE_COLOR });
+            lines.push({ text: 'Sleep Time:', key: 'Sleep Time:', value: 'Logged Out', valueColor: ORANGE_COLOR });
             lines.push({ text: `Wake Time: ${wakeStr} (in ${fmtHms(remainingSec)})`, key: 'Wake Time:', value: `${wakeStr} (in ${fmtHms(remainingSec)})`, valueColor: ORANGE_COLOR });
         } else {
             lines.push({ text: `Sleep Time: ${formatUKTime(sleepMs)}`, key: 'Sleep Time:', value: formatUKTime(sleepMs) });
@@ -216,7 +223,7 @@ export const renderBotOverlay = (bot: StarkMercher): void => {
         // key + ": " + value
         return (l.key?.length ?? l.text.length) + 2 + l.value.length;
     }));
-    const panelWidth = Math.max(280, maxLineLen * CHAR_WIDTH + HORIZONTAL_PADDING * 2);
+    const panelWidth = Math.max(280, maxLineLen * CHAR_WIDTH + HORIZONTAL_PADDING + RIGHT_PADDING);
     const panelHeight = lines.length * LINE_HEIGHT + VERTICAL_PADDING * 2;
 
     // Draw background panel.
