@@ -50,6 +50,9 @@ to decide which GE offers to place.
 | `TWO_HOUR_VOLUME_BUFFER_PERCENTAGE` | 15 | Reduce 2h volume by 15% before using it for ETAs (safety margin). |
 | `PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD` | 20000 | `actualProfitPerSlotHour` must be ≥ 20k. |
 | `ROI_MINIMUM_PERCENTAGE_THRESHOLD` | 1 | `returnOnInvestmentPercentage` must be ≥ 1%. |
+| `ONE_HOUR_SALE_SPIKE_*` | scale 0.5, min 10%, max 20% | Margin-aware 1h vs 7d sustained sale spike threshold. `maxSpikePct = clamp(marginPct * 0.5, 10, 20)`. Filters items whose 1h average is significantly above the 7d baseline (sustained uptrend, not transient spike). High-margin items keep the 20% cap. |
+| `THREE_HOUR_SALE_SPIKE_*` | scale 0.4, min 8%, max 15% | Margin-aware 3h vs 7d sustained sale spike threshold. Slightly tighter than 1h because a 3h sustained spike is more concerning. |
+| `FIVE_MINUTE_VS_ONE_HOUR_*_PRICE_CHANGE_*` | scale 0.4, min 2%, max 5%/10% | Margin-aware 5m vs 1h transient spike **clamp**. Instead of filtering the item, this CLAMPS the 5m price down toward the 1h average when the 5m price spikes above it by more than the threshold. This neutralises transient 5m spikes (like the Diamond's 2.3% spike) without removing the item from the pool. Downward drops are left as-is (beneficial). |
 
 ## API sources
 
@@ -75,7 +78,7 @@ getMerchableItems()
   │   buildItemDataObject()                  add mapping, 5m, 24h data
   │   excludeNameStrings()                   name filters
   │   determinePurchaseAndSalePrices()       use 5m price if available; cap at CASH_STACK
-  │   determineFiveMinuteVsOneHour*Change()  reject large 5m vs 1h price spikes/drops
+  │   determineFiveMinuteVsOneHour*Change()  clamp 5m price toward 1h avg on upward spikes (margin-aware)
   │   applyLowball()                         volume-scaled lowball on buy price (1h vol proxy)
   │   calculateSalePrice()                   tax (0 if < 50gp) + buffer
   │   calculateProfitMargin()                profitMargin; filter if < 1 or limit*profit < 10k
@@ -91,7 +94,7 @@ getMerchableItems()
   │   calculateProfitMargin()
   │   determineIrregularVolumes()            reject 3h volume too far from 7d baseline
   │   determineTrendSlope()                  reject 3+ recent price drops or 2+ drops + 1 flat
-  │   determineSalePriceSpike()              reject 1h/3h sale price > 7d baseline
+  │   determineSalePriceSpike()              reject 1h/3h sale price > 7d baseline (margin-aware threshold)
   │   determinePurchasePriceDrop()           reject 1h/3h purchase price < 7d baseline
   │   calculateMaxProfitPerSlotHour()        maxProfitPerSlotHour = min(3h volume, limit) * profitMargin
   │   → filteredItemsBeforeCashAllocation[]

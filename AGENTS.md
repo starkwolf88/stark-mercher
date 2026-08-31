@@ -269,7 +269,7 @@ newPrice  = max(floor, currentSell - reduction)
 - After 6 revisions with 0% sold, the bot **abandons** — the floor drops to buyPrice − 2, accepting a small loss to free the slot faster.
 - After 8 total revisions, the bot does a **final dump** at buyPrice − 5 to guarantee a quick sale and free the slot for a profitable item.
 - Losses are correctly tracked: `addDailyProfit` subtracts negative profit from the daily total, and `recordMerchCycle` routes negative totals into the `losses` array in merch history.
-- The sale price in `merchableItems.json` already includes the GE tax, so no additional tax calculation is performed during revision.
+- The sale price in `merchableItems.json` does NOT include GE tax (it's `rawSalePrice - saleBufferAmount`). GE tax (2%, exempt below 50gp) is deducted at profit-tracking time in `auto-loop.ts` using `getNetSellPrice()` from `constants.ts`.
 
 ### Dynamic sell ETA abort ratio
 
@@ -406,14 +406,15 @@ The plugin draws a small on-screen panel via `this.overlay({ layer: 'AboveWidget
 
 Profit is tracked per-account in a hidden JSON setting (`dailyProfitSetting`, key `dailyProfit`). Each account has a `{ dayStartedAt, profit }` entry.
 
-- **Recording**: Profit is recorded at two points, using `sellQuantity` stored in the offer cache entry:
-  1. **Re-list time (Step 5)**: When an item is re-listed after an abort, `soldQty = entry.sellQuantity - item.quantity` (the difference between what was listed and what's still in inventory = what actually sold). Profit = `(entry.sellPrice - entry.buyPrice) * soldQty`. This handles partial aborts accurately.
-  2. **Completed-sell sweep (Step 3)**: Runs every tick at the top of Step 3. A fast-path check (`cache.hasActiveSellEntries()`) skips the entire sweep when no cache entries have `mode='sell'` with `sellQuantity > 0`, avoiding per-tick inventory scans when no sells are in flight. When active sell entries exist, for each such entry, checks if the item is in any GE slot or inventory. If neither, the sell completed 100% — profit = `(entry.sellPrice - entry.buyPrice) * entry.sellQuantity`. Clears `sellQuantity` to prevent double-counting.
+- **Recording**: Profit is recorded at two points, using `sellQuantity` stored in the offer cache entry. Both points deduct GE tax (2%, exempt below 50gp) using `getNetSellPrice()` from `constants.ts`:
+  1. **Re-list time (Step 5)**: When an item is re-listed after an abort, `soldQty = entry.sellQuantity - item.quantity` (the difference between what was listed and what's still in inventory = what actually sold). Profit = `(getNetSellPrice(entry.sellPrice) - entry.buyPrice) * soldQty`. This handles partial aborts accurately.
+  2. **Completed-sell sweep (Step 3)**: Runs every tick at the top of Step 3. A fast-path check (`cache.hasActiveSellEntries()`) skips the entire sweep when no cache entries have `mode='sell'` with `sellQuantity > 0`, avoiding per-tick inventory scans when no sells are in flight. When active sell entries exist, for each such entry, checks if the item is in any GE slot or inventory. If neither, the sell completed 100% — profit = `(getNetSellPrice(entry.sellPrice) - entry.buyPrice) * entry.sellQuantity`. Clears `sellQuantity` to prevent double-counting.
+- **Merch history**: When a cycle completes (100% sold), `recordMerchCycle` is called with `totalProfit = (getNetSellPrice(avgSold) - entry.buyPrice) * totalQty`. The `avgSold` field in the history entry is the pre-tax average sell price (for reference); the `profit` field is after tax.
 - **`sellQuantity` field**: Stored in `OfferCacheEntry` when `recordSellOffer` is called. Represents the quantity currently listed in an active sell offer. Cleared by `clearSellQuantity()` after profit is recorded.
 - **Day rollover**: `getDayStartMs(now)` returns the epoch ms of midnight (00:00) for the current UK-local day. On every read (`getDailyProfit`) and write (`addDailyProfit`), the stored `dayStartedAt` is compared to the current day's midnight. If they differ, the profit is reset for the new day. This handles the script being stopped before midnight and restarted the next day.
 - **Persistence**: The state is saved to the hidden setting on every `addDailyProfit` call. It survives client restarts and plugin reloads.
 - **Per-account**: Keyed by `currentPlayerName` (or `localPlayer.name` as fallback), same as the offer cache.
-- **GE tax**: Already factored into the `salePrice` from `merchableItems.json`, so no additional tax calculation is needed.
+- **GE tax**: The `salePrice` from `merchableItems.json` does NOT include GE tax (it's `rawSalePrice - saleBufferAmount`). GE tax is deducted at profit-tracking time using `getNetSellPrice(sellPrice)` from `constants.ts` (2% tax, exempt for items below 50gp). This ensures the daily profit and merch history reflect actual realized profit after tax.
 
 ## World hopping
 

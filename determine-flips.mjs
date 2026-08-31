@@ -186,30 +186,70 @@ const determinePurchaseAndSalePrices = (itemData) => {
 
 const FIVE_MINUTE_VS_ONE_HOUR_PURCHASE_RELATIVE_VOLUME_CHANGE_MAX_THRESHOLD = 0.05;
 const FIVE_MINUTE_VS_ONE_HOUR_PURCHASE_PRICE_CHANGE_MAX_PERCENTAGE = 5;
+const FIVE_MINUTE_VS_ONE_HOUR_PURCHASE_PRICE_CHANGE_MIN_PERCENTAGE = 2;
+const FIVE_MINUTE_VS_ONE_HOUR_PURCHASE_PRICE_CHANGE_MARGIN_SCALE = 0.4;
 const determineFiveMinuteVsOneHourPurchasePriceChange = (itemData) => {
     if (!itemData.fiveMinutePurchasePrice || !itemData.oneHourPurchasePrice || !itemData.oneHourPurchaseVolume) return true;
 
     // Relative volume check. If 5-minute trades are less than 5% of the 1-hour average, ignore the spike/drop
     if ((itemData.fiveMinutePurchaseVolume / itemData.oneHourPurchaseVolume) < FIVE_MINUTE_VS_ONE_HOUR_PURCHASE_RELATIVE_VOLUME_CHANGE_MAX_THRESHOLD) return true;
 
-    if (Math.abs(percentageDifference(itemData.fiveMinutePurchasePrice, itemData.oneHourPurchasePrice)) > FIVE_MINUTE_VS_ONE_HOUR_PURCHASE_PRICE_CHANGE_MAX_PERCENTAGE) {
+    // Margin-aware threshold: thin-margin items get a tighter threshold
+    // because a small price movement can wipe out the profit.
+    const roughMarginPct = itemData.purchasePrice > 0
+        ? ((itemData.rawSalePrice - itemData.purchasePrice) / itemData.purchasePrice) * 100
+        : 0;
+    const maxChangePct = Math.min(
+        FIVE_MINUTE_VS_ONE_HOUR_PURCHASE_PRICE_CHANGE_MAX_PERCENTAGE,
+        Math.max(FIVE_MINUTE_VS_ONE_HOUR_PURCHASE_PRICE_CHANGE_MIN_PERCENTAGE, roughMarginPct * FIVE_MINUTE_VS_ONE_HOUR_PURCHASE_PRICE_CHANGE_MARGIN_SCALE)
+    );
+
+    // CLAMP instead of filter: if the 5m price spikes above the 1h average
+    // by more than the threshold, clamp it down to the 1h average + threshold.
+    // This neutralises transient 5m spikes (like the Diamond's 2.3% spike)
+    // without removing the item from the pool. Downward drops are left as-is
+    // (they're beneficial — we buy cheaper).
+    const maxPurchasePrice = Math.floor(itemData.oneHourPurchasePrice * (1 + maxChangePct / 100));
+    if (itemData.fiveMinutePurchasePrice > maxPurchasePrice) {
+        itemData.fiveMinutePurchasePrice = maxPurchasePrice;
+        itemData.purchasePrice = maxPurchasePrice;
         fiveMinuteVsOneHourPurchasePriceChangeFiltered++;
-        return false;
     }
     return true;
 };
 
 const FIVE_MINUTE_VS_ONE_HOUR_SALE_RELATIVE_VOLUME_CHANGE_MAX_THRESHOLD = 0.05;
 const FIVE_MINUTE_VS_ONE_HOUR_SALE_PRICE_CHANGE_MAX_PERCENTAGE = 10;
+const FIVE_MINUTE_VS_ONE_HOUR_SALE_PRICE_CHANGE_MIN_PERCENTAGE = 2;
+const FIVE_MINUTE_VS_ONE_HOUR_SALE_PRICE_CHANGE_MARGIN_SCALE = 0.4;
 const determineFiveMinuteVsOneHourSalePriceChange = (itemData) => {
     if (!itemData.fiveMinuteSalePrice || !itemData.oneHourSalePrice || !itemData.oneHourSaleVolume) return true;
 
     // Relative volume check. If 5-minute trades are less than 5% of the 1-hour average, ignore the spike/drop
     if ((itemData.fiveMinuteSaleVolume / itemData.oneHourSaleVolume) < FIVE_MINUTE_VS_ONE_HOUR_SALE_RELATIVE_VOLUME_CHANGE_MAX_THRESHOLD) return true;
 
-    if (Math.abs(percentageDifference(itemData.fiveMinuteSalePrice, itemData.oneHourSalePrice)) > FIVE_MINUTE_VS_ONE_HOUR_SALE_PRICE_CHANGE_MAX_PERCENTAGE) {
+    // Margin-aware threshold: thin-margin items get a tighter threshold
+    // because a small price movement can wipe out the profit.
+    const roughMarginPct = itemData.purchasePrice > 0
+        ? ((itemData.rawSalePrice - itemData.purchasePrice) / itemData.purchasePrice) * 100
+        : 0;
+    const maxChangePct = Math.min(
+        FIVE_MINUTE_VS_ONE_HOUR_SALE_PRICE_CHANGE_MAX_PERCENTAGE,
+        Math.max(FIVE_MINUTE_VS_ONE_HOUR_SALE_PRICE_CHANGE_MIN_PERCENTAGE, roughMarginPct * FIVE_MINUTE_VS_ONE_HOUR_SALE_PRICE_CHANGE_MARGIN_SCALE)
+    );
+
+    // CLAMP instead of filter: if the 5m sale price spikes above the 1h
+    // average by more than the threshold, clamp it down to the 1h average +
+    // threshold. This neutralises transient 5m spikes (like the Diamond's
+    // 2.3% spike) without removing the item from the pool. The sell target
+    // will be based on the clamped price, not the spiked one. Downward drops
+    // are left as-is (they're conservative — we sell cheaper, more likely to
+    // fill).
+    const maxSalePrice = Math.floor(itemData.oneHourSalePrice * (1 + maxChangePct / 100));
+    if (itemData.fiveMinuteSalePrice > maxSalePrice) {
+        itemData.fiveMinuteSalePrice = maxSalePrice;
+        itemData.rawSalePrice = maxSalePrice;
         fiveMinuteVsOneHourSalePriceChangeFiltered++;
-        return false;
     }
     return true;
 };
@@ -575,13 +615,61 @@ const determineTrendSlope = (itemData) => {
     return true;
 }
 
-const ONE_HOUR_PRICE_SALE_SPIKE_MAX_MULTIPLIER = 1.2; // Filters items whose 1h price is >130% of the 24h price (possible spike)
-const THREE_HOUR_SALE_PRICE_SPIKE_MAX_MULTIPLIER = 1.1; // 
+// --- Margin-aware spike thresholds ------------------------------------------
+// Two types of spike filters:
+//
+// 1. 5m vs 1h (above): catches TRANSIENT spikes — a 5-minute price window
+//    that deviates significantly from the 1-hour average. This is the filter
+//    that would have caught the Diamond's 2.3% 5m spike. Uses a tight 2%
+//    floor because 5m and 1h averages should be close for high-volume items.
+//
+// 2. 1h/3h vs 7d (below): catches SUSTAINED spikes — the 1-hour or 3-hour
+//    average is significantly above the 7-day baseline. This catches items
+//    in a sustained uptrend, not transient 5m spikes. The 1h average smooths
+//    out 5m spikes, so a 2% threshold here is far too tight — normal market
+//    cycles produce 2-5% 1h vs 7d variation. The floor is set to 5% (1h) and
+//    4% (3h) to only flag items in a clear sustained spike.
+//
+// Margin scaling applies to both: thin-margin items get a tighter threshold
+// because a small spike consumes a larger fraction of the profit.
+//
+//   maxSpikePct = clamp(marginPct * scaleFactor, minPct, maxPct)
+//
+// Examples (marginPct = profitMargin / purchasePrice * 100):
+//   3.4% margin (Diamond):  maxSpikePct1h = max(5, 1.7) = 5%   → 0.2% 1h spike NOT filtered (correct — 5m filter catches it)
+//   10% margin:             maxSpikePct1h = max(5, 5)   = 5%
+//   25% margin:             maxSpikePct1h = max(5, 12.5) = 12.5%
+//   50%+ margin:            maxSpikePct1h = min(20, 25)  = 20%  (same as old fixed threshold)
+const ONE_HOUR_SALE_SPIKE_MARGIN_SCALE = 0.5;
+const ONE_HOUR_SALE_SPIKE_MIN_PCT = 10;
+const ONE_HOUR_SALE_SPIKE_MAX_PCT = 20;
+const THREE_HOUR_SALE_SPIKE_MARGIN_SCALE = 0.4;
+const THREE_HOUR_SALE_SPIKE_MIN_PCT = 8;
+const THREE_HOUR_SALE_SPIKE_MAX_PCT = 15;
+
 const determineSalePriceSpike = (itemData) => {
-    if (itemData.oneHourSalePrice && itemData.oneHourSalePrice > (itemData.sevenDayAverageHourlySalePrice * ONE_HOUR_PRICE_SALE_SPIKE_MAX_MULTIPLIER)) {
+    // Margin percentage based on the final profit margin (after lowball, tax, buffer).
+    const marginPct = itemData.purchasePrice > 0
+        ? (itemData.profitMargin / itemData.purchasePrice) * 100
+        : 0;
+
+    const maxSpikePct1h = Math.min(
+        ONE_HOUR_SALE_SPIKE_MAX_PCT,
+        Math.max(ONE_HOUR_SALE_SPIKE_MIN_PCT, marginPct * ONE_HOUR_SALE_SPIKE_MARGIN_SCALE)
+    );
+    const maxSpikePct3h = Math.min(
+        THREE_HOUR_SALE_SPIKE_MAX_PCT,
+        Math.max(THREE_HOUR_SALE_SPIKE_MIN_PCT, marginPct * THREE_HOUR_SALE_SPIKE_MARGIN_SCALE)
+    );
+
+    // Convert percentage thresholds to multipliers (1 + pct/100).
+    const maxMultiplier1h = 1 + (maxSpikePct1h / 100);
+    const maxMultiplier3h = 1 + (maxSpikePct3h / 100);
+
+    if (itemData.oneHourSalePrice && itemData.oneHourSalePrice > (itemData.sevenDayAverageHourlySalePrice * maxMultiplier1h)) {
         salePriceSpikeFiltered++;
         return false;
-    } else if (itemData.threeHourAverageHourlySalePrice > (itemData.sevenDayAverageHourlySalePrice * THREE_HOUR_SALE_PRICE_SPIKE_MAX_MULTIPLIER)) {
+    } else if (itemData.threeHourAverageHourlySalePrice > (itemData.sevenDayAverageHourlySalePrice * maxMultiplier3h)) {
         salePriceSpikeFiltered++;
         return false;
     }

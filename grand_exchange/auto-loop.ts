@@ -41,6 +41,7 @@ import {
     type GeAudit,
 } from './widgets.js';
 import { clickCollectToInventory } from './actions.js';
+import { getNetSellPrice, getGeTax } from './constants.js';
 import { openGe, nearGrandExchange, walkToGe } from './clerk.js';
 import { getMerchableItems, getMerchableItem, getFirstUnoccupiedMerchableItem, isMerchable, type MerchableItem } from '../data/merchable-items.js';
 import { getPriceHistoryEntry } from '../data/price-history.js';
@@ -668,11 +669,13 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         if (inInv) continue; // in inventory — abort case, handled at re-list
         // Item is not in any slot or inventory → sell completed 100%.
         const soldQty = entry.sellQuantity;
-        const profitPerItem = entry.sellPrice - entry.buyPrice;
+        const netSellPrice = getNetSellPrice(entry.sellPrice);
+        const profitPerItem = netSellPrice - entry.buyPrice;
         const profit = profitPerItem * soldQty;
         if (profit !== 0 && playerName) {
             addDailyProfit(bot, playerName, profit);
-            debugLog(bot, `Auto: daily profit += ${profit}gp (${soldQty}x ${cacheKey} @ ${profitPerItem}gp/item — 100% completed sell)`);
+            const taxPerItem = getGeTax(entry.sellPrice);
+            debugLog(bot, `Auto: daily profit += ${profit}gp (${soldQty}x ${cacheKey} @ ${profitPerItem}gp/item net — sell=${entry.sellPrice}gp, tax=${taxPerItem}gp, buy=${entry.buyPrice}gp — 100% completed sell)`);
         }
         // Record the final partial sale batch and build the merch history entry.
         cache.recordPartialSale(cacheKey, entry.sellPrice, soldQty);
@@ -681,7 +684,9 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             const totalQty = partials.reduce((s, p) => s + p.qty, 0);
             const weightedSum = partials.reduce((s, p) => s + p.price * p.qty, 0);
             const avgSold = totalQty > 0 ? Math.round(weightedSum / totalQty) : 0;
-            const totalProfit = (avgSold - entry.buyPrice) * totalQty;
+            // Deduct GE tax from the average sell price for merch history.
+            const netAvgSold = getNetSellPrice(avgSold);
+            const totalProfit = (netAvgSold - entry.buyPrice) * totalQty;
             const revisions = entry.revisedPrices.length > 0 ? entry.revisedPrices.length - 1 : 0;
             const lastSale = partials[partials.length - 1];
             recordMerchCycle(bot, playerName, {
@@ -692,7 +697,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 avgSold,
                 revisions,
             }, totalProfit);
-            debugLog(bot, `Auto: merch history recorded — ${cacheKey} ${totalQty}x, avgSold=${avgSold}gp, buy=${entry.buyPrice}gp, profit=${totalProfit}gp, revisions=${revisions}`);
+            debugLog(bot, `Auto: merch history recorded — ${cacheKey} ${totalQty}x, avgSold=${avgSold}gp (net=${netAvgSold}gp after tax), buy=${entry.buyPrice}gp, profit=${totalProfit}gp, revisions=${revisions}`);
         }
         cache.clearPartialSales(cacheKey);
         cache.clearSellQuantity(cacheKey);
@@ -855,11 +860,13 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 // is the quantity that actually sold.
                 const soldQty = existingEntry.sellQuantity - item.quantity;
                 if (soldQty > 0) {
-                    const profitPerItem = existingEntry.sellPrice - existingEntry.buyPrice;
+                    const netSellPrice = getNetSellPrice(existingEntry.sellPrice);
+                    const profitPerItem = netSellPrice - existingEntry.buyPrice;
                     const profit = profitPerItem * soldQty;
                     if (profit !== 0 && playerName) {
                         addDailyProfit(bot, playerName, profit);
-                        debugLog(bot, `Auto: daily profit += ${profit}gp (${soldQty}x ${itemName} sold @ ${profitPerItem}gp/item before abort)`);
+                        const taxPerItem = getGeTax(existingEntry.sellPrice);
+                        debugLog(bot, `Auto: daily profit += ${profit}gp (${soldQty}x ${itemName} sold @ ${profitPerItem}gp/item net — sell=${existingEntry.sellPrice}gp, tax=${taxPerItem}gp, buy=${existingEntry.buyPrice}gp before abort)`);
                     }
                     // Track this partial sale batch for merch history.
                     // The summary entry is created when the cycle completes

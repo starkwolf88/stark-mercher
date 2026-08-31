@@ -98,3 +98,26 @@ export const GE_WALK_POINT = { x: 3165, y: 3485, plane: 0 };
 // --- Slot counts -----------------------------------------------------------
 export const GE_SLOTS_MEMBERS = 8;
 export const GE_SLOTS_F2P = 3;
+
+// --- GE sales tax -----------------------------------------------------------
+// OSRS charges a 2% sales tax on sell offers (deducted from the sale price).
+// Items with a sale price below 50gp are exempt. This must be deducted from
+// profit calculations to avoid overstating profit.
+export const GE_TAX_PERCENTAGE = 2;
+export const GE_TAX_EXEMPTION_THRESHOLD = 50;
+
+/**
+ * Returns the GE tax amount for a given sell price (per item).
+ * Returns 0 for items below the exemption threshold.
+ */
+export const getGeTax = (sellPrice: number): number => {
+    if (sellPrice < GE_TAX_EXEMPTION_THRESHOLD) return 0;
+    return Math.floor((sellPrice / 100) * GE_TAX_PERCENTAGE);
+};
+
+/**
+ * Returns the net sell price after GE tax deduction.
+ */
+export const getNetSellPrice = (sellPrice: number): number => {
+    return sellPrice - getGeTax(sellPrice);
+};
