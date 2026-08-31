@@ -59987,6 +59987,851 @@
       }
     ]
   },
+  "1704": {
+    "fetchedAt": 1788207619712,
+    "data": [
+      {
+        "timestamp": 1785607200,
+        "avgHighPrice": 10915,
+        "avgLowPrice": 10865,
+        "highPriceVolume": 6457,
+        "lowPriceVolume": 13816
+      },
+      {
+        "timestamp": 1785628800,
+        "avgHighPrice": 10930,
+        "avgLowPrice": 10645,
+        "highPriceVolume": 4587,
+        "lowPriceVolume": 12136
+      },
+      {
+        "timestamp": 1785650400,
+        "avgHighPrice": 10813,
+        "avgLowPrice": 10781,
+        "highPriceVolume": 1176,
+        "lowPriceVolume": 5238
+      },
+      {
+        "timestamp": 1785672000,
+        "avgHighPrice": 10880,
+        "avgLowPrice": 10652,
+        "highPriceVolume": 2669,
+        "lowPriceVolume": 10329
+      },
+      {
+        "timestamp": 1785693600,
+        "avgHighPrice": 10975,
+        "avgLowPrice": 10785,
+        "highPriceVolume": 9801,
+        "lowPriceVolume": 11253
+      },
+      {
+        "timestamp": 1785715200,
+        "avgHighPrice": 11291,
+        "avgLowPrice": 11162,
+        "highPriceVolume": 6811,
+        "lowPriceVolume": 10398
+      },
+      {
+        "timestamp": 1785736800,
+        "avgHighPrice": 10988,
+        "avgLowPrice": 10866,
+        "highPriceVolume": 934,
+        "lowPriceVolume": 8687
+      },
+      {
+        "timestamp": 1785758400,
+        "avgHighPrice": 11003,
+        "avgLowPrice": 10985,
+        "highPriceVolume": 3352,
+        "lowPriceVolume": 11554
+      },
+      {
+        "timestamp": 1785780000,
+        "avgHighPrice": 11365,
+        "avgLowPrice": 11100,
+        "highPriceVolume": 6973,
+        "lowPriceVolume": 27126
+      },
+      {
+        "timestamp": 1785801600,
+        "avgHighPrice": 11153,
+        "avgLowPrice": 11071,
+        "highPriceVolume": 2689,
+        "lowPriceVolume": 12760
+      },
+      {
+        "timestamp": 1785823200,
+        "avgHighPrice": 11169,
+        "avgLowPrice": 11001,
+        "highPriceVolume": 1821,
+        "lowPriceVolume": 10995
+      },
+      {
+        "timestamp": 1785844800,
+        "avgHighPrice": 11167,
+        "avgLowPrice": 11054,
+        "highPriceVolume": 4071,
+        "lowPriceVolume": 11525
+      },
+      {
+        "timestamp": 1785866400,
+        "avgHighPrice": 11070,
+        "avgLowPrice": 11187,
+        "highPriceVolume": 8011,
+        "lowPriceVolume": 15857
+      },
+      {
+        "timestamp": 1785888000,
+        "avgHighPrice": 11208,
+        "avgLowPrice": 11217,
+        "highPriceVolume": 4219,
+        "lowPriceVolume": 10901
+      },
+      {
+        "timestamp": 1785909600,
+        "avgHighPrice": 11147,
+        "avgLowPrice": 11044,
+        "highPriceVolume": 608,
+        "lowPriceVolume": 3839
+      },
+      {
+        "timestamp": 1785931200,
+        "avgHighPrice": 11262,
+        "avgLowPrice": 11158,
+        "highPriceVolume": 8514,
+        "lowPriceVolume": 10197
+      },
+      {
+        "timestamp": 1785952800,
+        "avgHighPrice": 11224,
+        "avgLowPrice": 11164,
+        "highPriceVolume": 2910,
+        "lowPriceVolume": 14851
+      },
+      {
+        "timestamp": 1785974400,
+        "avgHighPrice": 11434,
+        "avgLowPrice": 11190,
+        "highPriceVolume": 3859,
+        "lowPriceVolume": 9451
+      },
+      {
+        "timestamp": 1785996000,
+        "avgHighPrice": 11277,
+        "avgLowPrice": 11234,
+        "highPriceVolume": 1313,
+        "lowPriceVolume": 10383
+      },
+      {
+        "timestamp": 1786017600,
+        "avgHighPrice": 11387,
+        "avgLowPrice": 11369,
+        "highPriceVolume": 779,
+        "lowPriceVolume": 14091
+      },
+      {
+        "timestamp": 1786039200,
+        "avgHighPrice": 11931,
+        "avgLowPrice": 11517,
+        "highPriceVolume": 11484,
+        "lowPriceVolume": 29375
+      },
+      {
+        "timestamp": 1786060800,
+        "avgHighPrice": 11699,
+        "avgLowPrice": 11600,
+        "highPriceVolume": 1134,
+        "lowPriceVolume": 13030
+      },
+      {
+        "timestamp": 1786082400,
+        "avgHighPrice": 11989,
+        "avgLowPrice": 11607,
+        "highPriceVolume": 6961,
+        "lowPriceVolume": 10867
+      },
+      {
+        "timestamp": 1786104000,
+        "avgHighPrice": 11869,
+        "avgLowPrice": 11582,
+        "highPriceVolume": 5366,
+        "lowPriceVolume": 18425
+      },
+      {
+        "timestamp": 1786125600,
+        "avgHighPrice": 11621,
+        "avgLowPrice": 11513,
+        "highPriceVolume": 5407,
+        "lowPriceVolume": 19932
+      },
+      {
+        "timestamp": 1786147200,
+        "avgHighPrice": 11535,
+        "avgLowPrice": 11487,
+        "highPriceVolume": 4012,
+        "lowPriceVolume": 23927
+      },
+      {
+        "timestamp": 1786168800,
+        "avgHighPrice": 11792,
+        "avgLowPrice": 11391,
+        "highPriceVolume": 16733,
+        "lowPriceVolume": 26065
+      },
+      {
+        "timestamp": 1786190400,
+        "avgHighPrice": 11371,
+        "avgLowPrice": 11173,
+        "highPriceVolume": 3770,
+        "lowPriceVolume": 25423
+      },
+      {
+        "timestamp": 1786212000,
+        "avgHighPrice": 11519,
+        "avgLowPrice": 11153,
+        "highPriceVolume": 13577,
+        "lowPriceVolume": 19643
+      },
+      {
+        "timestamp": 1786233600,
+        "avgHighPrice": 11456,
+        "avgLowPrice": 11230,
+        "highPriceVolume": 6266,
+        "lowPriceVolume": 11516
+      },
+      {
+        "timestamp": 1786255200,
+        "avgHighPrice": 11013,
+        "avgLowPrice": 10866,
+        "highPriceVolume": 5874,
+        "lowPriceVolume": 8267
+      },
+      {
+        "timestamp": 1786276800,
+        "avgHighPrice": 11237,
+        "avgLowPrice": 10971,
+        "highPriceVolume": 2686,
+        "lowPriceVolume": 20717
+      },
+      {
+        "timestamp": 1786298400,
+        "avgHighPrice": 11316,
+        "avgLowPrice": 11127,
+        "highPriceVolume": 9546,
+        "lowPriceVolume": 15362
+      },
+      {
+        "timestamp": 1786320000,
+        "avgHighPrice": 11358,
+        "avgLowPrice": 11167,
+        "highPriceVolume": 3518,
+        "lowPriceVolume": 12021
+      },
+      {
+        "timestamp": 1786341600,
+        "avgHighPrice": 11103,
+        "avgLowPrice": 10831,
+        "highPriceVolume": 3555,
+        "lowPriceVolume": 11923
+      },
+      {
+        "timestamp": 1786363200,
+        "avgHighPrice": 11058,
+        "avgLowPrice": 10810,
+        "highPriceVolume": 3859,
+        "lowPriceVolume": 16754
+      },
+      {
+        "timestamp": 1786384800,
+        "avgHighPrice": 11070,
+        "avgLowPrice": 10850,
+        "highPriceVolume": 2621,
+        "lowPriceVolume": 15875
+      },
+      {
+        "timestamp": 1786406400,
+        "avgHighPrice": 11306,
+        "avgLowPrice": 11075,
+        "highPriceVolume": 11871,
+        "lowPriceVolume": 25967
+      },
+      {
+        "timestamp": 1786428000,
+        "avgHighPrice": 11306,
+        "avgLowPrice": 11152,
+        "highPriceVolume": 4950,
+        "lowPriceVolume": 14975
+      },
+      {
+        "timestamp": 1786449600,
+        "avgHighPrice": 11282,
+        "avgLowPrice": 10941,
+        "highPriceVolume": 3150,
+        "lowPriceVolume": 14642
+      },
+      {
+        "timestamp": 1786471200,
+        "avgHighPrice": 11176,
+        "avgLowPrice": 11031,
+        "highPriceVolume": 1901,
+        "lowPriceVolume": 15751
+      },
+      {
+        "timestamp": 1786492800,
+        "avgHighPrice": 11268,
+        "avgLowPrice": 10871,
+        "highPriceVolume": 8221,
+        "lowPriceVolume": 9914
+      },
+      {
+        "timestamp": 1786514400,
+        "avgHighPrice": 11158,
+        "avgLowPrice": 11075,
+        "highPriceVolume": 509,
+        "lowPriceVolume": 8571
+      },
+      {
+        "timestamp": 1786536000,
+        "avgHighPrice": 11571,
+        "avgLowPrice": 11171,
+        "highPriceVolume": 663,
+        "lowPriceVolume": 13630
+      },
+      {
+        "timestamp": 1786557600,
+        "avgHighPrice": 11443,
+        "avgLowPrice": 11139,
+        "highPriceVolume": 3921,
+        "lowPriceVolume": 9105
+      },
+      {
+        "timestamp": 1786579200,
+        "avgHighPrice": 11386,
+        "avgLowPrice": 11225,
+        "highPriceVolume": 6712,
+        "lowPriceVolume": 16545
+      },
+      {
+        "timestamp": 1786600800,
+        "avgHighPrice": 11511,
+        "avgLowPrice": 11127,
+        "highPriceVolume": 979,
+        "lowPriceVolume": 4611
+      },
+      {
+        "timestamp": 1786622400,
+        "avgHighPrice": 11235,
+        "avgLowPrice": 11155,
+        "highPriceVolume": 2119,
+        "lowPriceVolume": 11626
+      },
+      {
+        "timestamp": 1786644000,
+        "avgHighPrice": 11262,
+        "avgLowPrice": 11218,
+        "highPriceVolume": 4524,
+        "lowPriceVolume": 18379
+      },
+      {
+        "timestamp": 1786665600,
+        "avgHighPrice": 11298,
+        "avgLowPrice": 11194,
+        "highPriceVolume": 10932,
+        "lowPriceVolume": 16701
+      },
+      {
+        "timestamp": 1786687200,
+        "avgHighPrice": 11192,
+        "avgLowPrice": 11093,
+        "highPriceVolume": 3373,
+        "lowPriceVolume": 8896
+      },
+      {
+        "timestamp": 1786708800,
+        "avgHighPrice": 11252,
+        "avgLowPrice": 11161,
+        "highPriceVolume": 3255,
+        "lowPriceVolume": 9937
+      },
+      {
+        "timestamp": 1786730400,
+        "avgHighPrice": 11187,
+        "avgLowPrice": 10967,
+        "highPriceVolume": 2909,
+        "lowPriceVolume": 8844
+      },
+      {
+        "timestamp": 1786752000,
+        "avgHighPrice": 11288,
+        "avgLowPrice": 11144,
+        "highPriceVolume": 6649,
+        "lowPriceVolume": 14980
+      },
+      {
+        "timestamp": 1786773600,
+        "avgHighPrice": 11261,
+        "avgLowPrice": 10981,
+        "highPriceVolume": 761,
+        "lowPriceVolume": 8049
+      },
+      {
+        "timestamp": 1786795200,
+        "avgHighPrice": 11082,
+        "avgLowPrice": 10927,
+        "highPriceVolume": 1798,
+        "lowPriceVolume": 11125
+      },
+      {
+        "timestamp": 1786816800,
+        "avgHighPrice": 11125,
+        "avgLowPrice": 11015,
+        "highPriceVolume": 5869,
+        "lowPriceVolume": 14592
+      },
+      {
+        "timestamp": 1786838400,
+        "avgHighPrice": 11333,
+        "avgLowPrice": 11167,
+        "highPriceVolume": 6695,
+        "lowPriceVolume": 19682
+      },
+      {
+        "timestamp": 1786860000,
+        "avgHighPrice": 11529,
+        "avgLowPrice": 11180,
+        "highPriceVolume": 16219,
+        "lowPriceVolume": 19036
+      },
+      {
+        "timestamp": 1786881600,
+        "avgHighPrice": 11181,
+        "avgLowPrice": 11077,
+        "highPriceVolume": 11938,
+        "lowPriceVolume": 16906
+      },
+      {
+        "timestamp": 1786903200,
+        "avgHighPrice": 11461,
+        "avgLowPrice": 11257,
+        "highPriceVolume": 7985,
+        "lowPriceVolume": 26110
+      },
+      {
+        "timestamp": 1786924800,
+        "avgHighPrice": 11440,
+        "avgLowPrice": 11283,
+        "highPriceVolume": 4735,
+        "lowPriceVolume": 21513
+      },
+      {
+        "timestamp": 1786946400,
+        "avgHighPrice": 11725,
+        "avgLowPrice": 11435,
+        "highPriceVolume": 4649,
+        "lowPriceVolume": 11175
+      },
+      {
+        "timestamp": 1786968000,
+        "avgHighPrice": 11667,
+        "avgLowPrice": 11405,
+        "highPriceVolume": 7732,
+        "lowPriceVolume": 16740
+      },
+      {
+        "timestamp": 1786989600,
+        "avgHighPrice": 11529,
+        "avgLowPrice": 11397,
+        "highPriceVolume": 4231,
+        "lowPriceVolume": 15199
+      },
+      {
+        "timestamp": 1787011200,
+        "avgHighPrice": 11710,
+        "avgLowPrice": 11505,
+        "highPriceVolume": 9972,
+        "lowPriceVolume": 23067
+      },
+      {
+        "timestamp": 1787032800,
+        "avgHighPrice": 11649,
+        "avgLowPrice": 11565,
+        "highPriceVolume": 2066,
+        "lowPriceVolume": 9076
+      },
+      {
+        "timestamp": 1787054400,
+        "avgHighPrice": 11478,
+        "avgLowPrice": 11527,
+        "highPriceVolume": 8806,
+        "lowPriceVolume": 24275
+      },
+      {
+        "timestamp": 1787076000,
+        "avgHighPrice": 11807,
+        "avgLowPrice": 11755,
+        "highPriceVolume": 4956,
+        "lowPriceVolume": 10427
+      },
+      {
+        "timestamp": 1787097600,
+        "avgHighPrice": 11791,
+        "avgLowPrice": 11694,
+        "highPriceVolume": 3234,
+        "lowPriceVolume": 21816
+      },
+      {
+        "timestamp": 1787119200,
+        "avgHighPrice": 11925,
+        "avgLowPrice": 11706,
+        "highPriceVolume": 946,
+        "lowPriceVolume": 10714
+      },
+      {
+        "timestamp": 1787140800,
+        "avgHighPrice": 11801,
+        "avgLowPrice": 11751,
+        "highPriceVolume": 6271,
+        "lowPriceVolume": 17246
+      },
+      {
+        "timestamp": 1787162400,
+        "avgHighPrice": 11775,
+        "avgLowPrice": 11613,
+        "highPriceVolume": 2521,
+        "lowPriceVolume": 23260
+      },
+      {
+        "timestamp": 1787184000,
+        "avgHighPrice": 11749,
+        "avgLowPrice": 11566,
+        "highPriceVolume": 4443,
+        "lowPriceVolume": 34449
+      },
+      {
+        "timestamp": 1787205600,
+        "avgHighPrice": 11705,
+        "avgLowPrice": 11631,
+        "highPriceVolume": 4430,
+        "lowPriceVolume": 16249
+      },
+      {
+        "timestamp": 1787227200,
+        "avgHighPrice": 12162,
+        "avgLowPrice": 11945,
+        "highPriceVolume": 5390,
+        "lowPriceVolume": 15708
+      },
+      {
+        "timestamp": 1787248800,
+        "avgHighPrice": 11751,
+        "avgLowPrice": 11680,
+        "highPriceVolume": 2252,
+        "lowPriceVolume": 8878
+      },
+      {
+        "timestamp": 1787270400,
+        "avgHighPrice": 11679,
+        "avgLowPrice": 11534,
+        "highPriceVolume": 24797,
+        "lowPriceVolume": 7995
+      },
+      {
+        "timestamp": 1787292000,
+        "avgHighPrice": 11452,
+        "avgLowPrice": 11495,
+        "highPriceVolume": 20953,
+        "lowPriceVolume": 33091
+      },
+      {
+        "timestamp": 1787313600,
+        "avgHighPrice": 11607,
+        "avgLowPrice": 11514,
+        "highPriceVolume": 2507,
+        "lowPriceVolume": 11808
+      },
+      {
+        "timestamp": 1787335200,
+        "avgHighPrice": 11802,
+        "avgLowPrice": 11616,
+        "highPriceVolume": 10442,
+        "lowPriceVolume": 13826
+      },
+      {
+        "timestamp": 1787356800,
+        "avgHighPrice": 11948,
+        "avgLowPrice": 11682,
+        "highPriceVolume": 16444,
+        "lowPriceVolume": 14462
+      },
+      {
+        "timestamp": 1787378400,
+        "avgHighPrice": 11729,
+        "avgLowPrice": 11594,
+        "highPriceVolume": 4371,
+        "lowPriceVolume": 6232
+      },
+      {
+        "timestamp": 1787400000,
+        "avgHighPrice": 12054,
+        "avgLowPrice": 11600,
+        "highPriceVolume": 7008,
+        "lowPriceVolume": 25140
+      },
+      {
+        "timestamp": 1787421600,
+        "avgHighPrice": 12156,
+        "avgLowPrice": 11775,
+        "highPriceVolume": 13507,
+        "lowPriceVolume": 18215
+      },
+      {
+        "timestamp": 1787443200,
+        "avgHighPrice": 12418,
+        "avgLowPrice": 12130,
+        "highPriceVolume": 7087,
+        "lowPriceVolume": 15418
+      },
+      {
+        "timestamp": 1787464800,
+        "avgHighPrice": 12372,
+        "avgLowPrice": 11854,
+        "highPriceVolume": 6744,
+        "lowPriceVolume": 21412
+      },
+      {
+        "timestamp": 1787486400,
+        "avgHighPrice": 11785,
+        "avgLowPrice": 11676,
+        "highPriceVolume": 4756,
+        "lowPriceVolume": 33489
+      },
+      {
+        "timestamp": 1787508000,
+        "avgHighPrice": 11582,
+        "avgLowPrice": 11494,
+        "highPriceVolume": 3645,
+        "lowPriceVolume": 21782
+      },
+      {
+        "timestamp": 1787529600,
+        "avgHighPrice": 11868,
+        "avgLowPrice": 11677,
+        "highPriceVolume": 6889,
+        "lowPriceVolume": 18107
+      },
+      {
+        "timestamp": 1787551200,
+        "avgHighPrice": 11976,
+        "avgLowPrice": 11923,
+        "highPriceVolume": 6077,
+        "lowPriceVolume": 15399
+      },
+      {
+        "timestamp": 1787572800,
+        "avgHighPrice": 11738,
+        "avgLowPrice": 11598,
+        "highPriceVolume": 6230,
+        "lowPriceVolume": 18304
+      },
+      {
+        "timestamp": 1787594400,
+        "avgHighPrice": 11656,
+        "avgLowPrice": 11523,
+        "highPriceVolume": 4649,
+        "lowPriceVolume": 13775
+      },
+      {
+        "timestamp": 1787616000,
+        "avgHighPrice": 11719,
+        "avgLowPrice": 11390,
+        "highPriceVolume": 5020,
+        "lowPriceVolume": 24687
+      },
+      {
+        "timestamp": 1787637600,
+        "avgHighPrice": 11500,
+        "avgLowPrice": 11395,
+        "highPriceVolume": 1667,
+        "lowPriceVolume": 4624
+      },
+      {
+        "timestamp": 1787659200,
+        "avgHighPrice": 11525,
+        "avgLowPrice": 11362,
+        "highPriceVolume": 2835,
+        "lowPriceVolume": 10361
+      },
+      {
+        "timestamp": 1787680800,
+        "avgHighPrice": 11476,
+        "avgLowPrice": 11403,
+        "highPriceVolume": 3387,
+        "lowPriceVolume": 9667
+      },
+      {
+        "timestamp": 1787702400,
+        "avgHighPrice": 11424,
+        "avgLowPrice": 11095,
+        "highPriceVolume": 2956,
+        "lowPriceVolume": 5942
+      },
+      {
+        "timestamp": 1787724000,
+        "avgHighPrice": 11443,
+        "avgLowPrice": 10956,
+        "highPriceVolume": 3675,
+        "lowPriceVolume": 15780
+      },
+      {
+        "timestamp": 1787745600,
+        "avgHighPrice": 11561,
+        "avgLowPrice": 11470,
+        "highPriceVolume": 5326,
+        "lowPriceVolume": 13006
+      },
+      {
+        "timestamp": 1787767200,
+        "avgHighPrice": 11575,
+        "avgLowPrice": 11317,
+        "highPriceVolume": 3034,
+        "lowPriceVolume": 13295
+      },
+      {
+        "timestamp": 1787788800,
+        "avgHighPrice": 11377,
+        "avgLowPrice": 11238,
+        "highPriceVolume": 5636,
+        "lowPriceVolume": 10278
+      },
+      {
+        "timestamp": 1787810400,
+        "avgHighPrice": 11762,
+        "avgLowPrice": 11364,
+        "highPriceVolume": 12596,
+        "lowPriceVolume": 14019
+      },
+      {
+        "timestamp": 1787832000,
+        "avgHighPrice": 11638,
+        "avgLowPrice": 11363,
+        "highPriceVolume": 3416,
+        "lowPriceVolume": 9863
+      },
+      {
+        "timestamp": 1787853600,
+        "avgHighPrice": 11646,
+        "avgLowPrice": 11499,
+        "highPriceVolume": 2624,
+        "lowPriceVolume": 14408
+      },
+      {
+        "timestamp": 1787875200,
+        "avgHighPrice": 11690,
+        "avgLowPrice": 11495,
+        "highPriceVolume": 20447,
+        "lowPriceVolume": 9107
+      },
+      {
+        "timestamp": 1787896800,
+        "avgHighPrice": 11738,
+        "avgLowPrice": 11542,
+        "highPriceVolume": 5915,
+        "lowPriceVolume": 9305
+      },
+      {
+        "timestamp": 1787918400,
+        "avgHighPrice": 11951,
+        "avgLowPrice": 11707,
+        "highPriceVolume": 1721,
+        "lowPriceVolume": 12488
+      },
+      {
+        "timestamp": 1787940000,
+        "avgHighPrice": 13856,
+        "avgLowPrice": 14465,
+        "highPriceVolume": 5346,
+        "lowPriceVolume": 25744
+      },
+      {
+        "timestamp": 1787961600,
+        "avgHighPrice": 12114,
+        "avgLowPrice": 11688,
+        "highPriceVolume": 2211,
+        "lowPriceVolume": 36019
+      },
+      {
+        "timestamp": 1787983200,
+        "avgHighPrice": 11673,
+        "avgLowPrice": 11657,
+        "highPriceVolume": 2409,
+        "lowPriceVolume": 6655
+      },
+      {
+        "timestamp": 1788004800,
+        "avgHighPrice": 11947,
+        "avgLowPrice": 11659,
+        "highPriceVolume": 11973,
+        "lowPriceVolume": 8925
+      },
+      {
+        "timestamp": 1788026400,
+        "avgHighPrice": 11909,
+        "avgLowPrice": 11752,
+        "highPriceVolume": 2100,
+        "lowPriceVolume": 15843
+      },
+      {
+        "timestamp": 1788048000,
+        "avgHighPrice": 11736,
+        "avgLowPrice": 11716,
+        "highPriceVolume": 6138,
+        "lowPriceVolume": 14054
+      },
+      {
+        "timestamp": 1788069600,
+        "avgHighPrice": 11702,
+        "avgLowPrice": 11547,
+        "highPriceVolume": 1200,
+        "lowPriceVolume": 7818
+      },
+      {
+        "timestamp": 1788091200,
+        "avgHighPrice": 11722,
+        "avgLowPrice": 11549,
+        "highPriceVolume": 3201,
+        "lowPriceVolume": 13791
+      },
+      {
+        "timestamp": 1788112800,
+        "avgHighPrice": 11756,
+        "avgLowPrice": 11604,
+        "highPriceVolume": 5295,
+        "lowPriceVolume": 38002
+      },
+      {
+        "timestamp": 1788134400,
+        "avgHighPrice": 11741,
+        "avgLowPrice": 11562,
+        "highPriceVolume": 3925,
+        "lowPriceVolume": 17789
+      },
+      {
+        "timestamp": 1788156000,
+        "avgHighPrice": 11703,
+        "avgLowPrice": 11526,
+        "highPriceVolume": 5132,
+        "lowPriceVolume": 4784
+      },
+      {
+        "timestamp": 1788177600,
+        "avgHighPrice": 11687,
+        "avgLowPrice": 11553,
+        "highPriceVolume": 1861,
+        "lowPriceVolume": 17639
+      }
+    ]
+  },
   "1749": {
     "fetchedAt": 1788180152032,
     "data": [
@@ -84489,6 +85334,851 @@
         "avgLowPrice": 799867,
         "highPriceVolume": 452,
         "lowPriceVolume": 575
+      }
+    ]
+  },
+  "4153": {
+    "fetchedAt": 1788207620041,
+    "data": [
+      {
+        "timestamp": 1785607200,
+        "avgHighPrice": 103988,
+        "avgLowPrice": 102128,
+        "highPriceVolume": 1327,
+        "lowPriceVolume": 1174
+      },
+      {
+        "timestamp": 1785628800,
+        "avgHighPrice": 104025,
+        "avgLowPrice": 101408,
+        "highPriceVolume": 1072,
+        "lowPriceVolume": 942
+      },
+      {
+        "timestamp": 1785650400,
+        "avgHighPrice": 100301,
+        "avgLowPrice": 99933,
+        "highPriceVolume": 1876,
+        "lowPriceVolume": 721
+      },
+      {
+        "timestamp": 1785672000,
+        "avgHighPrice": 102366,
+        "avgLowPrice": 100484,
+        "highPriceVolume": 560,
+        "lowPriceVolume": 782
+      },
+      {
+        "timestamp": 1785693600,
+        "avgHighPrice": 102352,
+        "avgLowPrice": 100244,
+        "highPriceVolume": 1129,
+        "lowPriceVolume": 1513
+      },
+      {
+        "timestamp": 1785715200,
+        "avgHighPrice": 102048,
+        "avgLowPrice": 99658,
+        "highPriceVolume": 640,
+        "lowPriceVolume": 1406
+      },
+      {
+        "timestamp": 1785736800,
+        "avgHighPrice": 102518,
+        "avgLowPrice": 100354,
+        "highPriceVolume": 506,
+        "lowPriceVolume": 634
+      },
+      {
+        "timestamp": 1785758400,
+        "avgHighPrice": 101740,
+        "avgLowPrice": 100803,
+        "highPriceVolume": 462,
+        "lowPriceVolume": 1016
+      },
+      {
+        "timestamp": 1785780000,
+        "avgHighPrice": 101726,
+        "avgLowPrice": 99776,
+        "highPriceVolume": 684,
+        "lowPriceVolume": 1167
+      },
+      {
+        "timestamp": 1785801600,
+        "avgHighPrice": 102060,
+        "avgLowPrice": 99450,
+        "highPriceVolume": 810,
+        "lowPriceVolume": 986
+      },
+      {
+        "timestamp": 1785823200,
+        "avgHighPrice": 101931,
+        "avgLowPrice": 99350,
+        "highPriceVolume": 364,
+        "lowPriceVolume": 657
+      },
+      {
+        "timestamp": 1785844800,
+        "avgHighPrice": 100935,
+        "avgLowPrice": 98660,
+        "highPriceVolume": 867,
+        "lowPriceVolume": 783
+      },
+      {
+        "timestamp": 1785866400,
+        "avgHighPrice": 99777,
+        "avgLowPrice": 97773,
+        "highPriceVolume": 1246,
+        "lowPriceVolume": 1101
+      },
+      {
+        "timestamp": 1785888000,
+        "avgHighPrice": 100092,
+        "avgLowPrice": 97631,
+        "highPriceVolume": 985,
+        "lowPriceVolume": 854
+      },
+      {
+        "timestamp": 1785909600,
+        "avgHighPrice": 101227,
+        "avgLowPrice": 98926,
+        "highPriceVolume": 559,
+        "lowPriceVolume": 536
+      },
+      {
+        "timestamp": 1785931200,
+        "avgHighPrice": 101750,
+        "avgLowPrice": 98862,
+        "highPriceVolume": 642,
+        "lowPriceVolume": 916
+      },
+      {
+        "timestamp": 1785952800,
+        "avgHighPrice": 101015,
+        "avgLowPrice": 99398,
+        "highPriceVolume": 925,
+        "lowPriceVolume": 1282
+      },
+      {
+        "timestamp": 1785974400,
+        "avgHighPrice": 102536,
+        "avgLowPrice": 100208,
+        "highPriceVolume": 562,
+        "lowPriceVolume": 1057
+      },
+      {
+        "timestamp": 1785996000,
+        "avgHighPrice": 101949,
+        "avgLowPrice": 100341,
+        "highPriceVolume": 412,
+        "lowPriceVolume": 684
+      },
+      {
+        "timestamp": 1786017600,
+        "avgHighPrice": 100886,
+        "avgLowPrice": 98807,
+        "highPriceVolume": 777,
+        "lowPriceVolume": 701
+      },
+      {
+        "timestamp": 1786039200,
+        "avgHighPrice": 100891,
+        "avgLowPrice": 98108,
+        "highPriceVolume": 1009,
+        "lowPriceVolume": 1383
+      },
+      {
+        "timestamp": 1786060800,
+        "avgHighPrice": 100903,
+        "avgLowPrice": 97984,
+        "highPriceVolume": 726,
+        "lowPriceVolume": 1114
+      },
+      {
+        "timestamp": 1786082400,
+        "avgHighPrice": 100599,
+        "avgLowPrice": 97518,
+        "highPriceVolume": 731,
+        "lowPriceVolume": 814
+      },
+      {
+        "timestamp": 1786104000,
+        "avgHighPrice": 101147,
+        "avgLowPrice": 98174,
+        "highPriceVolume": 799,
+        "lowPriceVolume": 1172
+      },
+      {
+        "timestamp": 1786125600,
+        "avgHighPrice": 99841,
+        "avgLowPrice": 96937,
+        "highPriceVolume": 1334,
+        "lowPriceVolume": 1046
+      },
+      {
+        "timestamp": 1786147200,
+        "avgHighPrice": 99653,
+        "avgLowPrice": 98014,
+        "highPriceVolume": 684,
+        "lowPriceVolume": 1244
+      },
+      {
+        "timestamp": 1786168800,
+        "avgHighPrice": 99242,
+        "avgLowPrice": 96811,
+        "highPriceVolume": 689,
+        "lowPriceVolume": 635
+      },
+      {
+        "timestamp": 1786190400,
+        "avgHighPrice": 98936,
+        "avgLowPrice": 96822,
+        "highPriceVolume": 675,
+        "lowPriceVolume": 638
+      },
+      {
+        "timestamp": 1786212000,
+        "avgHighPrice": 98240,
+        "avgLowPrice": 95820,
+        "highPriceVolume": 1347,
+        "lowPriceVolume": 1849
+      },
+      {
+        "timestamp": 1786233600,
+        "avgHighPrice": 99154,
+        "avgLowPrice": 97134,
+        "highPriceVolume": 896,
+        "lowPriceVolume": 900
+      },
+      {
+        "timestamp": 1786255200,
+        "avgHighPrice": 99392,
+        "avgLowPrice": 98705,
+        "highPriceVolume": 539,
+        "lowPriceVolume": 755
+      },
+      {
+        "timestamp": 1786276800,
+        "avgHighPrice": 98478,
+        "avgLowPrice": 96892,
+        "highPriceVolume": 557,
+        "lowPriceVolume": 941
+      },
+      {
+        "timestamp": 1786298400,
+        "avgHighPrice": 99319,
+        "avgLowPrice": 98369,
+        "highPriceVolume": 846,
+        "lowPriceVolume": 1316
+      },
+      {
+        "timestamp": 1786320000,
+        "avgHighPrice": 98321,
+        "avgLowPrice": 96945,
+        "highPriceVolume": 886,
+        "lowPriceVolume": 1056
+      },
+      {
+        "timestamp": 1786341600,
+        "avgHighPrice": 98809,
+        "avgLowPrice": 97939,
+        "highPriceVolume": 536,
+        "lowPriceVolume": 530
+      },
+      {
+        "timestamp": 1786363200,
+        "avgHighPrice": 98200,
+        "avgLowPrice": 96091,
+        "highPriceVolume": 684,
+        "lowPriceVolume": 763
+      },
+      {
+        "timestamp": 1786384800,
+        "avgHighPrice": 98123,
+        "avgLowPrice": 95708,
+        "highPriceVolume": 1103,
+        "lowPriceVolume": 912
+      },
+      {
+        "timestamp": 1786406400,
+        "avgHighPrice": 99153,
+        "avgLowPrice": 97409,
+        "highPriceVolume": 936,
+        "lowPriceVolume": 816
+      },
+      {
+        "timestamp": 1786428000,
+        "avgHighPrice": 97574,
+        "avgLowPrice": 95179,
+        "highPriceVolume": 729,
+        "lowPriceVolume": 502
+      },
+      {
+        "timestamp": 1786449600,
+        "avgHighPrice": 99841,
+        "avgLowPrice": 98222,
+        "highPriceVolume": 580,
+        "lowPriceVolume": 1197
+      },
+      {
+        "timestamp": 1786471200,
+        "avgHighPrice": 99928,
+        "avgLowPrice": 97930,
+        "highPriceVolume": 647,
+        "lowPriceVolume": 1572
+      },
+      {
+        "timestamp": 1786492800,
+        "avgHighPrice": 98866,
+        "avgLowPrice": 97802,
+        "highPriceVolume": 967,
+        "lowPriceVolume": 960
+      },
+      {
+        "timestamp": 1786514400,
+        "avgHighPrice": 99260,
+        "avgLowPrice": 97353,
+        "highPriceVolume": 331,
+        "lowPriceVolume": 618
+      },
+      {
+        "timestamp": 1786536000,
+        "avgHighPrice": 98340,
+        "avgLowPrice": 95876,
+        "highPriceVolume": 947,
+        "lowPriceVolume": 812
+      },
+      {
+        "timestamp": 1786557600,
+        "avgHighPrice": 98129,
+        "avgLowPrice": 95886,
+        "highPriceVolume": 584,
+        "lowPriceVolume": 1058
+      },
+      {
+        "timestamp": 1786579200,
+        "avgHighPrice": 97375,
+        "avgLowPrice": 95920,
+        "highPriceVolume": 1243,
+        "lowPriceVolume": 804
+      },
+      {
+        "timestamp": 1786600800,
+        "avgHighPrice": 100470,
+        "avgLowPrice": 98642,
+        "highPriceVolume": 422,
+        "lowPriceVolume": 488
+      },
+      {
+        "timestamp": 1786622400,
+        "avgHighPrice": 103343,
+        "avgLowPrice": 101159,
+        "highPriceVolume": 537,
+        "lowPriceVolume": 820
+      },
+      {
+        "timestamp": 1786644000,
+        "avgHighPrice": 104914,
+        "avgLowPrice": 101531,
+        "highPriceVolume": 772,
+        "lowPriceVolume": 1284
+      },
+      {
+        "timestamp": 1786665600,
+        "avgHighPrice": 104675,
+        "avgLowPrice": 101586,
+        "highPriceVolume": 661,
+        "lowPriceVolume": 1126
+      },
+      {
+        "timestamp": 1786687200,
+        "avgHighPrice": 104851,
+        "avgLowPrice": 101824,
+        "highPriceVolume": 491,
+        "lowPriceVolume": 777
+      },
+      {
+        "timestamp": 1786708800,
+        "avgHighPrice": 103092,
+        "avgLowPrice": 101479,
+        "highPriceVolume": 1049,
+        "lowPriceVolume": 723
+      },
+      {
+        "timestamp": 1786730400,
+        "avgHighPrice": 104396,
+        "avgLowPrice": 102485,
+        "highPriceVolume": 935,
+        "lowPriceVolume": 1260
+      },
+      {
+        "timestamp": 1786752000,
+        "avgHighPrice": 104480,
+        "avgLowPrice": 102754,
+        "highPriceVolume": 843,
+        "lowPriceVolume": 958
+      },
+      {
+        "timestamp": 1786773600,
+        "avgHighPrice": 106185,
+        "avgLowPrice": 104942,
+        "highPriceVolume": 283,
+        "lowPriceVolume": 675
+      },
+      {
+        "timestamp": 1786795200,
+        "avgHighPrice": 104618,
+        "avgLowPrice": 102081,
+        "highPriceVolume": 577,
+        "lowPriceVolume": 1368
+      },
+      {
+        "timestamp": 1786816800,
+        "avgHighPrice": 102623,
+        "avgLowPrice": 100590,
+        "highPriceVolume": 1052,
+        "lowPriceVolume": 1136
+      },
+      {
+        "timestamp": 1786838400,
+        "avgHighPrice": 108105,
+        "avgLowPrice": 105677,
+        "highPriceVolume": 843,
+        "lowPriceVolume": 1196
+      },
+      {
+        "timestamp": 1786860000,
+        "avgHighPrice": 106535,
+        "avgLowPrice": 104051,
+        "highPriceVolume": 566,
+        "lowPriceVolume": 794
+      },
+      {
+        "timestamp": 1786881600,
+        "avgHighPrice": 106091,
+        "avgLowPrice": 102958,
+        "highPriceVolume": 1099,
+        "lowPriceVolume": 986
+      },
+      {
+        "timestamp": 1786903200,
+        "avgHighPrice": 104698,
+        "avgLowPrice": 102763,
+        "highPriceVolume": 1339,
+        "lowPriceVolume": 1637
+      },
+      {
+        "timestamp": 1786924800,
+        "avgHighPrice": 104934,
+        "avgLowPrice": 104327,
+        "highPriceVolume": 531,
+        "lowPriceVolume": 953
+      },
+      {
+        "timestamp": 1786946400,
+        "avgHighPrice": 108871,
+        "avgLowPrice": 106230,
+        "highPriceVolume": 302,
+        "lowPriceVolume": 654
+      },
+      {
+        "timestamp": 1786968000,
+        "avgHighPrice": 105488,
+        "avgLowPrice": 101785,
+        "highPriceVolume": 667,
+        "lowPriceVolume": 1810
+      },
+      {
+        "timestamp": 1786989600,
+        "avgHighPrice": 103767,
+        "avgLowPrice": 102201,
+        "highPriceVolume": 1065,
+        "lowPriceVolume": 1046
+      },
+      {
+        "timestamp": 1787011200,
+        "avgHighPrice": 108450,
+        "avgLowPrice": 106037,
+        "highPriceVolume": 663,
+        "lowPriceVolume": 1108
+      },
+      {
+        "timestamp": 1787032800,
+        "avgHighPrice": 108544,
+        "avgLowPrice": 105104,
+        "highPriceVolume": 462,
+        "lowPriceVolume": 741
+      },
+      {
+        "timestamp": 1787054400,
+        "avgHighPrice": 105710,
+        "avgLowPrice": 103495,
+        "highPriceVolume": 530,
+        "lowPriceVolume": 555
+      },
+      {
+        "timestamp": 1787076000,
+        "avgHighPrice": 102982,
+        "avgLowPrice": 100825,
+        "highPriceVolume": 1167,
+        "lowPriceVolume": 1660
+      },
+      {
+        "timestamp": 1787097600,
+        "avgHighPrice": 103996,
+        "avgLowPrice": 101725,
+        "highPriceVolume": 941,
+        "lowPriceVolume": 934
+      },
+      {
+        "timestamp": 1787119200,
+        "avgHighPrice": 108080,
+        "avgLowPrice": 104236,
+        "highPriceVolume": 400,
+        "lowPriceVolume": 620
+      },
+      {
+        "timestamp": 1787140800,
+        "avgHighPrice": 107588,
+        "avgLowPrice": 103986,
+        "highPriceVolume": 757,
+        "lowPriceVolume": 1083
+      },
+      {
+        "timestamp": 1787162400,
+        "avgHighPrice": 105436,
+        "avgLowPrice": 103436,
+        "highPriceVolume": 1032,
+        "lowPriceVolume": 1330
+      },
+      {
+        "timestamp": 1787184000,
+        "avgHighPrice": 106435,
+        "avgLowPrice": 104281,
+        "highPriceVolume": 654,
+        "lowPriceVolume": 1186
+      },
+      {
+        "timestamp": 1787205600,
+        "avgHighPrice": 103674,
+        "avgLowPrice": 101837,
+        "highPriceVolume": 410,
+        "lowPriceVolume": 496
+      },
+      {
+        "timestamp": 1787227200,
+        "avgHighPrice": 104116,
+        "avgLowPrice": 101728,
+        "highPriceVolume": 814,
+        "lowPriceVolume": 652
+      },
+      {
+        "timestamp": 1787248800,
+        "avgHighPrice": 104272,
+        "avgLowPrice": 101471,
+        "highPriceVolume": 1041,
+        "lowPriceVolume": 1206
+      },
+      {
+        "timestamp": 1787270400,
+        "avgHighPrice": 102804,
+        "avgLowPrice": 100446,
+        "highPriceVolume": 777,
+        "lowPriceVolume": 673
+      },
+      {
+        "timestamp": 1787292000,
+        "avgHighPrice": 102498,
+        "avgLowPrice": 100279,
+        "highPriceVolume": 389,
+        "lowPriceVolume": 517
+      },
+      {
+        "timestamp": 1787313600,
+        "avgHighPrice": 105150,
+        "avgLowPrice": 103135,
+        "highPriceVolume": 779,
+        "lowPriceVolume": 816
+      },
+      {
+        "timestamp": 1787335200,
+        "avgHighPrice": 102802,
+        "avgLowPrice": 100513,
+        "highPriceVolume": 1016,
+        "lowPriceVolume": 1136
+      },
+      {
+        "timestamp": 1787356800,
+        "avgHighPrice": 103254,
+        "avgLowPrice": 100515,
+        "highPriceVolume": 635,
+        "lowPriceVolume": 748
+      },
+      {
+        "timestamp": 1787378400,
+        "avgHighPrice": 101752,
+        "avgLowPrice": 98872,
+        "highPriceVolume": 552,
+        "lowPriceVolume": 364
+      },
+      {
+        "timestamp": 1787400000,
+        "avgHighPrice": 97439,
+        "avgLowPrice": 96456,
+        "highPriceVolume": 1030,
+        "lowPriceVolume": 598
+      },
+      {
+        "timestamp": 1787421600,
+        "avgHighPrice": 97486,
+        "avgLowPrice": 95165,
+        "highPriceVolume": 739,
+        "lowPriceVolume": 616
+      },
+      {
+        "timestamp": 1787443200,
+        "avgHighPrice": 98039,
+        "avgLowPrice": 96256,
+        "highPriceVolume": 676,
+        "lowPriceVolume": 594
+      },
+      {
+        "timestamp": 1787464800,
+        "avgHighPrice": 95212,
+        "avgLowPrice": 93543,
+        "highPriceVolume": 518,
+        "lowPriceVolume": 990
+      },
+      {
+        "timestamp": 1787486400,
+        "avgHighPrice": 93131,
+        "avgLowPrice": 90472,
+        "highPriceVolume": 958,
+        "lowPriceVolume": 1452
+      },
+      {
+        "timestamp": 1787508000,
+        "avgHighPrice": 92448,
+        "avgLowPrice": 89723,
+        "highPriceVolume": 1230,
+        "lowPriceVolume": 1021
+      },
+      {
+        "timestamp": 1787529600,
+        "avgHighPrice": 93965,
+        "avgLowPrice": 91394,
+        "highPriceVolume": 588,
+        "lowPriceVolume": 906
+      },
+      {
+        "timestamp": 1787551200,
+        "avgHighPrice": 95311,
+        "avgLowPrice": 92483,
+        "highPriceVolume": 403,
+        "lowPriceVolume": 388
+      },
+      {
+        "timestamp": 1787572800,
+        "avgHighPrice": 94585,
+        "avgLowPrice": 92179,
+        "highPriceVolume": 534,
+        "lowPriceVolume": 626
+      },
+      {
+        "timestamp": 1787594400,
+        "avgHighPrice": 94412,
+        "avgLowPrice": 91929,
+        "highPriceVolume": 734,
+        "lowPriceVolume": 641
+      },
+      {
+        "timestamp": 1787616000,
+        "avgHighPrice": 95701,
+        "avgLowPrice": 94171,
+        "highPriceVolume": 505,
+        "lowPriceVolume": 630
+      },
+      {
+        "timestamp": 1787637600,
+        "avgHighPrice": 96736,
+        "avgLowPrice": 94128,
+        "highPriceVolume": 515,
+        "lowPriceVolume": 453
+      },
+      {
+        "timestamp": 1787659200,
+        "avgHighPrice": 90340,
+        "avgLowPrice": 88598,
+        "highPriceVolume": 978,
+        "lowPriceVolume": 590
+      },
+      {
+        "timestamp": 1787680800,
+        "avgHighPrice": 89801,
+        "avgLowPrice": 88485,
+        "highPriceVolume": 668,
+        "lowPriceVolume": 755
+      },
+      {
+        "timestamp": 1787702400,
+        "avgHighPrice": 89769,
+        "avgLowPrice": 87658,
+        "highPriceVolume": 384,
+        "lowPriceVolume": 932
+      },
+      {
+        "timestamp": 1787724000,
+        "avgHighPrice": 89403,
+        "avgLowPrice": 87317,
+        "highPriceVolume": 539,
+        "lowPriceVolume": 411
+      },
+      {
+        "timestamp": 1787745600,
+        "avgHighPrice": 89513,
+        "avgLowPrice": 86970,
+        "highPriceVolume": 817,
+        "lowPriceVolume": 497
+      },
+      {
+        "timestamp": 1787767200,
+        "avgHighPrice": 89404,
+        "avgLowPrice": 86655,
+        "highPriceVolume": 936,
+        "lowPriceVolume": 495
+      },
+      {
+        "timestamp": 1787788800,
+        "avgHighPrice": 89052,
+        "avgLowPrice": 86292,
+        "highPriceVolume": 531,
+        "lowPriceVolume": 849
+      },
+      {
+        "timestamp": 1787810400,
+        "avgHighPrice": 89458,
+        "avgLowPrice": 87197,
+        "highPriceVolume": 390,
+        "lowPriceVolume": 402
+      },
+      {
+        "timestamp": 1787832000,
+        "avgHighPrice": 89181,
+        "avgLowPrice": 86420,
+        "highPriceVolume": 500,
+        "lowPriceVolume": 612
+      },
+      {
+        "timestamp": 1787853600,
+        "avgHighPrice": 88361,
+        "avgLowPrice": 86148,
+        "highPriceVolume": 806,
+        "lowPriceVolume": 953
+      },
+      {
+        "timestamp": 1787875200,
+        "avgHighPrice": 88397,
+        "avgLowPrice": 86451,
+        "highPriceVolume": 507,
+        "lowPriceVolume": 690
+      },
+      {
+        "timestamp": 1787896800,
+        "avgHighPrice": 88854,
+        "avgLowPrice": 87189,
+        "highPriceVolume": 425,
+        "lowPriceVolume": 482
+      },
+      {
+        "timestamp": 1787918400,
+        "avgHighPrice": 88395,
+        "avgLowPrice": 87527,
+        "highPriceVolume": 302,
+        "lowPriceVolume": 536
+      },
+      {
+        "timestamp": 1787940000,
+        "avgHighPrice": 88331,
+        "avgLowPrice": 86615,
+        "highPriceVolume": 483,
+        "lowPriceVolume": 975
+      },
+      {
+        "timestamp": 1787961600,
+        "avgHighPrice": 88891,
+        "avgLowPrice": 87998,
+        "highPriceVolume": 1245,
+        "lowPriceVolume": 777
+      },
+      {
+        "timestamp": 1787983200,
+        "avgHighPrice": 87990,
+        "avgLowPrice": 86936,
+        "highPriceVolume": 1017,
+        "lowPriceVolume": 696
+      },
+      {
+        "timestamp": 1788004800,
+        "avgHighPrice": 88029,
+        "avgLowPrice": 87211,
+        "highPriceVolume": 785,
+        "lowPriceVolume": 627
+      },
+      {
+        "timestamp": 1788026400,
+        "avgHighPrice": 88247,
+        "avgLowPrice": 86935,
+        "highPriceVolume": 557,
+        "lowPriceVolume": 955
+      },
+      {
+        "timestamp": 1788048000,
+        "avgHighPrice": 88968,
+        "avgLowPrice": 87656,
+        "highPriceVolume": 525,
+        "lowPriceVolume": 711
+      },
+      {
+        "timestamp": 1788069600,
+        "avgHighPrice": 86818,
+        "avgLowPrice": 86174,
+        "highPriceVolume": 827,
+        "lowPriceVolume": 1472
+      },
+      {
+        "timestamp": 1788091200,
+        "avgHighPrice": 85191,
+        "avgLowPrice": 85371,
+        "highPriceVolume": 1277,
+        "lowPriceVolume": 1434
+      },
+      {
+        "timestamp": 1788112800,
+        "avgHighPrice": 86874,
+        "avgLowPrice": 85790,
+        "highPriceVolume": 1073,
+        "lowPriceVolume": 734
+      },
+      {
+        "timestamp": 1788134400,
+        "avgHighPrice": 88216,
+        "avgLowPrice": 87421,
+        "highPriceVolume": 685,
+        "lowPriceVolume": 620
+      },
+      {
+        "timestamp": 1788156000,
+        "avgHighPrice": 88735,
+        "avgLowPrice": 87396,
+        "highPriceVolume": 400,
+        "lowPriceVolume": 499
+      },
+      {
+        "timestamp": 1788177600,
+        "avgHighPrice": 88217,
+        "avgLowPrice": 87337,
+        "highPriceVolume": 478,
+        "lowPriceVolume": 542
       }
     ]
   },
@@ -115750,6 +117440,851 @@
       }
     ]
   },
+  "8901": {
+    "fetchedAt": 1788207063849,
+    "data": [
+      {
+        "timestamp": 1785607200,
+        "avgHighPrice": 1439334,
+        "avgLowPrice": 1393313,
+        "highPriceVolume": 95,
+        "lowPriceVolume": 151
+      },
+      {
+        "timestamp": 1785628800,
+        "avgHighPrice": 1411677,
+        "avgLowPrice": 1365468,
+        "highPriceVolume": 118,
+        "lowPriceVolume": 103
+      },
+      {
+        "timestamp": 1785650400,
+        "avgHighPrice": 1495892,
+        "avgLowPrice": 1343538,
+        "highPriceVolume": 91,
+        "lowPriceVolume": 103
+      },
+      {
+        "timestamp": 1785672000,
+        "avgHighPrice": 1567834,
+        "avgLowPrice": 1361356,
+        "highPriceVolume": 104,
+        "lowPriceVolume": 117
+      },
+      {
+        "timestamp": 1785693600,
+        "avgHighPrice": 1390639,
+        "avgLowPrice": 1359487,
+        "highPriceVolume": 118,
+        "lowPriceVolume": 160
+      },
+      {
+        "timestamp": 1785715200,
+        "avgHighPrice": 1378977,
+        "avgLowPrice": 1334279,
+        "highPriceVolume": 95,
+        "lowPriceVolume": 179
+      },
+      {
+        "timestamp": 1785736800,
+        "avgHighPrice": 1344309,
+        "avgLowPrice": 1304510,
+        "highPriceVolume": 55,
+        "lowPriceVolume": 127
+      },
+      {
+        "timestamp": 1785758400,
+        "avgHighPrice": 1327750,
+        "avgLowPrice": 1301476,
+        "highPriceVolume": 79,
+        "lowPriceVolume": 155
+      },
+      {
+        "timestamp": 1785780000,
+        "avgHighPrice": 1241675,
+        "avgLowPrice": 1220418,
+        "highPriceVolume": 69,
+        "lowPriceVolume": 163
+      },
+      {
+        "timestamp": 1785801600,
+        "avgHighPrice": 1208365,
+        "avgLowPrice": 1179155,
+        "highPriceVolume": 62,
+        "lowPriceVolume": 94
+      },
+      {
+        "timestamp": 1785823200,
+        "avgHighPrice": 1165059,
+        "avgLowPrice": 1160301,
+        "highPriceVolume": 33,
+        "lowPriceVolume": 76
+      },
+      {
+        "timestamp": 1785844800,
+        "avgHighPrice": 1164900,
+        "avgLowPrice": 1136409,
+        "highPriceVolume": 94,
+        "lowPriceVolume": 159
+      },
+      {
+        "timestamp": 1785866400,
+        "avgHighPrice": 1153164,
+        "avgLowPrice": 1123089,
+        "highPriceVolume": 82,
+        "lowPriceVolume": 120
+      },
+      {
+        "timestamp": 1785888000,
+        "avgHighPrice": 1147448,
+        "avgLowPrice": 1114312,
+        "highPriceVolume": 70,
+        "lowPriceVolume": 116
+      },
+      {
+        "timestamp": 1785909600,
+        "avgHighPrice": 1100133,
+        "avgLowPrice": 1053983,
+        "highPriceVolume": 77,
+        "lowPriceVolume": 182
+      },
+      {
+        "timestamp": 1785931200,
+        "avgHighPrice": 1100393,
+        "avgLowPrice": 1072353,
+        "highPriceVolume": 78,
+        "lowPriceVolume": 172
+      },
+      {
+        "timestamp": 1785952800,
+        "avgHighPrice": 1080169,
+        "avgLowPrice": 1063149,
+        "highPriceVolume": 110,
+        "lowPriceVolume": 143
+      },
+      {
+        "timestamp": 1785974400,
+        "avgHighPrice": 907968,
+        "avgLowPrice": 946370,
+        "highPriceVolume": 329,
+        "lowPriceVolume": 133
+      },
+      {
+        "timestamp": 1785996000,
+        "avgHighPrice": 900197,
+        "avgLowPrice": 876353,
+        "highPriceVolume": 78,
+        "lowPriceVolume": 69
+      },
+      {
+        "timestamp": 1786017600,
+        "avgHighPrice": 828134,
+        "avgLowPrice": 815598,
+        "highPriceVolume": 109,
+        "lowPriceVolume": 160
+      },
+      {
+        "timestamp": 1786039200,
+        "avgHighPrice": 785755,
+        "avgLowPrice": 777189,
+        "highPriceVolume": 130,
+        "lowPriceVolume": 186
+      },
+      {
+        "timestamp": 1786060800,
+        "avgHighPrice": 788284,
+        "avgLowPrice": 781682,
+        "highPriceVolume": 620,
+        "lowPriceVolume": 185
+      },
+      {
+        "timestamp": 1786082400,
+        "avgHighPrice": 849456,
+        "avgLowPrice": 811591,
+        "highPriceVolume": 125,
+        "lowPriceVolume": 73
+      },
+      {
+        "timestamp": 1786104000,
+        "avgHighPrice": 900302,
+        "avgLowPrice": 877715,
+        "highPriceVolume": 217,
+        "lowPriceVolume": 89
+      },
+      {
+        "timestamp": 1786125600,
+        "avgHighPrice": 928928,
+        "avgLowPrice": 915207,
+        "highPriceVolume": 98,
+        "lowPriceVolume": 136
+      },
+      {
+        "timestamp": 1786147200,
+        "avgHighPrice": 936362,
+        "avgLowPrice": 915425,
+        "highPriceVolume": 118,
+        "lowPriceVolume": 152
+      },
+      {
+        "timestamp": 1786168800,
+        "avgHighPrice": 921791,
+        "avgLowPrice": 898371,
+        "highPriceVolume": 62,
+        "lowPriceVolume": 45
+      },
+      {
+        "timestamp": 1786190400,
+        "avgHighPrice": 909891,
+        "avgLowPrice": 886446,
+        "highPriceVolume": 99,
+        "lowPriceVolume": 158
+      },
+      {
+        "timestamp": 1786212000,
+        "avgHighPrice": 904131,
+        "avgLowPrice": 892573,
+        "highPriceVolume": 146,
+        "lowPriceVolume": 133
+      },
+      {
+        "timestamp": 1786233600,
+        "avgHighPrice": 936605,
+        "avgLowPrice": 914351,
+        "highPriceVolume": 92,
+        "lowPriceVolume": 152
+      },
+      {
+        "timestamp": 1786255200,
+        "avgHighPrice": 934298,
+        "avgLowPrice": 910568,
+        "highPriceVolume": 66,
+        "lowPriceVolume": 87
+      },
+      {
+        "timestamp": 1786276800,
+        "avgHighPrice": 910676,
+        "avgLowPrice": 887608,
+        "highPriceVolume": 106,
+        "lowPriceVolume": 110
+      },
+      {
+        "timestamp": 1786298400,
+        "avgHighPrice": 926664,
+        "avgLowPrice": 912862,
+        "highPriceVolume": 103,
+        "lowPriceVolume": 187
+      },
+      {
+        "timestamp": 1786320000,
+        "avgHighPrice": 943749,
+        "avgLowPrice": 921848,
+        "highPriceVolume": 83,
+        "lowPriceVolume": 154
+      },
+      {
+        "timestamp": 1786341600,
+        "avgHighPrice": 950372,
+        "avgLowPrice": 925385,
+        "highPriceVolume": 41,
+        "lowPriceVolume": 130
+      },
+      {
+        "timestamp": 1786363200,
+        "avgHighPrice": 942159,
+        "avgLowPrice": 915200,
+        "highPriceVolume": 56,
+        "lowPriceVolume": 175
+      },
+      {
+        "timestamp": 1786384800,
+        "avgHighPrice": 909814,
+        "avgLowPrice": 891216,
+        "highPriceVolume": 107,
+        "lowPriceVolume": 101
+      },
+      {
+        "timestamp": 1786406400,
+        "avgHighPrice": 888108,
+        "avgLowPrice": 869573,
+        "highPriceVolume": 72,
+        "lowPriceVolume": 88
+      },
+      {
+        "timestamp": 1786428000,
+        "avgHighPrice": 891150,
+        "avgLowPrice": 874166,
+        "highPriceVolume": 48,
+        "lowPriceVolume": 91
+      },
+      {
+        "timestamp": 1786449600,
+        "avgHighPrice": 885616,
+        "avgLowPrice": 870591,
+        "highPriceVolume": 65,
+        "lowPriceVolume": 103
+      },
+      {
+        "timestamp": 1786471200,
+        "avgHighPrice": 879668,
+        "avgLowPrice": 867017,
+        "highPriceVolume": 101,
+        "lowPriceVolume": 93
+      },
+      {
+        "timestamp": 1786492800,
+        "avgHighPrice": 873838,
+        "avgLowPrice": 856543,
+        "highPriceVolume": 74,
+        "lowPriceVolume": 84
+      },
+      {
+        "timestamp": 1786514400,
+        "avgHighPrice": 863805,
+        "avgLowPrice": 841366,
+        "highPriceVolume": 35,
+        "lowPriceVolume": 46
+      },
+      {
+        "timestamp": 1786536000,
+        "avgHighPrice": 868554,
+        "avgLowPrice": 850890,
+        "highPriceVolume": 62,
+        "lowPriceVolume": 122
+      },
+      {
+        "timestamp": 1786557600,
+        "avgHighPrice": 863647,
+        "avgLowPrice": 844109,
+        "highPriceVolume": 76,
+        "lowPriceVolume": 193
+      },
+      {
+        "timestamp": 1786579200,
+        "avgHighPrice": 848469,
+        "avgLowPrice": 831674,
+        "highPriceVolume": 89,
+        "lowPriceVolume": 76
+      },
+      {
+        "timestamp": 1786600800,
+        "avgHighPrice": 832353,
+        "avgLowPrice": 805097,
+        "highPriceVolume": 46,
+        "lowPriceVolume": 39
+      },
+      {
+        "timestamp": 1786622400,
+        "avgHighPrice": 833895,
+        "avgLowPrice": 812645,
+        "highPriceVolume": 63,
+        "lowPriceVolume": 149
+      },
+      {
+        "timestamp": 1786644000,
+        "avgHighPrice": 826030,
+        "avgLowPrice": 808963,
+        "highPriceVolume": 127,
+        "lowPriceVolume": 132
+      },
+      {
+        "timestamp": 1786665600,
+        "avgHighPrice": 811188,
+        "avgLowPrice": 792589,
+        "highPriceVolume": 74,
+        "lowPriceVolume": 68
+      },
+      {
+        "timestamp": 1786687200,
+        "avgHighPrice": 801406,
+        "avgLowPrice": 770133,
+        "highPriceVolume": 36,
+        "lowPriceVolume": 56
+      },
+      {
+        "timestamp": 1786708800,
+        "avgHighPrice": 783095,
+        "avgLowPrice": 776747,
+        "highPriceVolume": 54,
+        "lowPriceVolume": 85
+      },
+      {
+        "timestamp": 1786730400,
+        "avgHighPrice": 801266,
+        "avgLowPrice": 784005,
+        "highPriceVolume": 68,
+        "lowPriceVolume": 169
+      },
+      {
+        "timestamp": 1786752000,
+        "avgHighPrice": 795680,
+        "avgLowPrice": 779901,
+        "highPriceVolume": 67,
+        "lowPriceVolume": 123
+      },
+      {
+        "timestamp": 1786773600,
+        "avgHighPrice": 783302,
+        "avgLowPrice": 768650,
+        "highPriceVolume": 40,
+        "lowPriceVolume": 60
+      },
+      {
+        "timestamp": 1786795200,
+        "avgHighPrice": 791597,
+        "avgLowPrice": 772966,
+        "highPriceVolume": 82,
+        "lowPriceVolume": 138
+      },
+      {
+        "timestamp": 1786816800,
+        "avgHighPrice": 778630,
+        "avgLowPrice": 761576,
+        "highPriceVolume": 103,
+        "lowPriceVolume": 191
+      },
+      {
+        "timestamp": 1786838400,
+        "avgHighPrice": 782063,
+        "avgLowPrice": 755612,
+        "highPriceVolume": 82,
+        "lowPriceVolume": 107
+      },
+      {
+        "timestamp": 1786860000,
+        "avgHighPrice": 781727,
+        "avgLowPrice": 758316,
+        "highPriceVolume": 37,
+        "lowPriceVolume": 121
+      },
+      {
+        "timestamp": 1786881600,
+        "avgHighPrice": 762546,
+        "avgLowPrice": 750525,
+        "highPriceVolume": 66,
+        "lowPriceVolume": 157
+      },
+      {
+        "timestamp": 1786903200,
+        "avgHighPrice": 754987,
+        "avgLowPrice": 740149,
+        "highPriceVolume": 104,
+        "lowPriceVolume": 226
+      },
+      {
+        "timestamp": 1786924800,
+        "avgHighPrice": 727440,
+        "avgLowPrice": 700224,
+        "highPriceVolume": 95,
+        "lowPriceVolume": 103
+      },
+      {
+        "timestamp": 1786946400,
+        "avgHighPrice": 722558,
+        "avgLowPrice": 700922,
+        "highPriceVolume": 13,
+        "lowPriceVolume": 65
+      },
+      {
+        "timestamp": 1786968000,
+        "avgHighPrice": 726767,
+        "avgLowPrice": 710561,
+        "highPriceVolume": 52,
+        "lowPriceVolume": 105
+      },
+      {
+        "timestamp": 1786989600,
+        "avgHighPrice": 732818,
+        "avgLowPrice": 712985,
+        "highPriceVolume": 54,
+        "lowPriceVolume": 114
+      },
+      {
+        "timestamp": 1787011200,
+        "avgHighPrice": 738249,
+        "avgLowPrice": 716487,
+        "highPriceVolume": 52,
+        "lowPriceVolume": 101
+      },
+      {
+        "timestamp": 1787032800,
+        "avgHighPrice": 726179,
+        "avgLowPrice": 726972,
+        "highPriceVolume": 19,
+        "lowPriceVolume": 54
+      },
+      {
+        "timestamp": 1787054400,
+        "avgHighPrice": 726740,
+        "avgLowPrice": 718436,
+        "highPriceVolume": 83,
+        "lowPriceVolume": 62
+      },
+      {
+        "timestamp": 1787076000,
+        "avgHighPrice": 725494,
+        "avgLowPrice": 717562,
+        "highPriceVolume": 83,
+        "lowPriceVolume": 104
+      },
+      {
+        "timestamp": 1787097600,
+        "avgHighPrice": 722963,
+        "avgLowPrice": 720361,
+        "highPriceVolume": 70,
+        "lowPriceVolume": 72
+      },
+      {
+        "timestamp": 1787119200,
+        "avgHighPrice": 730612,
+        "avgLowPrice": 727680,
+        "highPriceVolume": 25,
+        "lowPriceVolume": 83
+      },
+      {
+        "timestamp": 1787140800,
+        "avgHighPrice": 723399,
+        "avgLowPrice": 717949,
+        "highPriceVolume": 58,
+        "lowPriceVolume": 91
+      },
+      {
+        "timestamp": 1787162400,
+        "avgHighPrice": 731857,
+        "avgLowPrice": 718905,
+        "highPriceVolume": 102,
+        "lowPriceVolume": 69
+      },
+      {
+        "timestamp": 1787184000,
+        "avgHighPrice": 729254,
+        "avgLowPrice": 719006,
+        "highPriceVolume": 51,
+        "lowPriceVolume": 74
+      },
+      {
+        "timestamp": 1787205600,
+        "avgHighPrice": 737583,
+        "avgLowPrice": 721525,
+        "highPriceVolume": 30,
+        "lowPriceVolume": 49
+      },
+      {
+        "timestamp": 1787227200,
+        "avgHighPrice": 739845,
+        "avgLowPrice": 721783,
+        "highPriceVolume": 45,
+        "lowPriceVolume": 87
+      },
+      {
+        "timestamp": 1787248800,
+        "avgHighPrice": 732570,
+        "avgLowPrice": 722349,
+        "highPriceVolume": 58,
+        "lowPriceVolume": 89
+      },
+      {
+        "timestamp": 1787270400,
+        "avgHighPrice": 738110,
+        "avgLowPrice": 724930,
+        "highPriceVolume": 59,
+        "lowPriceVolume": 98
+      },
+      {
+        "timestamp": 1787292000,
+        "avgHighPrice": 733752,
+        "avgLowPrice": 721150,
+        "highPriceVolume": 42,
+        "lowPriceVolume": 50
+      },
+      {
+        "timestamp": 1787313600,
+        "avgHighPrice": 732266,
+        "avgLowPrice": 714619,
+        "highPriceVolume": 66,
+        "lowPriceVolume": 59
+      },
+      {
+        "timestamp": 1787335200,
+        "avgHighPrice": 732149,
+        "avgLowPrice": 727118,
+        "highPriceVolume": 80,
+        "lowPriceVolume": 100
+      },
+      {
+        "timestamp": 1787356800,
+        "avgHighPrice": 734362,
+        "avgLowPrice": 726767,
+        "highPriceVolume": 41,
+        "lowPriceVolume": 74
+      },
+      {
+        "timestamp": 1787378400,
+        "avgHighPrice": 745086,
+        "avgLowPrice": 727939,
+        "highPriceVolume": 40,
+        "lowPriceVolume": 55
+      },
+      {
+        "timestamp": 1787400000,
+        "avgHighPrice": 747135,
+        "avgLowPrice": 729186,
+        "highPriceVolume": 54,
+        "lowPriceVolume": 80
+      },
+      {
+        "timestamp": 1787421600,
+        "avgHighPrice": 740412,
+        "avgLowPrice": 728817,
+        "highPriceVolume": 102,
+        "lowPriceVolume": 122
+      },
+      {
+        "timestamp": 1787443200,
+        "avgHighPrice": 754130,
+        "avgLowPrice": 729333,
+        "highPriceVolume": 34,
+        "lowPriceVolume": 72
+      },
+      {
+        "timestamp": 1787464800,
+        "avgHighPrice": 764364,
+        "avgLowPrice": 734611,
+        "highPriceVolume": 15,
+        "lowPriceVolume": 79
+      },
+      {
+        "timestamp": 1787486400,
+        "avgHighPrice": 757815,
+        "avgLowPrice": 732160,
+        "highPriceVolume": 38,
+        "lowPriceVolume": 96
+      },
+      {
+        "timestamp": 1787508000,
+        "avgHighPrice": 748691,
+        "avgLowPrice": 732384,
+        "highPriceVolume": 74,
+        "lowPriceVolume": 119
+      },
+      {
+        "timestamp": 1787529600,
+        "avgHighPrice": 750959,
+        "avgLowPrice": 737305,
+        "highPriceVolume": 48,
+        "lowPriceVolume": 83
+      },
+      {
+        "timestamp": 1787551200,
+        "avgHighPrice": 763040,
+        "avgLowPrice": 742003,
+        "highPriceVolume": 33,
+        "lowPriceVolume": 46
+      },
+      {
+        "timestamp": 1787572800,
+        "avgHighPrice": 770780,
+        "avgLowPrice": 745545,
+        "highPriceVolume": 31,
+        "lowPriceVolume": 89
+      },
+      {
+        "timestamp": 1787594400,
+        "avgHighPrice": 768812,
+        "avgLowPrice": 745626,
+        "highPriceVolume": 28,
+        "lowPriceVolume": 135
+      },
+      {
+        "timestamp": 1787616000,
+        "avgHighPrice": 767582,
+        "avgLowPrice": 745421,
+        "highPriceVolume": 38,
+        "lowPriceVolume": 87
+      },
+      {
+        "timestamp": 1787637600,
+        "avgHighPrice": 768342,
+        "avgLowPrice": 746058,
+        "highPriceVolume": 26,
+        "lowPriceVolume": 41
+      },
+      {
+        "timestamp": 1787659200,
+        "avgHighPrice": 758827,
+        "avgLowPrice": 749786,
+        "highPriceVolume": 34,
+        "lowPriceVolume": 55
+      },
+      {
+        "timestamp": 1787680800,
+        "avgHighPrice": 791439,
+        "avgLowPrice": 766947,
+        "highPriceVolume": 114,
+        "lowPriceVolume": 94
+      },
+      {
+        "timestamp": 1787702400,
+        "avgHighPrice": 793976,
+        "avgLowPrice": 789061,
+        "highPriceVolume": 49,
+        "lowPriceVolume": 73
+      },
+      {
+        "timestamp": 1787724000,
+        "avgHighPrice": 802665,
+        "avgLowPrice": 798253,
+        "highPriceVolume": 12,
+        "lowPriceVolume": 50
+      },
+      {
+        "timestamp": 1787745600,
+        "avgHighPrice": 824459,
+        "avgLowPrice": 813831,
+        "highPriceVolume": 30,
+        "lowPriceVolume": 57
+      },
+      {
+        "timestamp": 1787767200,
+        "avgHighPrice": 836337,
+        "avgLowPrice": 817951,
+        "highPriceVolume": 41,
+        "lowPriceVolume": 93
+      },
+      {
+        "timestamp": 1787788800,
+        "avgHighPrice": 861245,
+        "avgLowPrice": 832224,
+        "highPriceVolume": 50,
+        "lowPriceVolume": 93
+      },
+      {
+        "timestamp": 1787810400,
+        "avgHighPrice": 876547,
+        "avgLowPrice": 840598,
+        "highPriceVolume": 27,
+        "lowPriceVolume": 76
+      },
+      {
+        "timestamp": 1787832000,
+        "avgHighPrice": 875332,
+        "avgLowPrice": 852422,
+        "highPriceVolume": 44,
+        "lowPriceVolume": 81
+      },
+      {
+        "timestamp": 1787853600,
+        "avgHighPrice": 903521,
+        "avgLowPrice": 880968,
+        "highPriceVolume": 43,
+        "lowPriceVolume": 82
+      },
+      {
+        "timestamp": 1787875200,
+        "avgHighPrice": 934975,
+        "avgLowPrice": 911272,
+        "highPriceVolume": 30,
+        "lowPriceVolume": 70
+      },
+      {
+        "timestamp": 1787896800,
+        "avgHighPrice": 948693,
+        "avgLowPrice": 915848,
+        "highPriceVolume": 11,
+        "lowPriceVolume": 63
+      },
+      {
+        "timestamp": 1787918400,
+        "avgHighPrice": 953712,
+        "avgLowPrice": 917058,
+        "highPriceVolume": 29,
+        "lowPriceVolume": 69
+      },
+      {
+        "timestamp": 1787940000,
+        "avgHighPrice": 950999,
+        "avgLowPrice": 918454,
+        "highPriceVolume": 47,
+        "lowPriceVolume": 158
+      },
+      {
+        "timestamp": 1787961600,
+        "avgHighPrice": 929633,
+        "avgLowPrice": 902031,
+        "highPriceVolume": 36,
+        "lowPriceVolume": 116
+      },
+      {
+        "timestamp": 1787983200,
+        "avgHighPrice": 947746,
+        "avgLowPrice": 894411,
+        "highPriceVolume": 25,
+        "lowPriceVolume": 66
+      },
+      {
+        "timestamp": 1788004800,
+        "avgHighPrice": 919088,
+        "avgLowPrice": 896404,
+        "highPriceVolume": 39,
+        "lowPriceVolume": 82
+      },
+      {
+        "timestamp": 1788026400,
+        "avgHighPrice": 915098,
+        "avgLowPrice": 903221,
+        "highPriceVolume": 52,
+        "lowPriceVolume": 92
+      },
+      {
+        "timestamp": 1788048000,
+        "avgHighPrice": 931800,
+        "avgLowPrice": 902507,
+        "highPriceVolume": 32,
+        "lowPriceVolume": 112
+      },
+      {
+        "timestamp": 1788069600,
+        "avgHighPrice": 923730,
+        "avgLowPrice": 896892,
+        "highPriceVolume": 28,
+        "lowPriceVolume": 51
+      },
+      {
+        "timestamp": 1788091200,
+        "avgHighPrice": 913833,
+        "avgLowPrice": 900053,
+        "highPriceVolume": 41,
+        "lowPriceVolume": 72
+      },
+      {
+        "timestamp": 1788112800,
+        "avgHighPrice": 913817,
+        "avgLowPrice": 901582,
+        "highPriceVolume": 46,
+        "lowPriceVolume": 159
+      },
+      {
+        "timestamp": 1788134400,
+        "avgHighPrice": 911747,
+        "avgLowPrice": 904543,
+        "highPriceVolume": 50,
+        "lowPriceVolume": 72
+      },
+      {
+        "timestamp": 1788156000,
+        "avgHighPrice": 914217,
+        "avgLowPrice": 905679,
+        "highPriceVolume": 27,
+        "lowPriceVolume": 29
+      },
+      {
+        "timestamp": 1788177600,
+        "avgHighPrice": 906661,
+        "avgLowPrice": 898321,
+        "highPriceVolume": 44,
+        "lowPriceVolume": 58
+      }
+    ]
+  },
   "8921": {
     "fetchedAt": 1788177756482,
     "data": [
@@ -137717,6 +140252,851 @@
         "avgLowPrice": 210877,
         "highPriceVolume": 487,
         "lowPriceVolume": 681
+      }
+    ]
+  },
+  "11875": {
+    "fetchedAt": 1788207064084,
+    "data": [
+      {
+        "timestamp": 1785607200,
+        "avgHighPrice": 56,
+        "avgLowPrice": 55,
+        "highPriceVolume": 171573,
+        "lowPriceVolume": 69031
+      },
+      {
+        "timestamp": 1785628800,
+        "avgHighPrice": 51,
+        "avgLowPrice": 50,
+        "highPriceVolume": 236042,
+        "lowPriceVolume": 74866
+      },
+      {
+        "timestamp": 1785650400,
+        "avgHighPrice": 53,
+        "avgLowPrice": 55,
+        "highPriceVolume": 138398,
+        "lowPriceVolume": 57545
+      },
+      {
+        "timestamp": 1785672000,
+        "avgHighPrice": 50,
+        "avgLowPrice": 48,
+        "highPriceVolume": 275869,
+        "lowPriceVolume": 108712
+      },
+      {
+        "timestamp": 1785693600,
+        "avgHighPrice": 50,
+        "avgLowPrice": 46,
+        "highPriceVolume": 436569,
+        "lowPriceVolume": 92332
+      },
+      {
+        "timestamp": 1785715200,
+        "avgHighPrice": 50,
+        "avgLowPrice": 45,
+        "highPriceVolume": 347848,
+        "lowPriceVolume": 84564
+      },
+      {
+        "timestamp": 1785736800,
+        "avgHighPrice": 50,
+        "avgLowPrice": 46,
+        "highPriceVolume": 233101,
+        "lowPriceVolume": 25084
+      },
+      {
+        "timestamp": 1785758400,
+        "avgHighPrice": 51,
+        "avgLowPrice": 49,
+        "highPriceVolume": 287428,
+        "lowPriceVolume": 54076
+      },
+      {
+        "timestamp": 1785780000,
+        "avgHighPrice": 52,
+        "avgLowPrice": 49,
+        "highPriceVolume": 280057,
+        "lowPriceVolume": 101551
+      },
+      {
+        "timestamp": 1785801600,
+        "avgHighPrice": 51,
+        "avgLowPrice": 48,
+        "highPriceVolume": 146732,
+        "lowPriceVolume": 126304
+      },
+      {
+        "timestamp": 1785823200,
+        "avgHighPrice": 52,
+        "avgLowPrice": 50,
+        "highPriceVolume": 63033,
+        "lowPriceVolume": 41032
+      },
+      {
+        "timestamp": 1785844800,
+        "avgHighPrice": 55,
+        "avgLowPrice": 51,
+        "highPriceVolume": 137203,
+        "lowPriceVolume": 97247
+      },
+      {
+        "timestamp": 1785866400,
+        "avgHighPrice": 55,
+        "avgLowPrice": 51,
+        "highPriceVolume": 187505,
+        "lowPriceVolume": 151381
+      },
+      {
+        "timestamp": 1785888000,
+        "avgHighPrice": 58,
+        "avgLowPrice": 55,
+        "highPriceVolume": 120194,
+        "lowPriceVolume": 122760
+      },
+      {
+        "timestamp": 1785909600,
+        "avgHighPrice": 59,
+        "avgLowPrice": 55,
+        "highPriceVolume": 76865,
+        "lowPriceVolume": 82851
+      },
+      {
+        "timestamp": 1785931200,
+        "avgHighPrice": 59,
+        "avgLowPrice": 55,
+        "highPriceVolume": 81816,
+        "lowPriceVolume": 104658
+      },
+      {
+        "timestamp": 1785952800,
+        "avgHighPrice": 52,
+        "avgLowPrice": 52,
+        "highPriceVolume": 208949,
+        "lowPriceVolume": 103399
+      },
+      {
+        "timestamp": 1785974400,
+        "avgHighPrice": 54,
+        "avgLowPrice": 51,
+        "highPriceVolume": 198382,
+        "lowPriceVolume": 71146
+      },
+      {
+        "timestamp": 1785996000,
+        "avgHighPrice": 59,
+        "avgLowPrice": 54,
+        "highPriceVolume": 73110,
+        "lowPriceVolume": 88443
+      },
+      {
+        "timestamp": 1786017600,
+        "avgHighPrice": 49,
+        "avgLowPrice": 46,
+        "highPriceVolume": 190669,
+        "lowPriceVolume": 115679
+      },
+      {
+        "timestamp": 1786039200,
+        "avgHighPrice": 56,
+        "avgLowPrice": 52,
+        "highPriceVolume": 126300,
+        "lowPriceVolume": 88484
+      },
+      {
+        "timestamp": 1786060800,
+        "avgHighPrice": 55,
+        "avgLowPrice": 51,
+        "highPriceVolume": 155047,
+        "lowPriceVolume": 116807
+      },
+      {
+        "timestamp": 1786082400,
+        "avgHighPrice": 55,
+        "avgLowPrice": 50,
+        "highPriceVolume": 104359,
+        "lowPriceVolume": 173148
+      },
+      {
+        "timestamp": 1786104000,
+        "avgHighPrice": 52,
+        "avgLowPrice": 52,
+        "highPriceVolume": 144997,
+        "lowPriceVolume": 92273
+      },
+      {
+        "timestamp": 1786125600,
+        "avgHighPrice": 50,
+        "avgLowPrice": 51,
+        "highPriceVolume": 194159,
+        "lowPriceVolume": 121171
+      },
+      {
+        "timestamp": 1786147200,
+        "avgHighPrice": 54,
+        "avgLowPrice": 53,
+        "highPriceVolume": 145917,
+        "lowPriceVolume": 92463
+      },
+      {
+        "timestamp": 1786168800,
+        "avgHighPrice": 59,
+        "avgLowPrice": 61,
+        "highPriceVolume": 50170,
+        "lowPriceVolume": 109944
+      },
+      {
+        "timestamp": 1786190400,
+        "avgHighPrice": 79,
+        "avgLowPrice": 52,
+        "highPriceVolume": 114090,
+        "lowPriceVolume": 211375
+      },
+      {
+        "timestamp": 1786212000,
+        "avgHighPrice": 85,
+        "avgLowPrice": 67,
+        "highPriceVolume": 136194,
+        "lowPriceVolume": 156926
+      },
+      {
+        "timestamp": 1786233600,
+        "avgHighPrice": 88,
+        "avgLowPrice": 67,
+        "highPriceVolume": 99320,
+        "lowPriceVolume": 190708
+      },
+      {
+        "timestamp": 1786255200,
+        "avgHighPrice": 84,
+        "avgLowPrice": 68,
+        "highPriceVolume": 50112,
+        "lowPriceVolume": 124842
+      },
+      {
+        "timestamp": 1786276800,
+        "avgHighPrice": 86,
+        "avgLowPrice": 69,
+        "highPriceVolume": 141455,
+        "lowPriceVolume": 221905
+      },
+      {
+        "timestamp": 1786298400,
+        "avgHighPrice": 74,
+        "avgLowPrice": 62,
+        "highPriceVolume": 259708,
+        "lowPriceVolume": 285688
+      },
+      {
+        "timestamp": 1786320000,
+        "avgHighPrice": 54,
+        "avgLowPrice": 50,
+        "highPriceVolume": 205150,
+        "lowPriceVolume": 133801
+      },
+      {
+        "timestamp": 1786341600,
+        "avgHighPrice": 54,
+        "avgLowPrice": 52,
+        "highPriceVolume": 166284,
+        "lowPriceVolume": 49631
+      },
+      {
+        "timestamp": 1786363200,
+        "avgHighPrice": 51,
+        "avgLowPrice": 45,
+        "highPriceVolume": 262155,
+        "lowPriceVolume": 78494
+      },
+      {
+        "timestamp": 1786384800,
+        "avgHighPrice": 52,
+        "avgLowPrice": 46,
+        "highPriceVolume": 309800,
+        "lowPriceVolume": 110955
+      },
+      {
+        "timestamp": 1786406400,
+        "avgHighPrice": 53,
+        "avgLowPrice": 48,
+        "highPriceVolume": 225104,
+        "lowPriceVolume": 64613
+      },
+      {
+        "timestamp": 1786428000,
+        "avgHighPrice": 53,
+        "avgLowPrice": 52,
+        "highPriceVolume": 105138,
+        "lowPriceVolume": 21761
+      },
+      {
+        "timestamp": 1786449600,
+        "avgHighPrice": 52,
+        "avgLowPrice": 50,
+        "highPriceVolume": 140729,
+        "lowPriceVolume": 77585
+      },
+      {
+        "timestamp": 1786471200,
+        "avgHighPrice": 53,
+        "avgLowPrice": 51,
+        "highPriceVolume": 160142,
+        "lowPriceVolume": 79768
+      },
+      {
+        "timestamp": 1786492800,
+        "avgHighPrice": 52,
+        "avgLowPrice": 52,
+        "highPriceVolume": 202771,
+        "lowPriceVolume": 70569
+      },
+      {
+        "timestamp": 1786514400,
+        "avgHighPrice": 52,
+        "avgLowPrice": 51,
+        "highPriceVolume": 91503,
+        "lowPriceVolume": 28193
+      },
+      {
+        "timestamp": 1786536000,
+        "avgHighPrice": 53,
+        "avgLowPrice": 51,
+        "highPriceVolume": 171630,
+        "lowPriceVolume": 125169
+      },
+      {
+        "timestamp": 1786557600,
+        "avgHighPrice": 41,
+        "avgLowPrice": 41,
+        "highPriceVolume": 401099,
+        "lowPriceVolume": 191244
+      },
+      {
+        "timestamp": 1786579200,
+        "avgHighPrice": 41,
+        "avgLowPrice": 38,
+        "highPriceVolume": 149246,
+        "lowPriceVolume": 55895
+      },
+      {
+        "timestamp": 1786600800,
+        "avgHighPrice": 51,
+        "avgLowPrice": 48,
+        "highPriceVolume": 128065,
+        "lowPriceVolume": 43262
+      },
+      {
+        "timestamp": 1786622400,
+        "avgHighPrice": 52,
+        "avgLowPrice": 51,
+        "highPriceVolume": 139871,
+        "lowPriceVolume": 93496
+      },
+      {
+        "timestamp": 1786644000,
+        "avgHighPrice": 51,
+        "avgLowPrice": 49,
+        "highPriceVolume": 167915,
+        "lowPriceVolume": 124081
+      },
+      {
+        "timestamp": 1786665600,
+        "avgHighPrice": 49,
+        "avgLowPrice": 49,
+        "highPriceVolume": 122081,
+        "lowPriceVolume": 118407
+      },
+      {
+        "timestamp": 1786687200,
+        "avgHighPrice": 50,
+        "avgLowPrice": 51,
+        "highPriceVolume": 75758,
+        "lowPriceVolume": 41410
+      },
+      {
+        "timestamp": 1786708800,
+        "avgHighPrice": 50,
+        "avgLowPrice": 48,
+        "highPriceVolume": 245271,
+        "lowPriceVolume": 93213
+      },
+      {
+        "timestamp": 1786730400,
+        "avgHighPrice": 49,
+        "avgLowPrice": 48,
+        "highPriceVolume": 294812,
+        "lowPriceVolume": 59060
+      },
+      {
+        "timestamp": 1786752000,
+        "avgHighPrice": 49,
+        "avgLowPrice": 48,
+        "highPriceVolume": 204060,
+        "lowPriceVolume": 110106
+      },
+      {
+        "timestamp": 1786773600,
+        "avgHighPrice": 50,
+        "avgLowPrice": 50,
+        "highPriceVolume": 132846,
+        "lowPriceVolume": 61126
+      },
+      {
+        "timestamp": 1786795200,
+        "avgHighPrice": 52,
+        "avgLowPrice": 51,
+        "highPriceVolume": 180972,
+        "lowPriceVolume": 126456
+      },
+      {
+        "timestamp": 1786816800,
+        "avgHighPrice": 52,
+        "avgLowPrice": 51,
+        "highPriceVolume": 136993,
+        "lowPriceVolume": 126938
+      },
+      {
+        "timestamp": 1786838400,
+        "avgHighPrice": 51,
+        "avgLowPrice": 50,
+        "highPriceVolume": 145924,
+        "lowPriceVolume": 99618
+      },
+      {
+        "timestamp": 1786860000,
+        "avgHighPrice": 53,
+        "avgLowPrice": 53,
+        "highPriceVolume": 123708,
+        "lowPriceVolume": 49842
+      },
+      {
+        "timestamp": 1786881600,
+        "avgHighPrice": 53,
+        "avgLowPrice": 50,
+        "highPriceVolume": 209440,
+        "lowPriceVolume": 200429
+      },
+      {
+        "timestamp": 1786903200,
+        "avgHighPrice": 56,
+        "avgLowPrice": 51,
+        "highPriceVolume": 261012,
+        "lowPriceVolume": 88411
+      },
+      {
+        "timestamp": 1786924800,
+        "avgHighPrice": 53,
+        "avgLowPrice": 54,
+        "highPriceVolume": 237964,
+        "lowPriceVolume": 114901
+      },
+      {
+        "timestamp": 1786946400,
+        "avgHighPrice": 56,
+        "avgLowPrice": 56,
+        "highPriceVolume": 104385,
+        "lowPriceVolume": 68964
+      },
+      {
+        "timestamp": 1786968000,
+        "avgHighPrice": 60,
+        "avgLowPrice": 53,
+        "highPriceVolume": 133672,
+        "lowPriceVolume": 222596
+      },
+      {
+        "timestamp": 1786989600,
+        "avgHighPrice": 56,
+        "avgLowPrice": 56,
+        "highPriceVolume": 108310,
+        "lowPriceVolume": 123120
+      },
+      {
+        "timestamp": 1787011200,
+        "avgHighPrice": 63,
+        "avgLowPrice": 55,
+        "highPriceVolume": 59980,
+        "lowPriceVolume": 106574
+      },
+      {
+        "timestamp": 1787032800,
+        "avgHighPrice": 66,
+        "avgLowPrice": 60,
+        "highPriceVolume": 78875,
+        "lowPriceVolume": 76794
+      },
+      {
+        "timestamp": 1787054400,
+        "avgHighPrice": 64,
+        "avgLowPrice": 59,
+        "highPriceVolume": 93212,
+        "lowPriceVolume": 109652
+      },
+      {
+        "timestamp": 1787076000,
+        "avgHighPrice": 61,
+        "avgLowPrice": 59,
+        "highPriceVolume": 205846,
+        "lowPriceVolume": 120984
+      },
+      {
+        "timestamp": 1787097600,
+        "avgHighPrice": 49,
+        "avgLowPrice": 51,
+        "highPriceVolume": 245895,
+        "lowPriceVolume": 61210
+      },
+      {
+        "timestamp": 1787119200,
+        "avgHighPrice": 53,
+        "avgLowPrice": 52,
+        "highPriceVolume": 159268,
+        "lowPriceVolume": 32712
+      },
+      {
+        "timestamp": 1787140800,
+        "avgHighPrice": 60,
+        "avgLowPrice": 56,
+        "highPriceVolume": 134902,
+        "lowPriceVolume": 98155
+      },
+      {
+        "timestamp": 1787162400,
+        "avgHighPrice": 58,
+        "avgLowPrice": 54,
+        "highPriceVolume": 196145,
+        "lowPriceVolume": 166727
+      },
+      {
+        "timestamp": 1787184000,
+        "avgHighPrice": 63,
+        "avgLowPrice": 60,
+        "highPriceVolume": 113298,
+        "lowPriceVolume": 159796
+      },
+      {
+        "timestamp": 1787205600,
+        "avgHighPrice": 69,
+        "avgLowPrice": 60,
+        "highPriceVolume": 59635,
+        "lowPriceVolume": 89482
+      },
+      {
+        "timestamp": 1787227200,
+        "avgHighPrice": 65,
+        "avgLowPrice": 60,
+        "highPriceVolume": 100211,
+        "lowPriceVolume": 83832
+      },
+      {
+        "timestamp": 1787248800,
+        "avgHighPrice": 64,
+        "avgLowPrice": 56,
+        "highPriceVolume": 156797,
+        "lowPriceVolume": 246562
+      },
+      {
+        "timestamp": 1787270400,
+        "avgHighPrice": 56,
+        "avgLowPrice": 55,
+        "highPriceVolume": 139805,
+        "lowPriceVolume": 109397
+      },
+      {
+        "timestamp": 1787292000,
+        "avgHighPrice": 41,
+        "avgLowPrice": 46,
+        "highPriceVolume": 496838,
+        "lowPriceVolume": 152592
+      },
+      {
+        "timestamp": 1787313600,
+        "avgHighPrice": 53,
+        "avgLowPrice": 50,
+        "highPriceVolume": 225989,
+        "lowPriceVolume": 78159
+      },
+      {
+        "timestamp": 1787335200,
+        "avgHighPrice": 53,
+        "avgLowPrice": 49,
+        "highPriceVolume": 259437,
+        "lowPriceVolume": 83785
+      },
+      {
+        "timestamp": 1787356800,
+        "avgHighPrice": 53,
+        "avgLowPrice": 49,
+        "highPriceVolume": 115505,
+        "lowPriceVolume": 109662
+      },
+      {
+        "timestamp": 1787378400,
+        "avgHighPrice": 51,
+        "avgLowPrice": 50,
+        "highPriceVolume": 103460,
+        "lowPriceVolume": 45706
+      },
+      {
+        "timestamp": 1787400000,
+        "avgHighPrice": 54,
+        "avgLowPrice": 51,
+        "highPriceVolume": 117761,
+        "lowPriceVolume": 124683
+      },
+      {
+        "timestamp": 1787421600,
+        "avgHighPrice": 50,
+        "avgLowPrice": 47,
+        "highPriceVolume": 356582,
+        "lowPriceVolume": 182202
+      },
+      {
+        "timestamp": 1787443200,
+        "avgHighPrice": 53,
+        "avgLowPrice": 53,
+        "highPriceVolume": 131719,
+        "lowPriceVolume": 105750
+      },
+      {
+        "timestamp": 1787464800,
+        "avgHighPrice": 55,
+        "avgLowPrice": 50,
+        "highPriceVolume": 117228,
+        "lowPriceVolume": 79831
+      },
+      {
+        "timestamp": 1787486400,
+        "avgHighPrice": 55,
+        "avgLowPrice": 54,
+        "highPriceVolume": 137866,
+        "lowPriceVolume": 101409
+      },
+      {
+        "timestamp": 1787508000,
+        "avgHighPrice": 54,
+        "avgLowPrice": 49,
+        "highPriceVolume": 283248,
+        "lowPriceVolume": 39202
+      },
+      {
+        "timestamp": 1787529600,
+        "avgHighPrice": 52,
+        "avgLowPrice": 52,
+        "highPriceVolume": 107118,
+        "lowPriceVolume": 66164
+      },
+      {
+        "timestamp": 1787551200,
+        "avgHighPrice": 54,
+        "avgLowPrice": 52,
+        "highPriceVolume": 142140,
+        "lowPriceVolume": 45591
+      },
+      {
+        "timestamp": 1787572800,
+        "avgHighPrice": 53,
+        "avgLowPrice": 54,
+        "highPriceVolume": 114518,
+        "lowPriceVolume": 68370
+      },
+      {
+        "timestamp": 1787594400,
+        "avgHighPrice": 54,
+        "avgLowPrice": 53,
+        "highPriceVolume": 164551,
+        "lowPriceVolume": 67564
+      },
+      {
+        "timestamp": 1787616000,
+        "avgHighPrice": 53,
+        "avgLowPrice": 51,
+        "highPriceVolume": 128740,
+        "lowPriceVolume": 56699
+      },
+      {
+        "timestamp": 1787637600,
+        "avgHighPrice": 56,
+        "avgLowPrice": 55,
+        "highPriceVolume": 93406,
+        "lowPriceVolume": 62726
+      },
+      {
+        "timestamp": 1787659200,
+        "avgHighPrice": 56,
+        "avgLowPrice": 54,
+        "highPriceVolume": 121361,
+        "lowPriceVolume": 86578
+      },
+      {
+        "timestamp": 1787680800,
+        "avgHighPrice": 56,
+        "avgLowPrice": 55,
+        "highPriceVolume": 79317,
+        "lowPriceVolume": 117197
+      },
+      {
+        "timestamp": 1787702400,
+        "avgHighPrice": 56,
+        "avgLowPrice": 55,
+        "highPriceVolume": 133880,
+        "lowPriceVolume": 127967
+      },
+      {
+        "timestamp": 1787724000,
+        "avgHighPrice": 54,
+        "avgLowPrice": 52,
+        "highPriceVolume": 60111,
+        "lowPriceVolume": 115075
+      },
+      {
+        "timestamp": 1787745600,
+        "avgHighPrice": 56,
+        "avgLowPrice": 56,
+        "highPriceVolume": 80485,
+        "lowPriceVolume": 119859
+      },
+      {
+        "timestamp": 1787767200,
+        "avgHighPrice": 54,
+        "avgLowPrice": 54,
+        "highPriceVolume": 152513,
+        "lowPriceVolume": 60972
+      },
+      {
+        "timestamp": 1787788800,
+        "avgHighPrice": 57,
+        "avgLowPrice": 53,
+        "highPriceVolume": 193007,
+        "lowPriceVolume": 155299
+      },
+      {
+        "timestamp": 1787810400,
+        "avgHighPrice": 55,
+        "avgLowPrice": 56,
+        "highPriceVolume": 128320,
+        "lowPriceVolume": 35065
+      },
+      {
+        "timestamp": 1787832000,
+        "avgHighPrice": 59,
+        "avgLowPrice": 55,
+        "highPriceVolume": 96126,
+        "lowPriceVolume": 88133
+      },
+      {
+        "timestamp": 1787853600,
+        "avgHighPrice": 58,
+        "avgLowPrice": 57,
+        "highPriceVolume": 124178,
+        "lowPriceVolume": 104835
+      },
+      {
+        "timestamp": 1787875200,
+        "avgHighPrice": 58,
+        "avgLowPrice": 55,
+        "highPriceVolume": 90234,
+        "lowPriceVolume": 113932
+      },
+      {
+        "timestamp": 1787896800,
+        "avgHighPrice": 57,
+        "avgLowPrice": 54,
+        "highPriceVolume": 98035,
+        "lowPriceVolume": 91495
+      },
+      {
+        "timestamp": 1787918400,
+        "avgHighPrice": 54,
+        "avgLowPrice": 55,
+        "highPriceVolume": 97634,
+        "lowPriceVolume": 91394
+      },
+      {
+        "timestamp": 1787940000,
+        "avgHighPrice": 57,
+        "avgLowPrice": 55,
+        "highPriceVolume": 118105,
+        "lowPriceVolume": 80859
+      },
+      {
+        "timestamp": 1787961600,
+        "avgHighPrice": 56,
+        "avgLowPrice": 55,
+        "highPriceVolume": 94536,
+        "lowPriceVolume": 87409
+      },
+      {
+        "timestamp": 1787983200,
+        "avgHighPrice": 59,
+        "avgLowPrice": 57,
+        "highPriceVolume": 62832,
+        "lowPriceVolume": 75170
+      },
+      {
+        "timestamp": 1788004800,
+        "avgHighPrice": 58,
+        "avgLowPrice": 56,
+        "highPriceVolume": 125711,
+        "lowPriceVolume": 87382
+      },
+      {
+        "timestamp": 1788026400,
+        "avgHighPrice": 51,
+        "avgLowPrice": 53,
+        "highPriceVolume": 195149,
+        "lowPriceVolume": 116559
+      },
+      {
+        "timestamp": 1788048000,
+        "avgHighPrice": 57,
+        "avgLowPrice": 55,
+        "highPriceVolume": 94737,
+        "lowPriceVolume": 130590
+      },
+      {
+        "timestamp": 1788069600,
+        "avgHighPrice": 55,
+        "avgLowPrice": 51,
+        "highPriceVolume": 103663,
+        "lowPriceVolume": 53730
+      },
+      {
+        "timestamp": 1788091200,
+        "avgHighPrice": 57,
+        "avgLowPrice": 53,
+        "highPriceVolume": 157457,
+        "lowPriceVolume": 95498
+      },
+      {
+        "timestamp": 1788112800,
+        "avgHighPrice": 56,
+        "avgLowPrice": 54,
+        "highPriceVolume": 155668,
+        "lowPriceVolume": 105553
+      },
+      {
+        "timestamp": 1788134400,
+        "avgHighPrice": 53,
+        "avgLowPrice": 53,
+        "highPriceVolume": 94106,
+        "lowPriceVolume": 47548
+      },
+      {
+        "timestamp": 1788156000,
+        "avgHighPrice": 57,
+        "avgLowPrice": 56,
+        "highPriceVolume": 74079,
+        "lowPriceVolume": 48076
+      },
+      {
+        "timestamp": 1788177600,
+        "avgHighPrice": 60,
+        "avgLowPrice": 60,
+        "highPriceVolume": 96910,
+        "lowPriceVolume": 105550
       }
     ]
   },
@@ -205320,6 +208700,851 @@
       }
     ]
   },
+  "25853": {
+    "fetchedAt": 1788207620352,
+    "data": [
+      {
+        "timestamp": 1785607200,
+        "avgHighPrice": 369,
+        "avgLowPrice": 366,
+        "highPriceVolume": 750101,
+        "lowPriceVolume": 135241
+      },
+      {
+        "timestamp": 1785628800,
+        "avgHighPrice": 367,
+        "avgLowPrice": 365,
+        "highPriceVolume": 499052,
+        "lowPriceVolume": 299248
+      },
+      {
+        "timestamp": 1785650400,
+        "avgHighPrice": 364,
+        "avgLowPrice": 364,
+        "highPriceVolume": 358364,
+        "lowPriceVolume": 365949
+      },
+      {
+        "timestamp": 1785672000,
+        "avgHighPrice": 368,
+        "avgLowPrice": 364,
+        "highPriceVolume": 628299,
+        "lowPriceVolume": 265966
+      },
+      {
+        "timestamp": 1785693600,
+        "avgHighPrice": 362,
+        "avgLowPrice": 359,
+        "highPriceVolume": 789748,
+        "lowPriceVolume": 272427
+      },
+      {
+        "timestamp": 1785715200,
+        "avgHighPrice": 365,
+        "avgLowPrice": 361,
+        "highPriceVolume": 589355,
+        "lowPriceVolume": 185205
+      },
+      {
+        "timestamp": 1785736800,
+        "avgHighPrice": 370,
+        "avgLowPrice": 365,
+        "highPriceVolume": 139641,
+        "lowPriceVolume": 239962
+      },
+      {
+        "timestamp": 1785758400,
+        "avgHighPrice": 362,
+        "avgLowPrice": 358,
+        "highPriceVolume": 1181539,
+        "lowPriceVolume": 298226
+      },
+      {
+        "timestamp": 1785780000,
+        "avgHighPrice": 359,
+        "avgLowPrice": 352,
+        "highPriceVolume": 746364,
+        "lowPriceVolume": 191013
+      },
+      {
+        "timestamp": 1785801600,
+        "avgHighPrice": 356,
+        "avgLowPrice": 359,
+        "highPriceVolume": 445021,
+        "lowPriceVolume": 145843
+      },
+      {
+        "timestamp": 1785823200,
+        "avgHighPrice": 367,
+        "avgLowPrice": 366,
+        "highPriceVolume": 321035,
+        "lowPriceVolume": 140896
+      },
+      {
+        "timestamp": 1785844800,
+        "avgHighPrice": 365,
+        "avgLowPrice": 359,
+        "highPriceVolume": 612966,
+        "lowPriceVolume": 257135
+      },
+      {
+        "timestamp": 1785866400,
+        "avgHighPrice": 361,
+        "avgLowPrice": 351,
+        "highPriceVolume": 583211,
+        "lowPriceVolume": 143626
+      },
+      {
+        "timestamp": 1785888000,
+        "avgHighPrice": 362,
+        "avgLowPrice": 357,
+        "highPriceVolume": 749238,
+        "lowPriceVolume": 298552
+      },
+      {
+        "timestamp": 1785909600,
+        "avgHighPrice": 366,
+        "avgLowPrice": 357,
+        "highPriceVolume": 586904,
+        "lowPriceVolume": 308682
+      },
+      {
+        "timestamp": 1785931200,
+        "avgHighPrice": 362,
+        "avgLowPrice": 356,
+        "highPriceVolume": 686777,
+        "lowPriceVolume": 147942
+      },
+      {
+        "timestamp": 1785952800,
+        "avgHighPrice": 363,
+        "avgLowPrice": 356,
+        "highPriceVolume": 557147,
+        "lowPriceVolume": 277263
+      },
+      {
+        "timestamp": 1785974400,
+        "avgHighPrice": 359,
+        "avgLowPrice": 358,
+        "highPriceVolume": 480018,
+        "lowPriceVolume": 264911
+      },
+      {
+        "timestamp": 1785996000,
+        "avgHighPrice": 365,
+        "avgLowPrice": 362,
+        "highPriceVolume": 375794,
+        "lowPriceVolume": 103278
+      },
+      {
+        "timestamp": 1786017600,
+        "avgHighPrice": 359,
+        "avgLowPrice": 352,
+        "highPriceVolume": 834321,
+        "lowPriceVolume": 157800
+      },
+      {
+        "timestamp": 1786039200,
+        "avgHighPrice": 353,
+        "avgLowPrice": 342,
+        "highPriceVolume": 1108354,
+        "lowPriceVolume": 367662
+      },
+      {
+        "timestamp": 1786060800,
+        "avgHighPrice": 357,
+        "avgLowPrice": 347,
+        "highPriceVolume": 733825,
+        "lowPriceVolume": 327846
+      },
+      {
+        "timestamp": 1786082400,
+        "avgHighPrice": 359,
+        "avgLowPrice": 352,
+        "highPriceVolume": 374508,
+        "lowPriceVolume": 203358
+      },
+      {
+        "timestamp": 1786104000,
+        "avgHighPrice": 357,
+        "avgLowPrice": 345,
+        "highPriceVolume": 752211,
+        "lowPriceVolume": 253958
+      },
+      {
+        "timestamp": 1786125600,
+        "avgHighPrice": 333,
+        "avgLowPrice": 251,
+        "highPriceVolume": 1082630,
+        "lowPriceVolume": 448636
+      },
+      {
+        "timestamp": 1786147200,
+        "avgHighPrice": 353,
+        "avgLowPrice": 340,
+        "highPriceVolume": 855169,
+        "lowPriceVolume": 159191
+      },
+      {
+        "timestamp": 1786168800,
+        "avgHighPrice": 352,
+        "avgLowPrice": 340,
+        "highPriceVolume": 584915,
+        "lowPriceVolume": 392710
+      },
+      {
+        "timestamp": 1786190400,
+        "avgHighPrice": 356,
+        "avgLowPrice": 348,
+        "highPriceVolume": 548497,
+        "lowPriceVolume": 166319
+      },
+      {
+        "timestamp": 1786212000,
+        "avgHighPrice": 365,
+        "avgLowPrice": 357,
+        "highPriceVolume": 1036110,
+        "lowPriceVolume": 397746
+      },
+      {
+        "timestamp": 1786233600,
+        "avgHighPrice": 361,
+        "avgLowPrice": 349,
+        "highPriceVolume": 746942,
+        "lowPriceVolume": 261596
+      },
+      {
+        "timestamp": 1786255200,
+        "avgHighPrice": 354,
+        "avgLowPrice": 355,
+        "highPriceVolume": 543131,
+        "lowPriceVolume": 243994
+      },
+      {
+        "timestamp": 1786276800,
+        "avgHighPrice": 349,
+        "avgLowPrice": 343,
+        "highPriceVolume": 717998,
+        "lowPriceVolume": 247501
+      },
+      {
+        "timestamp": 1786298400,
+        "avgHighPrice": 348,
+        "avgLowPrice": 345,
+        "highPriceVolume": 579058,
+        "lowPriceVolume": 92325
+      },
+      {
+        "timestamp": 1786320000,
+        "avgHighPrice": 351,
+        "avgLowPrice": 344,
+        "highPriceVolume": 406627,
+        "lowPriceVolume": 110884
+      },
+      {
+        "timestamp": 1786341600,
+        "avgHighPrice": 349,
+        "avgLowPrice": 347,
+        "highPriceVolume": 382858,
+        "lowPriceVolume": 57320
+      },
+      {
+        "timestamp": 1786363200,
+        "avgHighPrice": 342,
+        "avgLowPrice": 335,
+        "highPriceVolume": 606739,
+        "lowPriceVolume": 72554
+      },
+      {
+        "timestamp": 1786384800,
+        "avgHighPrice": 332,
+        "avgLowPrice": 335,
+        "highPriceVolume": 860385,
+        "lowPriceVolume": 203741
+      },
+      {
+        "timestamp": 1786406400,
+        "avgHighPrice": 338,
+        "avgLowPrice": 321,
+        "highPriceVolume": 672859,
+        "lowPriceVolume": 395949
+      },
+      {
+        "timestamp": 1786428000,
+        "avgHighPrice": 343,
+        "avgLowPrice": 339,
+        "highPriceVolume": 236861,
+        "lowPriceVolume": 89878
+      },
+      {
+        "timestamp": 1786449600,
+        "avgHighPrice": 341,
+        "avgLowPrice": 336,
+        "highPriceVolume": 386761,
+        "lowPriceVolume": 63142
+      },
+      {
+        "timestamp": 1786471200,
+        "avgHighPrice": 329,
+        "avgLowPrice": 329,
+        "highPriceVolume": 655711,
+        "lowPriceVolume": 308701
+      },
+      {
+        "timestamp": 1786492800,
+        "avgHighPrice": 325,
+        "avgLowPrice": 314,
+        "highPriceVolume": 749333,
+        "lowPriceVolume": 450919
+      },
+      {
+        "timestamp": 1786514400,
+        "avgHighPrice": 333,
+        "avgLowPrice": 332,
+        "highPriceVolume": 317371,
+        "lowPriceVolume": 108052
+      },
+      {
+        "timestamp": 1786536000,
+        "avgHighPrice": 343,
+        "avgLowPrice": 337,
+        "highPriceVolume": 431087,
+        "lowPriceVolume": 237533
+      },
+      {
+        "timestamp": 1786557600,
+        "avgHighPrice": 337,
+        "avgLowPrice": 317,
+        "highPriceVolume": 1005147,
+        "lowPriceVolume": 307644
+      },
+      {
+        "timestamp": 1786579200,
+        "avgHighPrice": 338,
+        "avgLowPrice": 329,
+        "highPriceVolume": 571526,
+        "lowPriceVolume": 390199
+      },
+      {
+        "timestamp": 1786600800,
+        "avgHighPrice": 345,
+        "avgLowPrice": 341,
+        "highPriceVolume": 295568,
+        "lowPriceVolume": 231145
+      },
+      {
+        "timestamp": 1786622400,
+        "avgHighPrice": 333,
+        "avgLowPrice": 336,
+        "highPriceVolume": 523513,
+        "lowPriceVolume": 141887
+      },
+      {
+        "timestamp": 1786644000,
+        "avgHighPrice": 349,
+        "avgLowPrice": 344,
+        "highPriceVolume": 494977,
+        "lowPriceVolume": 205656
+      },
+      {
+        "timestamp": 1786665600,
+        "avgHighPrice": 347,
+        "avgLowPrice": 342,
+        "highPriceVolume": 281423,
+        "lowPriceVolume": 261930
+      },
+      {
+        "timestamp": 1786687200,
+        "avgHighPrice": 357,
+        "avgLowPrice": 350,
+        "highPriceVolume": 146129,
+        "lowPriceVolume": 352837
+      },
+      {
+        "timestamp": 1786708800,
+        "avgHighPrice": 346,
+        "avgLowPrice": 342,
+        "highPriceVolume": 643836,
+        "lowPriceVolume": 415500
+      },
+      {
+        "timestamp": 1786730400,
+        "avgHighPrice": 346,
+        "avgLowPrice": 339,
+        "highPriceVolume": 539578,
+        "lowPriceVolume": 230966
+      },
+      {
+        "timestamp": 1786752000,
+        "avgHighPrice": 337,
+        "avgLowPrice": 333,
+        "highPriceVolume": 1037838,
+        "lowPriceVolume": 406440
+      },
+      {
+        "timestamp": 1786773600,
+        "avgHighPrice": 348,
+        "avgLowPrice": 344,
+        "highPriceVolume": 469475,
+        "lowPriceVolume": 201105
+      },
+      {
+        "timestamp": 1786795200,
+        "avgHighPrice": 345,
+        "avgLowPrice": 343,
+        "highPriceVolume": 764667,
+        "lowPriceVolume": 255739
+      },
+      {
+        "timestamp": 1786816800,
+        "avgHighPrice": 350,
+        "avgLowPrice": 345,
+        "highPriceVolume": 396568,
+        "lowPriceVolume": 430802
+      },
+      {
+        "timestamp": 1786838400,
+        "avgHighPrice": 357,
+        "avgLowPrice": 347,
+        "highPriceVolume": 625595,
+        "lowPriceVolume": 320633
+      },
+      {
+        "timestamp": 1786860000,
+        "avgHighPrice": 353,
+        "avgLowPrice": 349,
+        "highPriceVolume": 460335,
+        "lowPriceVolume": 188399
+      },
+      {
+        "timestamp": 1786881600,
+        "avgHighPrice": 349,
+        "avgLowPrice": 343,
+        "highPriceVolume": 697017,
+        "lowPriceVolume": 499030
+      },
+      {
+        "timestamp": 1786903200,
+        "avgHighPrice": 351,
+        "avgLowPrice": 347,
+        "highPriceVolume": 884631,
+        "lowPriceVolume": 238484
+      },
+      {
+        "timestamp": 1786924800,
+        "avgHighPrice": 352,
+        "avgLowPrice": 346,
+        "highPriceVolume": 714168,
+        "lowPriceVolume": 143230
+      },
+      {
+        "timestamp": 1786946400,
+        "avgHighPrice": 353,
+        "avgLowPrice": 350,
+        "highPriceVolume": 481103,
+        "lowPriceVolume": 216372
+      },
+      {
+        "timestamp": 1786968000,
+        "avgHighPrice": 350,
+        "avgLowPrice": 346,
+        "highPriceVolume": 633905,
+        "lowPriceVolume": 283798
+      },
+      {
+        "timestamp": 1786989600,
+        "avgHighPrice": 351,
+        "avgLowPrice": 346,
+        "highPriceVolume": 697673,
+        "lowPriceVolume": 358771
+      },
+      {
+        "timestamp": 1787011200,
+        "avgHighPrice": 349,
+        "avgLowPrice": 343,
+        "highPriceVolume": 774054,
+        "lowPriceVolume": 302050
+      },
+      {
+        "timestamp": 1787032800,
+        "avgHighPrice": 354,
+        "avgLowPrice": 351,
+        "highPriceVolume": 303410,
+        "lowPriceVolume": 281489
+      },
+      {
+        "timestamp": 1787054400,
+        "avgHighPrice": 353,
+        "avgLowPrice": 350,
+        "highPriceVolume": 443742,
+        "lowPriceVolume": 447795
+      },
+      {
+        "timestamp": 1787076000,
+        "avgHighPrice": 348,
+        "avgLowPrice": 340,
+        "highPriceVolume": 674619,
+        "lowPriceVolume": 274318
+      },
+      {
+        "timestamp": 1787097600,
+        "avgHighPrice": 349,
+        "avgLowPrice": 342,
+        "highPriceVolume": 380642,
+        "lowPriceVolume": 125883
+      },
+      {
+        "timestamp": 1787119200,
+        "avgHighPrice": 348,
+        "avgLowPrice": 348,
+        "highPriceVolume": 403955,
+        "lowPriceVolume": 36435
+      },
+      {
+        "timestamp": 1787140800,
+        "avgHighPrice": 347,
+        "avgLowPrice": 340,
+        "highPriceVolume": 711034,
+        "lowPriceVolume": 177867
+      },
+      {
+        "timestamp": 1787162400,
+        "avgHighPrice": 337,
+        "avgLowPrice": 324,
+        "highPriceVolume": 835204,
+        "lowPriceVolume": 454112
+      },
+      {
+        "timestamp": 1787184000,
+        "avgHighPrice": 342,
+        "avgLowPrice": 334,
+        "highPriceVolume": 589277,
+        "lowPriceVolume": 115443
+      },
+      {
+        "timestamp": 1787205600,
+        "avgHighPrice": 344,
+        "avgLowPrice": 339,
+        "highPriceVolume": 606709,
+        "lowPriceVolume": 206193
+      },
+      {
+        "timestamp": 1787227200,
+        "avgHighPrice": 345,
+        "avgLowPrice": 338,
+        "highPriceVolume": 600159,
+        "lowPriceVolume": 189056
+      },
+      {
+        "timestamp": 1787248800,
+        "avgHighPrice": 341,
+        "avgLowPrice": 334,
+        "highPriceVolume": 549707,
+        "lowPriceVolume": 192814
+      },
+      {
+        "timestamp": 1787270400,
+        "avgHighPrice": 338,
+        "avgLowPrice": 333,
+        "highPriceVolume": 435597,
+        "lowPriceVolume": 269791
+      },
+      {
+        "timestamp": 1787292000,
+        "avgHighPrice": 341,
+        "avgLowPrice": 331,
+        "highPriceVolume": 532681,
+        "lowPriceVolume": 392352
+      },
+      {
+        "timestamp": 1787313600,
+        "avgHighPrice": 340,
+        "avgLowPrice": 336,
+        "highPriceVolume": 628862,
+        "lowPriceVolume": 247432
+      },
+      {
+        "timestamp": 1787335200,
+        "avgHighPrice": 343,
+        "avgLowPrice": 331,
+        "highPriceVolume": 734172,
+        "lowPriceVolume": 323998
+      },
+      {
+        "timestamp": 1787356800,
+        "avgHighPrice": 335,
+        "avgLowPrice": 336,
+        "highPriceVolume": 530065,
+        "lowPriceVolume": 217865
+      },
+      {
+        "timestamp": 1787378400,
+        "avgHighPrice": 345,
+        "avgLowPrice": 344,
+        "highPriceVolume": 271023,
+        "lowPriceVolume": 84266
+      },
+      {
+        "timestamp": 1787400000,
+        "avgHighPrice": 347,
+        "avgLowPrice": 343,
+        "highPriceVolume": 537759,
+        "lowPriceVolume": 236104
+      },
+      {
+        "timestamp": 1787421600,
+        "avgHighPrice": 345,
+        "avgLowPrice": 342,
+        "highPriceVolume": 686463,
+        "lowPriceVolume": 260381
+      },
+      {
+        "timestamp": 1787443200,
+        "avgHighPrice": 344,
+        "avgLowPrice": 340,
+        "highPriceVolume": 311509,
+        "lowPriceVolume": 191384
+      },
+      {
+        "timestamp": 1787464800,
+        "avgHighPrice": 349,
+        "avgLowPrice": 344,
+        "highPriceVolume": 177524,
+        "lowPriceVolume": 302940
+      },
+      {
+        "timestamp": 1787486400,
+        "avgHighPrice": 350,
+        "avgLowPrice": 345,
+        "highPriceVolume": 720667,
+        "lowPriceVolume": 512876
+      },
+      {
+        "timestamp": 1787508000,
+        "avgHighPrice": 350,
+        "avgLowPrice": 348,
+        "highPriceVolume": 428263,
+        "lowPriceVolume": 255283
+      },
+      {
+        "timestamp": 1787529600,
+        "avgHighPrice": 350,
+        "avgLowPrice": 346,
+        "highPriceVolume": 514154,
+        "lowPriceVolume": 150547
+      },
+      {
+        "timestamp": 1787551200,
+        "avgHighPrice": 353,
+        "avgLowPrice": 350,
+        "highPriceVolume": 287393,
+        "lowPriceVolume": 259225
+      },
+      {
+        "timestamp": 1787572800,
+        "avgHighPrice": 350,
+        "avgLowPrice": 347,
+        "highPriceVolume": 582942,
+        "lowPriceVolume": 249344
+      },
+      {
+        "timestamp": 1787594400,
+        "avgHighPrice": 351,
+        "avgLowPrice": 347,
+        "highPriceVolume": 713740,
+        "lowPriceVolume": 444314
+      },
+      {
+        "timestamp": 1787616000,
+        "avgHighPrice": 349,
+        "avgLowPrice": 348,
+        "highPriceVolume": 516495,
+        "lowPriceVolume": 165186
+      },
+      {
+        "timestamp": 1787637600,
+        "avgHighPrice": 356,
+        "avgLowPrice": 351,
+        "highPriceVolume": 255006,
+        "lowPriceVolume": 300441
+      },
+      {
+        "timestamp": 1787659200,
+        "avgHighPrice": 356,
+        "avgLowPrice": 351,
+        "highPriceVolume": 538044,
+        "lowPriceVolume": 258957
+      },
+      {
+        "timestamp": 1787680800,
+        "avgHighPrice": 353,
+        "avgLowPrice": 350,
+        "highPriceVolume": 833084,
+        "lowPriceVolume": 175425
+      },
+      {
+        "timestamp": 1787702400,
+        "avgHighPrice": 351,
+        "avgLowPrice": 347,
+        "highPriceVolume": 777315,
+        "lowPriceVolume": 268283
+      },
+      {
+        "timestamp": 1787724000,
+        "avgHighPrice": 352,
+        "avgLowPrice": 351,
+        "highPriceVolume": 490755,
+        "lowPriceVolume": 87015
+      },
+      {
+        "timestamp": 1787745600,
+        "avgHighPrice": 352,
+        "avgLowPrice": 349,
+        "highPriceVolume": 631694,
+        "lowPriceVolume": 378081
+      },
+      {
+        "timestamp": 1787767200,
+        "avgHighPrice": 355,
+        "avgLowPrice": 348,
+        "highPriceVolume": 714333,
+        "lowPriceVolume": 415491
+      },
+      {
+        "timestamp": 1787788800,
+        "avgHighPrice": 351,
+        "avgLowPrice": 346,
+        "highPriceVolume": 641065,
+        "lowPriceVolume": 490942
+      },
+      {
+        "timestamp": 1787810400,
+        "avgHighPrice": 356,
+        "avgLowPrice": 353,
+        "highPriceVolume": 207160,
+        "lowPriceVolume": 357436
+      },
+      {
+        "timestamp": 1787832000,
+        "avgHighPrice": 351,
+        "avgLowPrice": 348,
+        "highPriceVolume": 445532,
+        "lowPriceVolume": 288588
+      },
+      {
+        "timestamp": 1787853600,
+        "avgHighPrice": 356,
+        "avgLowPrice": 350,
+        "highPriceVolume": 644882,
+        "lowPriceVolume": 419175
+      },
+      {
+        "timestamp": 1787875200,
+        "avgHighPrice": 352,
+        "avgLowPrice": 349,
+        "highPriceVolume": 610591,
+        "lowPriceVolume": 211491
+      },
+      {
+        "timestamp": 1787896800,
+        "avgHighPrice": 359,
+        "avgLowPrice": 355,
+        "highPriceVolume": 420122,
+        "lowPriceVolume": 148422
+      },
+      {
+        "timestamp": 1787918400,
+        "avgHighPrice": 357,
+        "avgLowPrice": 355,
+        "highPriceVolume": 404280,
+        "lowPriceVolume": 309575
+      },
+      {
+        "timestamp": 1787940000,
+        "avgHighPrice": 362,
+        "avgLowPrice": 355,
+        "highPriceVolume": 636569,
+        "lowPriceVolume": 390164
+      },
+      {
+        "timestamp": 1787961600,
+        "avgHighPrice": 357,
+        "avgLowPrice": 346,
+        "highPriceVolume": 413130,
+        "lowPriceVolume": 322039
+      },
+      {
+        "timestamp": 1787983200,
+        "avgHighPrice": 351,
+        "avgLowPrice": 348,
+        "highPriceVolume": 360987,
+        "lowPriceVolume": 341573
+      },
+      {
+        "timestamp": 1788004800,
+        "avgHighPrice": 359,
+        "avgLowPrice": 355,
+        "highPriceVolume": 524885,
+        "lowPriceVolume": 295877
+      },
+      {
+        "timestamp": 1788026400,
+        "avgHighPrice": 361,
+        "avgLowPrice": 357,
+        "highPriceVolume": 511559,
+        "lowPriceVolume": 146548
+      },
+      {
+        "timestamp": 1788048000,
+        "avgHighPrice": 355,
+        "avgLowPrice": 349,
+        "highPriceVolume": 442864,
+        "lowPriceVolume": 686362
+      },
+      {
+        "timestamp": 1788069600,
+        "avgHighPrice": 361,
+        "avgLowPrice": 356,
+        "highPriceVolume": 244545,
+        "lowPriceVolume": 291107
+      },
+      {
+        "timestamp": 1788091200,
+        "avgHighPrice": 359,
+        "avgLowPrice": 353,
+        "highPriceVolume": 385521,
+        "lowPriceVolume": 417241
+      },
+      {
+        "timestamp": 1788112800,
+        "avgHighPrice": 355,
+        "avgLowPrice": 351,
+        "highPriceVolume": 542469,
+        "lowPriceVolume": 442662
+      },
+      {
+        "timestamp": 1788134400,
+        "avgHighPrice": 358,
+        "avgLowPrice": 354,
+        "highPriceVolume": 578437,
+        "lowPriceVolume": 305936
+      },
+      {
+        "timestamp": 1788156000,
+        "avgHighPrice": 356,
+        "avgLowPrice": 351,
+        "highPriceVolume": 369206,
+        "lowPriceVolume": 474815
+      },
+      {
+        "timestamp": 1788177600,
+        "avgHighPrice": 361,
+        "avgLowPrice": 357,
+        "highPriceVolume": 364653,
+        "lowPriceVolume": 131619
+      }
+    ]
+  },
   "25975": {
     "fetchedAt": 1788180152360,
     "data": [
@@ -220527,6 +224752,851 @@
         "avgLowPrice": 1478045,
         "highPriceVolume": 24,
         "lowPriceVolume": 33
+      }
+    ]
+  },
+  "29010": {
+    "fetchedAt": 1788207064399,
+    "data": [
+      {
+        "timestamp": 1785607200,
+        "avgHighPrice": 843888,
+        "avgLowPrice": 833691,
+        "highPriceVolume": 53,
+        "lowPriceVolume": 41
+      },
+      {
+        "timestamp": 1785628800,
+        "avgHighPrice": 835967,
+        "avgLowPrice": 828113,
+        "highPriceVolume": 23,
+        "lowPriceVolume": 66
+      },
+      {
+        "timestamp": 1785650400,
+        "avgHighPrice": 832875,
+        "avgLowPrice": 825487,
+        "highPriceVolume": 24,
+        "lowPriceVolume": 34
+      },
+      {
+        "timestamp": 1785672000,
+        "avgHighPrice": 805530,
+        "avgLowPrice": 781665,
+        "highPriceVolume": 35,
+        "lowPriceVolume": 48
+      },
+      {
+        "timestamp": 1785693600,
+        "avgHighPrice": 820359,
+        "avgLowPrice": 791374,
+        "highPriceVolume": 59,
+        "lowPriceVolume": 54
+      },
+      {
+        "timestamp": 1785715200,
+        "avgHighPrice": 839349,
+        "avgLowPrice": 804598,
+        "highPriceVolume": 24,
+        "lowPriceVolume": 34
+      },
+      {
+        "timestamp": 1785736800,
+        "avgHighPrice": 850789,
+        "avgLowPrice": 826390,
+        "highPriceVolume": 15,
+        "lowPriceVolume": 22
+      },
+      {
+        "timestamp": 1785758400,
+        "avgHighPrice": 861129,
+        "avgLowPrice": 824694,
+        "highPriceVolume": 38,
+        "lowPriceVolume": 65
+      },
+      {
+        "timestamp": 1785780000,
+        "avgHighPrice": 862963,
+        "avgLowPrice": 839619,
+        "highPriceVolume": 42,
+        "lowPriceVolume": 76
+      },
+      {
+        "timestamp": 1785801600,
+        "avgHighPrice": 841206,
+        "avgLowPrice": 812398,
+        "highPriceVolume": 22,
+        "lowPriceVolume": 46
+      },
+      {
+        "timestamp": 1785823200,
+        "avgHighPrice": 835816,
+        "avgLowPrice": 814009,
+        "highPriceVolume": 10,
+        "lowPriceVolume": 48
+      },
+      {
+        "timestamp": 1785844800,
+        "avgHighPrice": 848153,
+        "avgLowPrice": 813115,
+        "highPriceVolume": 24,
+        "lowPriceVolume": 42
+      },
+      {
+        "timestamp": 1785866400,
+        "avgHighPrice": 825921,
+        "avgLowPrice": 814428,
+        "highPriceVolume": 31,
+        "lowPriceVolume": 57
+      },
+      {
+        "timestamp": 1785888000,
+        "avgHighPrice": 832690,
+        "avgLowPrice": 812471,
+        "highPriceVolume": 63,
+        "lowPriceVolume": 58
+      },
+      {
+        "timestamp": 1785909600,
+        "avgHighPrice": 824854,
+        "avgLowPrice": 794658,
+        "highPriceVolume": 19,
+        "lowPriceVolume": 34
+      },
+      {
+        "timestamp": 1785931200,
+        "avgHighPrice": 821834,
+        "avgLowPrice": 796653,
+        "highPriceVolume": 27,
+        "lowPriceVolume": 35
+      },
+      {
+        "timestamp": 1785952800,
+        "avgHighPrice": 816268,
+        "avgLowPrice": 802795,
+        "highPriceVolume": 39,
+        "lowPriceVolume": 64
+      },
+      {
+        "timestamp": 1785974400,
+        "avgHighPrice": 822686,
+        "avgLowPrice": 806489,
+        "highPriceVolume": 23,
+        "lowPriceVolume": 70
+      },
+      {
+        "timestamp": 1785996000,
+        "avgHighPrice": 817879,
+        "avgLowPrice": 799667,
+        "highPriceVolume": 11,
+        "lowPriceVolume": 37
+      },
+      {
+        "timestamp": 1786017600,
+        "avgHighPrice": 829538,
+        "avgLowPrice": 808590,
+        "highPriceVolume": 18,
+        "lowPriceVolume": 34
+      },
+      {
+        "timestamp": 1786039200,
+        "avgHighPrice": 826985,
+        "avgLowPrice": 803138,
+        "highPriceVolume": 39,
+        "lowPriceVolume": 62
+      },
+      {
+        "timestamp": 1786060800,
+        "avgHighPrice": 824281,
+        "avgLowPrice": 805458,
+        "highPriceVolume": 38,
+        "lowPriceVolume": 55
+      },
+      {
+        "timestamp": 1786082400,
+        "avgHighPrice": 816612,
+        "avgLowPrice": 795619,
+        "highPriceVolume": 23,
+        "lowPriceVolume": 24
+      },
+      {
+        "timestamp": 1786104000,
+        "avgHighPrice": 819204,
+        "avgLowPrice": 791260,
+        "highPriceVolume": 40,
+        "lowPriceVolume": 66
+      },
+      {
+        "timestamp": 1786125600,
+        "avgHighPrice": 824037,
+        "avgLowPrice": 811697,
+        "highPriceVolume": 35,
+        "lowPriceVolume": 69
+      },
+      {
+        "timestamp": 1786147200,
+        "avgHighPrice": 825680,
+        "avgLowPrice": 811806,
+        "highPriceVolume": 45,
+        "lowPriceVolume": 58
+      },
+      {
+        "timestamp": 1786168800,
+        "avgHighPrice": 795499,
+        "avgLowPrice": 770346,
+        "highPriceVolume": 23,
+        "lowPriceVolume": 21
+      },
+      {
+        "timestamp": 1786190400,
+        "avgHighPrice": 820531,
+        "avgLowPrice": 794278,
+        "highPriceVolume": 18,
+        "lowPriceVolume": 63
+      },
+      {
+        "timestamp": 1786212000,
+        "avgHighPrice": 812882,
+        "avgLowPrice": 801347,
+        "highPriceVolume": 28,
+        "lowPriceVolume": 56
+      },
+      {
+        "timestamp": 1786233600,
+        "avgHighPrice": 823244,
+        "avgLowPrice": 799751,
+        "highPriceVolume": 57,
+        "lowPriceVolume": 34
+      },
+      {
+        "timestamp": 1786255200,
+        "avgHighPrice": 819356,
+        "avgLowPrice": 796361,
+        "highPriceVolume": 21,
+        "lowPriceVolume": 32
+      },
+      {
+        "timestamp": 1786276800,
+        "avgHighPrice": 816006,
+        "avgLowPrice": 799515,
+        "highPriceVolume": 34,
+        "lowPriceVolume": 94
+      },
+      {
+        "timestamp": 1786298400,
+        "avgHighPrice": 820396,
+        "avgLowPrice": 797585,
+        "highPriceVolume": 57,
+        "lowPriceVolume": 71
+      },
+      {
+        "timestamp": 1786320000,
+        "avgHighPrice": 816858,
+        "avgLowPrice": 791904,
+        "highPriceVolume": 32,
+        "lowPriceVolume": 70
+      },
+      {
+        "timestamp": 1786341600,
+        "avgHighPrice": 812575,
+        "avgLowPrice": 791685,
+        "highPriceVolume": 19,
+        "lowPriceVolume": 23
+      },
+      {
+        "timestamp": 1786363200,
+        "avgHighPrice": 821571,
+        "avgLowPrice": 793222,
+        "highPriceVolume": 25,
+        "lowPriceVolume": 34
+      },
+      {
+        "timestamp": 1786384800,
+        "avgHighPrice": 811282,
+        "avgLowPrice": 781813,
+        "highPriceVolume": 20,
+        "lowPriceVolume": 60
+      },
+      {
+        "timestamp": 1786406400,
+        "avgHighPrice": 819373,
+        "avgLowPrice": 798716,
+        "highPriceVolume": 26,
+        "lowPriceVolume": 47
+      },
+      {
+        "timestamp": 1786428000,
+        "avgHighPrice": 812570,
+        "avgLowPrice": 787753,
+        "highPriceVolume": 16,
+        "lowPriceVolume": 24
+      },
+      {
+        "timestamp": 1786449600,
+        "avgHighPrice": 824636,
+        "avgLowPrice": 815513,
+        "highPriceVolume": 19,
+        "lowPriceVolume": 45
+      },
+      {
+        "timestamp": 1786471200,
+        "avgHighPrice": 828077,
+        "avgLowPrice": 818311,
+        "highPriceVolume": 36,
+        "lowPriceVolume": 54
+      },
+      {
+        "timestamp": 1786492800,
+        "avgHighPrice": 827613,
+        "avgLowPrice": 811535,
+        "highPriceVolume": 27,
+        "lowPriceVolume": 72
+      },
+      {
+        "timestamp": 1786514400,
+        "avgHighPrice": 824667,
+        "avgLowPrice": 809520,
+        "highPriceVolume": 23,
+        "lowPriceVolume": 15
+      },
+      {
+        "timestamp": 1786536000,
+        "avgHighPrice": 813172,
+        "avgLowPrice": 792877,
+        "highPriceVolume": 23,
+        "lowPriceVolume": 34
+      },
+      {
+        "timestamp": 1786557600,
+        "avgHighPrice": 791376,
+        "avgLowPrice": 776051,
+        "highPriceVolume": 27,
+        "lowPriceVolume": 38
+      },
+      {
+        "timestamp": 1786579200,
+        "avgHighPrice": 816331,
+        "avgLowPrice": 794546,
+        "highPriceVolume": 22,
+        "lowPriceVolume": 46
+      },
+      {
+        "timestamp": 1786600800,
+        "avgHighPrice": 812060,
+        "avgLowPrice": 781965,
+        "highPriceVolume": 15,
+        "lowPriceVolume": 19
+      },
+      {
+        "timestamp": 1786622400,
+        "avgHighPrice": 802734,
+        "avgLowPrice": 773391,
+        "highPriceVolume": 40,
+        "lowPriceVolume": 35
+      },
+      {
+        "timestamp": 1786644000,
+        "avgHighPrice": 810015,
+        "avgLowPrice": 795190,
+        "highPriceVolume": 46,
+        "lowPriceVolume": 59
+      },
+      {
+        "timestamp": 1786665600,
+        "avgHighPrice": 810090,
+        "avgLowPrice": 787913,
+        "highPriceVolume": 29,
+        "lowPriceVolume": 47
+      },
+      {
+        "timestamp": 1786687200,
+        "avgHighPrice": 815286,
+        "avgLowPrice": 787028,
+        "highPriceVolume": 18,
+        "lowPriceVolume": 37
+      },
+      {
+        "timestamp": 1786708800,
+        "avgHighPrice": 804711,
+        "avgLowPrice": 791049,
+        "highPriceVolume": 33,
+        "lowPriceVolume": 35
+      },
+      {
+        "timestamp": 1786730400,
+        "avgHighPrice": 804515,
+        "avgLowPrice": 788942,
+        "highPriceVolume": 38,
+        "lowPriceVolume": 48
+      },
+      {
+        "timestamp": 1786752000,
+        "avgHighPrice": 805430,
+        "avgLowPrice": 794364,
+        "highPriceVolume": 42,
+        "lowPriceVolume": 56
+      },
+      {
+        "timestamp": 1786773600,
+        "avgHighPrice": 817504,
+        "avgLowPrice": 788647,
+        "highPriceVolume": 23,
+        "lowPriceVolume": 26
+      },
+      {
+        "timestamp": 1786795200,
+        "avgHighPrice": 807784,
+        "avgLowPrice": 784818,
+        "highPriceVolume": 23,
+        "lowPriceVolume": 51
+      },
+      {
+        "timestamp": 1786816800,
+        "avgHighPrice": 809425,
+        "avgLowPrice": 781519,
+        "highPriceVolume": 44,
+        "lowPriceVolume": 46
+      },
+      {
+        "timestamp": 1786838400,
+        "avgHighPrice": 808282,
+        "avgLowPrice": 780700,
+        "highPriceVolume": 54,
+        "lowPriceVolume": 61
+      },
+      {
+        "timestamp": 1786860000,
+        "avgHighPrice": 812988,
+        "avgLowPrice": 806059,
+        "highPriceVolume": 38,
+        "lowPriceVolume": 33
+      },
+      {
+        "timestamp": 1786881600,
+        "avgHighPrice": 817699,
+        "avgLowPrice": 803026,
+        "highPriceVolume": 31,
+        "lowPriceVolume": 71
+      },
+      {
+        "timestamp": 1786903200,
+        "avgHighPrice": 792544,
+        "avgLowPrice": 781421,
+        "highPriceVolume": 31,
+        "lowPriceVolume": 83
+      },
+      {
+        "timestamp": 1786924800,
+        "avgHighPrice": 810642,
+        "avgLowPrice": 796953,
+        "highPriceVolume": 26,
+        "lowPriceVolume": 64
+      },
+      {
+        "timestamp": 1786946400,
+        "avgHighPrice": 804741,
+        "avgLowPrice": 778836,
+        "highPriceVolume": 20,
+        "lowPriceVolume": 35
+      },
+      {
+        "timestamp": 1786968000,
+        "avgHighPrice": 809278,
+        "avgLowPrice": 790218,
+        "highPriceVolume": 29,
+        "lowPriceVolume": 40
+      },
+      {
+        "timestamp": 1786989600,
+        "avgHighPrice": 810269,
+        "avgLowPrice": 789672,
+        "highPriceVolume": 39,
+        "lowPriceVolume": 60
+      },
+      {
+        "timestamp": 1787011200,
+        "avgHighPrice": 803729,
+        "avgLowPrice": 775579,
+        "highPriceVolume": 29,
+        "lowPriceVolume": 88
+      },
+      {
+        "timestamp": 1787032800,
+        "avgHighPrice": 810956,
+        "avgLowPrice": 785071,
+        "highPriceVolume": 21,
+        "lowPriceVolume": 46
+      },
+      {
+        "timestamp": 1787054400,
+        "avgHighPrice": 801180,
+        "avgLowPrice": 778598,
+        "highPriceVolume": 27,
+        "lowPriceVolume": 41
+      },
+      {
+        "timestamp": 1787076000,
+        "avgHighPrice": 815196,
+        "avgLowPrice": 793197,
+        "highPriceVolume": 34,
+        "lowPriceVolume": 71
+      },
+      {
+        "timestamp": 1787097600,
+        "avgHighPrice": 824395,
+        "avgLowPrice": 800585,
+        "highPriceVolume": 41,
+        "lowPriceVolume": 63
+      },
+      {
+        "timestamp": 1787119200,
+        "avgHighPrice": 816173,
+        "avgLowPrice": 797378,
+        "highPriceVolume": 31,
+        "lowPriceVolume": 39
+      },
+      {
+        "timestamp": 1787140800,
+        "avgHighPrice": 814128,
+        "avgLowPrice": 793761,
+        "highPriceVolume": 35,
+        "lowPriceVolume": 40
+      },
+      {
+        "timestamp": 1787162400,
+        "avgHighPrice": 834564,
+        "avgLowPrice": 807722,
+        "highPriceVolume": 42,
+        "lowPriceVolume": 49
+      },
+      {
+        "timestamp": 1787184000,
+        "avgHighPrice": 829072,
+        "avgLowPrice": 804254,
+        "highPriceVolume": 41,
+        "lowPriceVolume": 59
+      },
+      {
+        "timestamp": 1787205600,
+        "avgHighPrice": 835442,
+        "avgLowPrice": 808257,
+        "highPriceVolume": 17,
+        "lowPriceVolume": 38
+      },
+      {
+        "timestamp": 1787227200,
+        "avgHighPrice": 831664,
+        "avgLowPrice": 803530,
+        "highPriceVolume": 17,
+        "lowPriceVolume": 54
+      },
+      {
+        "timestamp": 1787248800,
+        "avgHighPrice": 829618,
+        "avgLowPrice": 815505,
+        "highPriceVolume": 56,
+        "lowPriceVolume": 50
+      },
+      {
+        "timestamp": 1787270400,
+        "avgHighPrice": 834280,
+        "avgLowPrice": 816649,
+        "highPriceVolume": 31,
+        "lowPriceVolume": 55
+      },
+      {
+        "timestamp": 1787292000,
+        "avgHighPrice": 829459,
+        "avgLowPrice": 823520,
+        "highPriceVolume": 16,
+        "lowPriceVolume": 24
+      },
+      {
+        "timestamp": 1787313600,
+        "avgHighPrice": 831049,
+        "avgLowPrice": 820062,
+        "highPriceVolume": 32,
+        "lowPriceVolume": 35
+      },
+      {
+        "timestamp": 1787335200,
+        "avgHighPrice": 830082,
+        "avgLowPrice": 820743,
+        "highPriceVolume": 45,
+        "lowPriceVolume": 62
+      },
+      {
+        "timestamp": 1787356800,
+        "avgHighPrice": 831673,
+        "avgLowPrice": 802010,
+        "highPriceVolume": 37,
+        "lowPriceVolume": 51
+      },
+      {
+        "timestamp": 1787378400,
+        "avgHighPrice": 838340,
+        "avgLowPrice": 827153,
+        "highPriceVolume": 19,
+        "lowPriceVolume": 23
+      },
+      {
+        "timestamp": 1787400000,
+        "avgHighPrice": 825359,
+        "avgLowPrice": 792700,
+        "highPriceVolume": 39,
+        "lowPriceVolume": 38
+      },
+      {
+        "timestamp": 1787421600,
+        "avgHighPrice": 831166,
+        "avgLowPrice": 822387,
+        "highPriceVolume": 39,
+        "lowPriceVolume": 76
+      },
+      {
+        "timestamp": 1787443200,
+        "avgHighPrice": 829764,
+        "avgLowPrice": 800262,
+        "highPriceVolume": 47,
+        "lowPriceVolume": 45
+      },
+      {
+        "timestamp": 1787464800,
+        "avgHighPrice": 820560,
+        "avgLowPrice": 808426,
+        "highPriceVolume": 12,
+        "lowPriceVolume": 30
+      },
+      {
+        "timestamp": 1787486400,
+        "avgHighPrice": 831931,
+        "avgLowPrice": 819101,
+        "highPriceVolume": 33,
+        "lowPriceVolume": 48
+      },
+      {
+        "timestamp": 1787508000,
+        "avgHighPrice": 826321,
+        "avgLowPrice": 802126,
+        "highPriceVolume": 43,
+        "lowPriceVolume": 49
+      },
+      {
+        "timestamp": 1787529600,
+        "avgHighPrice": 824372,
+        "avgLowPrice": 798976,
+        "highPriceVolume": 20,
+        "lowPriceVolume": 36
+      },
+      {
+        "timestamp": 1787551200,
+        "avgHighPrice": 831844,
+        "avgLowPrice": 810605,
+        "highPriceVolume": 17,
+        "lowPriceVolume": 16
+      },
+      {
+        "timestamp": 1787572800,
+        "avgHighPrice": 822068,
+        "avgLowPrice": 802444,
+        "highPriceVolume": 15,
+        "lowPriceVolume": 33
+      },
+      {
+        "timestamp": 1787594400,
+        "avgHighPrice": 825409,
+        "avgLowPrice": 805220,
+        "highPriceVolume": 23,
+        "lowPriceVolume": 34
+      },
+      {
+        "timestamp": 1787616000,
+        "avgHighPrice": 823674,
+        "avgLowPrice": 804727,
+        "highPriceVolume": 23,
+        "lowPriceVolume": 40
+      },
+      {
+        "timestamp": 1787637600,
+        "avgHighPrice": 827282,
+        "avgLowPrice": 799138,
+        "highPriceVolume": 28,
+        "lowPriceVolume": 26
+      },
+      {
+        "timestamp": 1787659200,
+        "avgHighPrice": 814118,
+        "avgLowPrice": 802907,
+        "highPriceVolume": 32,
+        "lowPriceVolume": 52
+      },
+      {
+        "timestamp": 1787680800,
+        "avgHighPrice": 820692,
+        "avgLowPrice": 800747,
+        "highPriceVolume": 30,
+        "lowPriceVolume": 36
+      },
+      {
+        "timestamp": 1787702400,
+        "avgHighPrice": 822805,
+        "avgLowPrice": 804538,
+        "highPriceVolume": 27,
+        "lowPriceVolume": 42
+      },
+      {
+        "timestamp": 1787724000,
+        "avgHighPrice": 829998,
+        "avgLowPrice": 817017,
+        "highPriceVolume": 16,
+        "lowPriceVolume": 30
+      },
+      {
+        "timestamp": 1787745600,
+        "avgHighPrice": 824974,
+        "avgLowPrice": 810252,
+        "highPriceVolume": 18,
+        "lowPriceVolume": 35
+      },
+      {
+        "timestamp": 1787767200,
+        "avgHighPrice": 814200,
+        "avgLowPrice": 803410,
+        "highPriceVolume": 28,
+        "lowPriceVolume": 42
+      },
+      {
+        "timestamp": 1787788800,
+        "avgHighPrice": 824850,
+        "avgLowPrice": 805099,
+        "highPriceVolume": 24,
+        "lowPriceVolume": 29
+      },
+      {
+        "timestamp": 1787810400,
+        "avgHighPrice": 812836,
+        "avgLowPrice": 782325,
+        "highPriceVolume": 6,
+        "lowPriceVolume": 22
+      },
+      {
+        "timestamp": 1787832000,
+        "avgHighPrice": 816967,
+        "avgLowPrice": 790472,
+        "highPriceVolume": 25,
+        "lowPriceVolume": 37
+      },
+      {
+        "timestamp": 1787853600,
+        "avgHighPrice": 814552,
+        "avgLowPrice": 791921,
+        "highPriceVolume": 28,
+        "lowPriceVolume": 57
+      },
+      {
+        "timestamp": 1787875200,
+        "avgHighPrice": 816043,
+        "avgLowPrice": 797631,
+        "highPriceVolume": 13,
+        "lowPriceVolume": 39
+      },
+      {
+        "timestamp": 1787896800,
+        "avgHighPrice": 802561,
+        "avgLowPrice": 789500,
+        "highPriceVolume": 5,
+        "lowPriceVolume": 21
+      },
+      {
+        "timestamp": 1787918400,
+        "avgHighPrice": 820130,
+        "avgLowPrice": 793108,
+        "highPriceVolume": 28,
+        "lowPriceVolume": 50
+      },
+      {
+        "timestamp": 1787940000,
+        "avgHighPrice": 821364,
+        "avgLowPrice": 798230,
+        "highPriceVolume": 33,
+        "lowPriceVolume": 35
+      },
+      {
+        "timestamp": 1787961600,
+        "avgHighPrice": 811236,
+        "avgLowPrice": 793062,
+        "highPriceVolume": 23,
+        "lowPriceVolume": 46
+      },
+      {
+        "timestamp": 1787983200,
+        "avgHighPrice": 828500,
+        "avgLowPrice": 812904,
+        "highPriceVolume": 14,
+        "lowPriceVolume": 29
+      },
+      {
+        "timestamp": 1788004800,
+        "avgHighPrice": 816840,
+        "avgLowPrice": 788347,
+        "highPriceVolume": 22,
+        "lowPriceVolume": 67
+      },
+      {
+        "timestamp": 1788026400,
+        "avgHighPrice": 818475,
+        "avgLowPrice": 799869,
+        "highPriceVolume": 28,
+        "lowPriceVolume": 44
+      },
+      {
+        "timestamp": 1788048000,
+        "avgHighPrice": 815632,
+        "avgLowPrice": 790050,
+        "highPriceVolume": 32,
+        "lowPriceVolume": 38
+      },
+      {
+        "timestamp": 1788069600,
+        "avgHighPrice": 814737,
+        "avgLowPrice": 802727,
+        "highPriceVolume": 27,
+        "lowPriceVolume": 32
+      },
+      {
+        "timestamp": 1788091200,
+        "avgHighPrice": 824618,
+        "avgLowPrice": 813823,
+        "highPriceVolume": 33,
+        "lowPriceVolume": 45
+      },
+      {
+        "timestamp": 1788112800,
+        "avgHighPrice": 824304,
+        "avgLowPrice": 813328,
+        "highPriceVolume": 37,
+        "lowPriceVolume": 68
+      },
+      {
+        "timestamp": 1788134400,
+        "avgHighPrice": 827374,
+        "avgLowPrice": 812271,
+        "highPriceVolume": 24,
+        "lowPriceVolume": 58
+      },
+      {
+        "timestamp": 1788156000,
+        "avgHighPrice": 832887,
+        "avgLowPrice": 809757,
+        "highPriceVolume": 14,
+        "lowPriceVolume": 32
+      },
+      {
+        "timestamp": 1788177600,
+        "avgHighPrice": 822919,
+        "avgLowPrice": 793973,
+        "highPriceVolume": 20,
+        "lowPriceVolume": 41
       }
     ]
   },
