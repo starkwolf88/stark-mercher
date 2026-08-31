@@ -14,10 +14,10 @@
 
 - `stark-mercher.ts` — main plugin class, settings, state, `onEnable`, `onGameTick`, `tickLogic`.
 - `general/timing.ts` — `setAction`, `canPerformAction`, `shouldWait`; tick-based action throttling with backwards-tick recovery.
-- `general/state.ts` — `sanityCheckState` (stub — add per-field stale-state corrections here as state is introduced).
+- `general/state.ts` — `sanityCheckState` (per-tick stale-state auto-correction: clears stale `abortSlotInfo`, resets phase when active flow is gone, clears stale `logoutComplete`), `resetInFlightActionState` (clears auto-loop flows + test flows + idle-for-break flags + cache reconciliation flags on hop/break/login transitions).
 - `general/lifecycle.ts` — `onEnable`, `terminate` helpers; resets all state including auto-loop state and hop state.
 - `general/state-persist.ts` — offer cache persistence via hidden JSON setting (mixology-style per-account). `loadOfferCache`, `saveOfferCache`, `OfferCacheData`, `OfferCacheEntry` (includes `sellQuantity` for daily profit tracking).
-- `general/state.ts` — `sanityCheckState` (stub), `resetInFlightActionState` (clears auto-loop flows + test flows on hop/break/login transitions).
+- `general/state.ts` — `sanityCheckState` (per-tick stale-state auto-correction), `resetInFlightActionState` (clears auto-loop flows + test flows + idle-for-break flags + cache reconciliation flags on hop/break/login transitions).
 - `general/helpers.ts` — `isPlayerIdle` (stationary + animation grace check, used by hop safe-boundary).
 - `general/debug.ts` — debug widget logging.
 - `general/variables.ts` — shared variables.
@@ -99,13 +99,13 @@ For any `bot.*` field that is added or touched, state the following in a **state
 
 Every new transient state must be reset in **all** of these places unless there is an explicit reason not to:
 1. `onEnable()`
-2. `resetInFlightActionState()` (break/hop/world transition — not yet implemented, add when needed)
+2. `resetInFlightActionState()` (break/hop/world transition — clears auto-loop flows, test flows, idle-for-break flags, cache reconciliation flags, and action throttle)
 3. The handler that naturally ends the action (e.g. flow completion, flow failure)
-4. The login/settle path if it relates to breaks or post-login UI (not yet implemented, add when needed)
+4. The login/settle path if it relates to breaks or post-login UI
 
 ### 3. Defensive invariants in `tickLogic`
 
-`sanityCheckState(bot, tick)` is called at the top of `tickLogic()`. It auto-corrects cheap stale state. New stale-state fixes go here; they must be logged.
+`sanityCheckState(bot, tick)` is called at the top of `tickLogic()`. It auto-corrects cheap stale state — clearing stale `abortSlotInfo` when no abort flow is active, resetting `phase` to `'idle'` when the corresponding flow is gone, and clearing stale `logoutComplete` when not in a break. New stale-state fixes go here; they must be logged.
 
 ### 4. Trace-first for state changes
 
@@ -195,6 +195,10 @@ When banking is implemented, the following rules apply (adapted from mixology):
 
 The `autoMode` combo setting selects between `Manual Test` (0, default) and `Auto Merch` (1). In Manual Test mode, the bot idles and only responds to the test buttons. In Auto Merch mode, the bot runs the automated merching loop after all manual test flow checks pass (so manual buttons still work in auto mode).
 
+### Startup audit
+
+On script start (`onEnable`), the bot audits the current GE state (is GE open? is offer config screen showing? which slots are occupied?). In Manual Test mode, if the offer config / search / price prompt screen is open, the bot attempts to resume a `BuyOfferFlow` using the configured test parameters. In Auto Merch mode, the bot **skips** the resume (the item being bought came from `merchableItems.json`, not the test settings — resuming with test parameters would place the wrong offer) and lets the auto-loop close the sub-screen with Escape on the next tick.
+
 ### Offer cache persistence
 
 The offer cache is stored in a hidden string setting `offerCacheSetting` (key `offerCache`, default `'{}'`, `hidden: true`). The cache is a JSON object keyed by in-game player name, each containing a per-account `OfferCacheData` map from item name to `OfferCacheEntry`. This mirrors the mixology bot's `humanizationState` persistence pattern.
@@ -213,13 +217,14 @@ The JSON is imported at the top of `data/merchable-items.ts` and inlined by esbu
 `autoLoopTick(bot, tick)` runs one tick of the loop:
 
 1. **GE-open check (first)**: If GE is not open, walk to GE if not nearby, then open via `openGe()` (which tries the nearest of clerk NPC or "Exchange" booth object). This is the very first automated operation.
-2. **Defer to active flows**: If a buy/sell/abort flow is in progress, tick it and return.
-3. **Get all slot states**: `auditGeState()` reads all 8 slots via cached widget children.
-4. **Collect**: If any slot has `status === 'completed_or_aborted'`, click collect and return. Completed sell offers are NOT removed from the cache — entries are kept for buy-limit tracking (see below).
-5. **Stale offers**: For each active slot, check stale conditions (sell: 75% ETA + <25% sold; buy: 100% ETA + 0 bought, or 75% ETA + <50% bought for multi-qty; aggressive abort if item no longer in merchableItems.json). Start an `AbortOfferFlow` if stale.
-6. **Selling**: Find empty slot + non-coin inventory item not being bought. Use cached sell price (revised if re-listing) or merchableItems.json price. Pass the actual sell quantity and the item's GE buy limit to `recordSellOffer()` for buy-limit tracking. Start a `SellOfferFlow`.
-7. **Buying**: Find empty slot + first unoccupied merchable item that is affordable AND not buy-limited (within the 4-hour GE cooldown). Record buy offer in cache. Start a `BuyOfferFlow`.
-8. **Wait**: All slots occupied or nothing to do — idle with a humanised delay.
+2. **Close GE sub-screens**: If the offer config screen, search prompt, or price prompt is open (e.g. after a script reload mid-flow or a misclick), close it with Escape via `sendKeyWithJitter`. This prevents slot clicks from landing on the sub-screen instead of the intended slot.
+3. **Defer to active flows**: If a buy/sell/abort flow is in progress, tick it and return.
+4. **Get all slot states**: `auditGeState()` reads all 8 slots via cached widget children.
+5. **Collect**: If any slot has `status === 'completed_or_aborted'`, click collect and return. Completed sell offers are NOT removed from the cache — entries are kept for buy-limit tracking (see below).
+6. **Stale offers**: For each active slot, check stale conditions (sell: 75% ETA + <25% sold; buy: 100% ETA + 0 bought, or 75% ETA + <50% bought for multi-qty; aggressive abort if item no longer in merchableItems.json). Start an `AbortOfferFlow` if stale.
+7. **Selling**: Find empty slot + non-coin inventory item not being bought. Use cached sell price (revised if re-listing) or merchableItems.json price. Pass the actual sell quantity and the item's GE buy limit to `recordSellOffer()` for buy-limit tracking. Start a `SellOfferFlow`.
+8. **Buying**: Find empty slot + first unoccupied merchable item that is affordable AND not buy-limited (within the 4-hour GE cooldown). Record buy offer in cache. Start a `BuyOfferFlow`.
+9. **Wait**: All slots occupied or nothing to do — idle with a humanised delay.
 
 ### GE 4-hour buy limit tracking
 
@@ -234,6 +239,7 @@ The GE enforces a per-item buy limit (from `merchableItems.json` `limit` field).
 - **Buying flow**: `getBuyLimitedItemNames()` returns all currently-limited item names (full limit hit + threshold-skipped). This set is passed to `getFirstUnoccupiedMerchableItem()` which skips limited items.
 - **Cache retention**: Cache entries are NOT removed when a sell completes. `clearSellFields()` resets `mode` to `'idle'` and clears `sellQuantity`, `partialSales`, and `revisedPrices`, but preserves buy-limit tracking (`totalBought`, `firstBoughtAt`, `limitReachedAt`). `recordBuyOffer()` also preserves these fields from the existing entry. The entry's mode/price fields are overwritten by the next `recordBuyOffer()`. Startup reconciliation skips entries with active buy-limit windows (totalBought > 0 within 4 hours of `firstBoughtAt`).
 - **Post-login cleanup**: On the first auto-loop tick after logging back in from a break, `cleanupExpiredIdleEntries()` removes 'idle' entries whose buy-limit window has expired (keeping the cache bounded). Expired `buyFreezeUntil` entries are also cleaned up at this point.
+- **Periodic cache cleanup**: In addition to post-login cleanup, `cleanupExpiredIdleEntries()` runs every 60 seconds during long sessions without breaks (e.g. all slots occupied, no idle time to trigger a short break). This prevents expired 'idle' and buy-freeze entries from accumulating unbounded over 24/7 operation. The cost is one cache iteration per 60 seconds — negligible.
 - **Merch history cap**: `recordMerchCycle()` trims to the most recent 200 entries per category (profits/losses) per account, preventing unbounded growth.
 
 ### Price revision strategy
@@ -387,7 +393,7 @@ Profit is tracked per-account in a hidden JSON setting (`dailyProfitSetting`, ke
 
 - **Recording**: Profit is recorded at two points, using `sellQuantity` stored in the offer cache entry:
   1. **Re-list time (Step 5)**: When an item is re-listed after an abort, `soldQty = entry.sellQuantity - item.quantity` (the difference between what was listed and what's still in inventory = what actually sold). Profit = `(entry.sellPrice - entry.buyPrice) * soldQty`. This handles partial aborts accurately.
-  2. **Completed-sell sweep (Step 3)**: Runs every tick at the top of Step 3. For each cache entry with `mode: 'sell'` and `sellQuantity > 0`, checks if the item is in any GE slot or inventory. If neither, the sell completed 100% — profit = `(entry.sellPrice - entry.buyPrice) * entry.sellQuantity`. Clears `sellQuantity` to prevent double-counting.
+  2. **Completed-sell sweep (Step 3)**: Runs every tick at the top of Step 3. A fast-path check (`cache.hasActiveSellEntries()`) skips the entire sweep when no cache entries have `mode='sell'` with `sellQuantity > 0`, avoiding per-tick inventory scans when no sells are in flight. When active sell entries exist, for each such entry, checks if the item is in any GE slot or inventory. If neither, the sell completed 100% — profit = `(entry.sellPrice - entry.buyPrice) * entry.sellQuantity`. Clears `sellQuantity` to prevent double-counting.
 - **`sellQuantity` field**: Stored in `OfferCacheEntry` when `recordSellOffer` is called. Represents the quantity currently listed in an active sell offer. Cleared by `clearSellQuantity()` after profit is recorded.
 - **Day rollover**: `getDayStartMs(now)` returns the epoch ms of midnight (00:00) for the current UK-local day. On every read (`getDailyProfit`) and write (`addDailyProfit`), the stored `dayStartedAt` is compared to the current day's midnight. If they differ, the profit is reset for the new day. This handles the script being stopped before midnight and restarted the next day.
 - **Persistence**: The state is saved to the hidden setting on every `addDailyProfit` call. It survives client restarts and plugin reloads.
@@ -436,7 +442,7 @@ GE interface, inventory items, and location all persist across hops or are trans
 ### State lifecycle
 
 - All hop fields are reset in `resetHopState` (called from `resetState` in lifecycle.ts).
-- `resetInFlightActionState` (called by `completeHop`) clears auto-loop flows and test flows.
+- `resetInFlightActionState` (called by `completeHop`) clears auto-loop flows, test flows, idle-for-break flags, and marks cache reconciliation and post-login cleanup for re-run after the transition.
 - `sessionPlayStartMs` is set to -1 when a nightly break starts, and lazily re-initialised when the player is logged in and not on a break.
 
 ### Bot fields

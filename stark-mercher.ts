@@ -564,7 +564,15 @@ export class StarkMercher extends titan.Plugin {
 
         // If we're on the offer config screen or search/price prompt, try to
         // resume a buy-offer flow using the configured test parameters.
+        // In Auto Merch mode, the item being bought came from merchableItems.json,
+        // not the test settings — resuming with test parameters would place the
+        // wrong offer. Instead, skip the resume and let the auto-loop close the
+        // sub-screen with Escape on the next tick.
         if (audit.screen === 'offer_config' || audit.screen === 'search_prompt' || audit.screen === 'price_prompt') {
+            if (this.autoMode.value === 1) {
+                titan.log('[Stark Mercher] Startup audit: GE sub-screen open in Auto Merch mode — skipping resume (auto-loop will close it)');
+                return;
+            }
             const itemName = this.testItemName.value.trim();
             const quantity = parseInt(this.testItemQty.value, 10);
             const price = parseInt(this.testItemPrice.value, 10);
@@ -640,6 +648,12 @@ export class StarkMercher extends titan.Plugin {
             this.autoLoop.sellAttemptedItems.clear();
             this.autoLoop.buyAttemptedItems.clear();
             this.autoLoop.cacheReconciled = false;
+            this.autoLoop.needsPostLoginCleanup = true;
+            // Clear idle-for-break flags — the auto-loop's idle state from
+            // before the disconnect is no longer valid.
+            this.loopIdleForBreak = false;
+            this.loopIdleSinceTick = -1;
+            this.shortBreakDelayTicks = -1;
         }
 
         // --- Startup audit ---

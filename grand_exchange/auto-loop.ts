@@ -25,10 +25,13 @@ import type { StarkMercher } from '../stark-mercher.js';
 import { setAction } from '../general/timing.js';
 import { formatQty, formatGpShort } from '../general/helpers.js';
 import { createDelay, getActiveDelayProfile, setDelayProfileForAccount } from '../antiban/humanised-delay.js';
-import { setClickJitterProfile, generateClickJitterProfile, setClickJitterDebugLog } from '../antiban/click-jitter.js';
+import { setClickJitterProfile, generateClickJitterProfile, setClickJitterDebugLog, sendKeyWithJitter } from '../antiban/click-jitter.js';
 import { BuyOfferFlow, SellOfferFlow, AbortOfferFlow } from './index.js';
 import {
     isGeOpen,
+    isOfferConfigOpen,
+    isSearchPromptShown,
+    isPricePromptShown,
     auditGeState,
     getOfferSlotState,
     offerSlotCount,
@@ -149,6 +152,11 @@ export interface AutoLoopState {
      *  the cache entry (buy offers with 0% progress have nothing to
      *  collect, so the cache entry is removed). */
     abortSlotInfo: { type: 'buy' | 'sell'; itemName: string; progress: number } | null;
+    /** Wall-clock timestamp of the last periodic cache cleanup. The cache
+     *  is cleaned every 60 seconds to remove expired 'idle' entries and
+     *  expired buy-freeze entries, keeping the cache bounded during long
+     *  sessions without breaks. */
+    lastCleanupMs: number;
 }
 
 export const createAutoLoopState = (): AutoLoopState => ({
@@ -166,6 +174,7 @@ export const createAutoLoopState = (): AutoLoopState => ({
     cacheReconciled: false,
     needsPostLoginCleanup: true,
     abortSlotInfo: null,
+    lastCleanupMs: 0,
 });
 
 // --- Helper: initialise profiles ------------------------------------------
@@ -372,6 +381,25 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             if (now >= until) loop.buyFreezeUntil.delete(name);
         }
         if (removed > 0) cache.save();
+        loop.lastCleanupMs = now;
+    }
+
+    // --- Periodic cache cleanup (every 60s) ---
+    // During long sessions without breaks (e.g. all slots occupied, no idle
+    // time to trigger a short break), expired 'idle' entries and expired
+    // buy-freeze entries can accumulate. This periodic sweep keeps the cache
+    // bounded. The cost is one cache iteration per 60 seconds — negligible.
+    const cleanupNow = Date.now();
+    if (cleanupNow - loop.lastCleanupMs >= 60_000) {
+        const removed = cache.cleanupExpiredIdleEntries();
+        for (const [name, until] of loop.buyFreezeUntil) {
+            if (cleanupNow >= until) loop.buyFreezeUntil.delete(name);
+        }
+        if (removed > 0) {
+            cache.save();
+            debugLog(bot, `Auto: periodic cache cleanup removed ${removed} expired entr${removed === 1 ? 'y' : 'ies'}`);
+        }
+        loop.lastCleanupMs = cleanupNow;
     }
 
     // --- Defer to active flows ---
@@ -489,6 +517,20 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         return true;
     }
 
+    // --- Step 1b: Close GE sub-screens ---
+    // If the offer config screen, search prompt, or price prompt is open
+    // (e.g. after a script reload mid-flow, or a misclick), close it with
+    // Escape to return to the main GE view. Without this, slot clicks would
+    // land on the sub-screen instead of the intended slot.
+    if (isOfferConfigOpen() || isSearchPromptShown() || isPricePromptShown()) {
+        debugLog(bot, 'Auto: GE sub-screen open (offer config / search / price prompt) — closing with Escape');
+        bot.statusText = 'Closing GE sub-screen';
+        sendKeyWithJitter(() => titan.keyboard.sendKey(titan.keyboard.Key.Escape), { reason: 'close GE sub-screen' });
+        const delay = createDelay(2, 30, 8);
+        setAction(bot, 'auto_close_ge_screen', delay);
+        return true;
+    }
+
     // --- Step 2: Get all slot states ---
     const audit = auditGeState();
     const slots = audit.slots;
@@ -542,9 +584,12 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     // fully and is collected, the item is no longer in any GE slot or
     // inventory. The cache entry still has mode='sell' and sellQuantity > 0.
     // We record the profit and clear sellQuantity to prevent double-counting.
-    // This runs every tick (when GE is open and no flow is active) — it's
-    // cheap: iterate cache entries, check slots + inventory.
+    // Fast-path: skip the entire sweep if no cache entries have active sell
+    // state. This avoids per-tick inventory scans for every cache entry when
+    // no sells are in flight (the common case when all slots are buys or
+    // idle).
     const playerName = bot.currentPlayerName || titan.state.client.localPlayer?.name || '';
+    if (cache.hasActiveSellEntries()) {
     for (const cacheKey of cache.getAllItemNames()) {
         const entry = cache.get(cacheKey);
         if (!entry || entry.mode !== 'sell' || entry.sellQuantity === undefined || entry.sellQuantity <= 0) continue;
@@ -593,6 +638,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         cache.save();
         debugLog(bot, `Auto: completed-sell sweep — ${cacheKey} sold 100% (${soldQty}x), profit recorded, buy-limit data preserved`);
     }
+    } // end hasActiveSellEntries fast-path
 
     if (hasCompletedOrAbortedSlot(slots)) {
         // Completed/aborted slot detected — click collect to inventory.

@@ -476,6 +476,22 @@ export class OfferCacheManager {
         return Object.keys(this.cache);
     }
 
+    /**
+     * Fast-path check: returns true if any cache entry has mode='sell' with
+     * sellQuantity > 0. Used by the auto-loop's completed-sell sweep to skip
+     * the full iteration when no sell offers are being tracked, avoiding
+     * per-tick inventory scans for every cache entry.
+     */
+    hasActiveSellEntries(): boolean {
+        for (const key of Object.keys(this.cache)) {
+            const entry = this.cache[key];
+            if (entry.mode === 'sell' && entry.sellQuantity !== undefined && entry.sellQuantity > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // --- GE 4-hour buy limit tracking ---
 
     /** 4 hours in milliseconds. */
