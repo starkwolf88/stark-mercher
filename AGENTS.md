@@ -238,23 +238,37 @@ The GE enforces a per-item buy limit (from `merchableItems.json` `limit` field).
 - **Quantity adjustment**: After selecting an item to buy, the quantity is adjusted to `min(quantityToPurchase, remaining)`. The log notes when this happens: `(reduced from 13000 — buy limit remaining)`.
 - **Buying flow**: `getBuyLimitedItemNames()` returns all currently-limited item names (full limit hit + threshold-skipped). This set is passed to `getFirstUnoccupiedMerchableItem()` which skips limited items.
 - **Cache retention**: Cache entries are NOT removed when a sell completes. `clearSellFields()` resets `mode` to `'idle'` and clears `sellQuantity`, `partialSales`, and `revisedPrices`, but preserves buy-limit tracking (`totalBought`, `firstBoughtAt`, `limitReachedAt`). `recordBuyOffer()` also preserves these fields from the existing entry. The entry's mode/price fields are overwritten by the next `recordBuyOffer()`. Startup reconciliation skips entries with active buy-limit windows (totalBought > 0 within 4 hours of `firstBoughtAt`).
-- **Post-login cleanup**: On the first auto-loop tick after logging back in from a break, `cleanupExpiredIdleEntries()` removes 'idle' entries whose buy-limit window has expired (keeping the cache bounded). Expired `buyFreezeUntil` entries are also cleaned up at this point.
-- **Periodic cache cleanup**: In addition to post-login cleanup, `cleanupExpiredIdleEntries()` runs every 60 seconds during long sessions without breaks (e.g. all slots occupied, no idle time to trigger a short break). This prevents expired 'idle' and buy-freeze entries from accumulating unbounded over 24/7 operation. The cost is one cache iteration per 60 seconds — negligible.
+- **Post-login cleanup**: On the first auto-loop tick after logging back in from a break, `cleanupExpiredIdleEntries()` removes 'idle' entries whose buy-limit window has expired (keeping the cache bounded). Expired `buyFreezeUntil` entries are also cleaned up at this point and the persisted freeze map is re-saved.
+- **Periodic cache cleanup**: In addition to post-login cleanup, `cleanupExpiredIdleEntries()` runs every 60 seconds during long sessions without breaks (e.g. all slots occupied, no idle time to trigger a short break). This prevents expired 'idle' and buy-freeze entries from accumulating unbounded over 24/7 operation. Expired freeze entries are pruned from the persisted setting on each cleanup. The cost is one cache iteration per 60 seconds — negligible.
 - **Merch history cap**: `recordMerchCycle()` trims to the most recent 200 entries per category (profits/losses) per account, preventing unbounded growth.
 
 ### Price revision strategy
 
-When a sell offer doesn't sell and is re-listed (after abort + collect), the price is revised downward:
+When a sell offer doesn't sell and is re-listed (after abort + collect), the price is revised downward using an **escalating reduction** that accelerates with the number of failed revisions. This finds the market price faster instead of slowly chasing a falling market with tiny cuts.
+
+**Escalation schedule (by revision count, 0-indexed):**
+
+| Revisions | Reduction rate | Floor |
+|-----------|---------------|-------|
+| 0–1 | 5% of gross profit | buyPrice + 1 |
+| 2–3 | 8% of gross profit | buyPrice + 1 |
+| 4–5 | 12% of gross profit | buyPrice + 1 |
+| 6 | Abandon — floor drops | buyPrice − 2 |
+| 7 | 12% of remaining margin | buyPrice − 2 |
+| 8 | Final dump (fixed price) | buyPrice − 5 |
 
 ```
-reduction = max(1, floor(grossProfit * 0.05))
-newPrice  = max(buyPrice + 1, currentSell - reduction)
+rate      = REVISION_RATES[min(revisionCount, 5)]  // 0.05, 0.05, 0.08, 0.08, 0.12, 0.12
+floor     = revisionCount >= 6 ? buyPrice - 2 : buyPrice + 1
+reduction = max(1, floor(abs(grossProfit) * rate))
+newPrice  = max(floor, currentSell - reduction)
 ```
 
-- 5% of gross profit (currentSell - buyPrice).
 - Minimum 1 gp reduction (so even thin-margin items get a nudge).
-- Never goes below buyPrice + 1 (never sell at a loss).
-- No profit threshold — even 1-2gp margins get revised by the 1gp minimum.
+- Before abandoning (revisions 0–5), the price never goes below buyPrice + 1 (never sell at a loss).
+- After 6 revisions with 0% sold, the bot **abandons** — the floor drops to buyPrice − 2, accepting a small loss to free the slot faster.
+- After 8 total revisions, the bot does a **final dump** at buyPrice − 5 to guarantee a quick sale and free the slot for a profitable item.
+- Losses are correctly tracked: `addDailyProfit` subtracts negative profit from the daily total, and `recordMerchCycle` routes negative totals into the `losses` array in merch history.
 - The sale price in `merchableItems.json` already includes the GE tax, so no additional tax calculation is performed during revision.
 
 ### Dynamic sell ETA abort ratio
@@ -291,6 +305,7 @@ The Wiki API fallback (`fetchWikiPrice` in `data/offer-cache.ts`) remains a stub
 - `autoLoop.cache: OfferCacheManager | null` — lazily initialised on first `autoLoopTick`. Set to `null` in `resetAutoLoop()` so it re-loads from the hidden setting on next access.
 - `autoLoop.profilesInitialised` — set to `true` after delay/jitter profiles are loaded. Reset to `false` in `resetAutoLoop()`.
 - `autoLoop.sellAttemptedItems/buyAttemptedItems` — cleared after each loop iteration and in `resetAutoLoop()`.
+- `autoLoop.buyFreezeUntil` — persisted in the hidden `buyFreezeSetting` (key `buyFreeze`, default `'{}'`, `hidden: true`). Keyed by account name, each value a map of lowercase item name → freeze-until timestamp (ms). Set when a stale buy offer is aborted (15-min freeze). Restored in `resetAutoLoop()` on script start via `loadBuyFreeze()` (expired entries dropped during load). Saved on every freeze set and on every cleanup that prunes expired entries (post-login, periodic 60s, buy-scan lazy). Survives hot reloads and client restarts so a freeze applied after aborting a stale buy offer is not lost.
 
 ### GE booth object detection
 

@@ -19,30 +19,41 @@ import { loadOfferCache, saveOfferCache } from '../general/state-persist.js';
 import { getMerchableItem, type MerchableItem } from './merchable-items.js';
 
 // --- Price revision constants ----------------------------------------------
-// The revision strategy reduces the sale price by a small amount each time
-// an offer is re-listed after not selling. The reduction is:
-//   1. 5% of the gross profit (sellPrice - buyPrice)
-//   2. Minimum 1 gp (so even very thin-margin items get a nudge)
-//   3. Never goes below buyPrice + 1 (safety floor — never sell at a loss)
+// The revision strategy reduces the sale price each time an offer is
+// re-listed after not selling. The reduction escalates with the number of
+// failed revisions so the bot finds the market price faster instead of
+// slowly chasing a falling market with tiny cuts.
 //
-// There is no profit threshold — even items with 1-2gp margins get revised
-// (by the 1gp minimum) so they don't sit in a slot forever.
+// Escalation schedule (by revision count, 0-indexed):
+//   Revisions 0-1:  5% of gross profit (gentle — give the market time)
+//   Revisions 2-3:  8% of gross profit (moderate — market is lower than expected)
+//   Revisions 4-5: 12% of gross profit (aggressive — clearly overpriced)
+//   Revision  6:   ABANDON — drop floor from buyPrice+1 to buyPrice-2
+//   Revisions 7:   12% of remaining margin at the lower floor
+//   Revision  8:   FINAL DUMP — sell at buyPrice-5 to free the slot
 //
-// Examples:
-//   91 gp item, buy=87, sell=91, profit=4:
-//     reduction = max(1, floor(4 * 0.05)) = max(1, 0) = 1 gp
-//     new sell = 90 gp
+// The minimum reduction is 1 gp so even thin-margin items get a nudge.
+// Before the abandon threshold (revisions 0-5), the price never goes
+// below buyPrice + 1 (never sell at a loss). After abandoning, the floor
+// drops to buyPrice - 2, and the final dump goes to buyPrice - 5.
 //
-//   1743 gp item, buy=1685, sell=1743, profit=58:
-//     reduction = max(1, floor(58 * 0.05)) = max(1, 2) = 2 gp
-//     new sell = 1741 gp
-//
-//   5m item, buy=4.9m, sell=5m, profit=100k:
-//     reduction = max(1, floor(100000 * 0.05)) = 5000 gp
-//     new sell = 4,995,000 gp
+// Examples (1743 gp item, buy=1685, profit=58):
+//   Rev 0: reduction = max(1, floor(58 * 0.05)) = 2 gp  → 1741
+//   Rev 1: reduction = max(1, floor(57 * 0.05)) = 2 gp  → 1739
+//   Rev 2: reduction = max(1, floor(54 * 0.08)) = 4 gp  → 1735
+//   Rev 3: reduction = max(1, floor(50 * 0.08)) = 4 gp  → 1731
+//   Rev 4: reduction = max(1, floor(46 * 0.12)) = 5 gp  → 1726
+//   Rev 5: reduction = max(1, floor(41 * 0.12)) = 4 gp  → 1722
+//   Rev 6: ABANDON → floor drops to 1683, sell at 1722 (still above new floor)
+//   Rev 7: reduction = max(1, floor(39 * 0.12)) = 4 gp  → 1718
+//   Rev 8: FINAL DUMP → sell at 1680 (buyPrice - 5)
 
-const PROFIT_REDUCTION_RATE = 0.05;     // 5% of gross profit
+const REVISION_RATES = [0.05, 0.05, 0.08, 0.08, 0.12, 0.12]; // escalating % of gross profit
 const MIN_REDUCTION_GP = 1;             // never reduce by 0
+const ABANDON_REVISION_COUNT = 6;       // after this many 0%-progress revisions, drop the floor
+const ABANDON_FLOOR_OFFSET = -2;        // abandon floor = buyPrice - 2
+const FINAL_DUMP_REVISION_COUNT = 8;    // after this many revisions, sell at a fixed dump price
+const FINAL_DUMP_OFFSET = -5;           // final dump price = buyPrice - 5
 
 // --- Wiki API stub ---------------------------------------------------------
 // When an item is no longer in merchableItems.json, we need to fetch the
@@ -348,17 +359,40 @@ export class OfferCacheManager {
     // --- Price revision ---
 
     /**
+     * Returns the number of times the sell price has been revised (excluding
+     * the original listing). This drives the escalation schedule.
+     */
+    getRevisionCount(itemName: string): number {
+        const entry = this.get(itemName);
+        if (!entry) return 0;
+        return entry.revisedPrices.length > 0 ? entry.revisedPrices.length - 1 : 0;
+    }
+
+    /**
+     * Returns true if the item has reached the final dump revision count
+     * and should be sold at buyPrice - 5 to free the slot.
+     */
+    isFinalDump(itemName: string): boolean {
+        return this.getRevisionCount(itemName) >= FINAL_DUMP_REVISION_COUNT;
+    }
+
+    /**
      * Computes a revised sell price for an item that hasn't sold.
      *
-     * Strategy:
-     *   1. reduction = 5% of gross profit, minimum 1 gp.
-     *   2. newPrice = currentSellPrice - reduction, floored to buyPrice + 1.
+     * Escalating reduction strategy:
+     *   Revisions 0-1:  5% of gross profit
+     *   Revisions 2-3:  8% of gross profit
+     *   Revisions 4-5: 12% of gross profit
+     *   Revision  6:   Abandon — floor drops from buyPrice+1 to buyPrice-2
+     *   Revision  7:   12% of remaining margin at the lower floor
+     *   Revision  8:   Final dump — sell at buyPrice-5
      *
-     * No profit threshold — even thin-margin items get a 1gp nudge so they
-     * don't sit in a slot forever.
+     * Before abandoning (revisions 0-5), the price never goes below
+     * buyPrice + 1. After abandoning, the floor drops to buyPrice - 2.
+     * The final dump is a fixed price of buyPrice - 5.
      *
-     * Returns the new price, or null if the price is already at the floor
-     * (buyPrice + 1) and can't be reduced further.
+     * Returns the new price, or null if the price is already at the
+     * applicable floor and can't be reduced further.
      */
     computeRevisedSellPrice(itemName: string): number | null {
         const entry = this.get(itemName);
@@ -367,19 +401,46 @@ export class OfferCacheManager {
         const currentSell = entry.sellPrice;
         const buyPrice = entry.buyPrice;
         const grossProfit = currentSell - buyPrice;
+        const revisionCount = entry.revisedPrices.length > 0 ? entry.revisedPrices.length - 1 : 0;
 
-        // 5% of gross profit, minimum 1 gp.
-        const reduction = Math.max(MIN_REDUCTION_GP, Math.floor(grossProfit * PROFIT_REDUCTION_RATE));
+        // Final dump: sell at buyPrice - 5 to free the slot.
+        if (revisionCount >= FINAL_DUMP_REVISION_COUNT) {
+            const dumpPrice = buyPrice + FINAL_DUMP_OFFSET;
+            if (dumpPrice >= currentSell) {
+                titan.logf('[Stark Mercher] Cache: %s already at or below dump price (%dgp <= %dgp) — cannot dump',
+                    itemName, currentSell, dumpPrice);
+                return null;
+            }
+            titan.logf('[Stark Mercher] Cache: %s final dump — sell at %dgp (buyPrice %d - 5) to free slot',
+                itemName, dumpPrice, buyPrice);
+            return dumpPrice;
+        }
 
-        // Never go below buyPrice + 1 (never sell at a loss).
-        const floor = buyPrice + 1;
+        // Determine the reduction rate based on the escalation schedule.
+        const rateIndex = Math.min(revisionCount, REVISION_RATES.length - 1);
+        const rate = REVISION_RATES[rateIndex];
+
+        // Determine the floor based on whether we've abandoned.
+        const abandoned = revisionCount >= ABANDON_REVISION_COUNT;
+        const floor = abandoned ? buyPrice + ABANDON_FLOOR_OFFSET : buyPrice + 1;
+
+        // Reduction is a percentage of gross profit, minimum 1 gp.
+        // When abandoned, grossProfit may be negative (selling below buy),
+        // so use the absolute value to compute a meaningful reduction.
+        const effectiveProfit = Math.abs(grossProfit);
+        const reduction = Math.max(MIN_REDUCTION_GP, Math.floor(effectiveProfit * rate));
+
         const newPrice = Math.max(floor, currentSell - reduction);
 
         if (newPrice >= currentSell) {
-            // Already at the floor — can't reduce further.
-            titan.logf('[Stark Mercher] Cache: %s already at price floor (%dgp) — cannot revise',
-                itemName, currentSell);
+            titan.logf('[Stark Mercher] Cache: %s already at %s floor (%dgp) — cannot revise',
+                itemName, abandoned ? 'abandon' : 'price', currentSell);
             return null;
+        }
+
+        if (abandoned && revisionCount === ABANDON_REVISION_COUNT) {
+            titan.logf('[Stark Mercher] Cache: %s abandoning — floor dropped to buyPrice %d + (%d) = %dgp',
+                itemName, buyPrice, ABANDON_FLOOR_OFFSET, floor);
         }
 
         return newPrice;

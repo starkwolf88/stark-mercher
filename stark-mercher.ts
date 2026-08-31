@@ -237,6 +237,18 @@ export class StarkMercher extends titan.Plugin {
         hidden: true,
     });
 
+    // --- Hidden buy-freeze setting ---
+    // Stores per-account buy-freeze state as JSON. Keyed by account name,
+    // each value is a map of lowercase item name -> freeze-until timestamp
+    // (ms). Survives client restarts and plugin reloads so a buy freeze
+    // applied after aborting a stale buy offer is not lost on hot reload.
+    buyFreezeSetting: titan.Setting<string> = this.stringSetting({
+        key: 'buyFreeze',
+        name: 'Buy freeze (hidden)',
+        default: '{}',
+        hidden: true,
+    });
+
     // --- Overlay HUD registration ---
     // The overlay renders every frame while isHudActive is true. It draws
     // the Status, Inventory Coins, and Daily Profit fields.

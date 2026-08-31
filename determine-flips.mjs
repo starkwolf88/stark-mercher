@@ -1058,6 +1058,7 @@ async function getMerchableItems() {
         );
     }
     console.log('-------------------------------------------------------------------------------------------------------------------------------------------------------------');
+    console.log(`Last run: ${new Date().toLocaleString()}`);
 }
 
 const clampPrice = (price, average, percent = 0.05, absolute = 50000) => {

@@ -101,6 +101,67 @@ const FAST_SELL_PRICE_MULTIPLIER = 0.5;  // 50% of sell price
 // shift but short enough to not miss opportunities.
 const BUY_FREEZE_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 
+// --- Buy-freeze persistence -------------------------------------------------
+// The buy-freeze map is persisted in a hidden JSON setting (keyed by account
+// name) so it survives hot reloads and client restarts. Without persistence,
+// a reload during a freeze window would cause the bot to immediately re-buy
+// an item whose buy offer was just aborted as stale.
+
+/** Resolves the current account name for freeze persistence. */
+const resolveFreezeAccountName = (bot: StarkMercher): string => {
+    return bot.currentPlayerName
+        || titan.state.client.localPlayer?.name
+        || bot.lastActiveAccountSetting.value.trim()
+        || 'unknown';
+};
+
+/** Loads the buy-freeze map for an account from the hidden setting.
+ *  Drops expired entries during load so the in-memory map starts clean. */
+const loadBuyFreeze = (bot: StarkMercher, accountName: string): Map<string, number> => {
+    const raw = bot.buyFreezeSetting.value;
+    if (!raw || raw === '{}') return new Map();
+    try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return new Map();
+        const accountMap = parsed[accountName];
+        if (!accountMap || typeof accountMap !== 'object') return new Map();
+        const now = Date.now();
+        const result = new Map<string, number>();
+        for (const [name, until] of Object.entries(accountMap)) {
+            if (typeof until === 'number' && now < until) {
+                result.set(name, until);
+            }
+        }
+        return result;
+    } catch (e) {
+        titan.logf('[Stark Mercher] Failed to parse buy-freeze state: %s', String(e));
+        return new Map();
+    }
+};
+
+/** Saves the buy-freeze map for an account to the hidden setting.
+ *  Merges into the full persisted state (other accounts are preserved). */
+const saveBuyFreeze = (bot: StarkMercher, accountName: string, freezeMap: Map<string, number>): void => {
+    try {
+        const raw = bot.buyFreezeSetting.value;
+        let all: Record<string, Record<string, number>> = {};
+        if (raw && raw !== '{}') {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') all = parsed as Record<string, Record<string, number>>;
+        }
+        // Serialise the map — skip expired entries so we don't bloat the setting.
+        const now = Date.now();
+        const obj: Record<string, number> = {};
+        for (const [name, until] of freezeMap) {
+            if (now < until) obj[name] = until;
+        }
+        all[accountName] = obj;
+        bot.buyFreezeSetting.value = JSON.stringify(all);
+    } catch (e) {
+        titan.logf('[Stark Mercher] Failed to save buy-freeze state: %s', String(e));
+    }
+};
+
 // --- Auto loop state machine ----------------------------------------------
 
 export type AutoLoopPhase =
@@ -133,8 +194,9 @@ export interface AutoLoopState {
     buyAttemptedItems: Set<string>;
     /** Items temporarily frozen from buying after a buy offer was aborted
      *  (stale — not buying at the offered price). Maps lowercase item name
-     *  to the timestamp (ms) when the freeze expires. In-memory only —
-     *  not persisted. Cleared on script restart. */
+     *  to the timestamp (ms) when the freeze expires. Persisted in the
+     *  hidden `buyFreezeSetting` so it survives hot reloads and client
+     *  restarts. Restored in `resetAutoLoop()` on script start. */
     buyFreezeUntil: Map<string, number>;
     /** Whether the cache has been reconciled against live GE state since
      *  the last script start. Runs once after the GE is first opened with
@@ -377,9 +439,11 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         const removed = cache.cleanupExpiredIdleEntries();
         // Clean up expired buy-freeze entries.
         const now = Date.now();
+        let freezeRemoved = false;
         for (const [name, until] of loop.buyFreezeUntil) {
-            if (now >= until) loop.buyFreezeUntil.delete(name);
+            if (now >= until) { loop.buyFreezeUntil.delete(name); freezeRemoved = true; }
         }
+        if (freezeRemoved) saveBuyFreeze(bot, resolveFreezeAccountName(bot), loop.buyFreezeUntil);
         if (removed > 0) cache.save();
         loop.lastCleanupMs = now;
     }
@@ -392,9 +456,11 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     const cleanupNow = Date.now();
     if (cleanupNow - loop.lastCleanupMs >= 60_000) {
         const removed = cache.cleanupExpiredIdleEntries();
+        let freezeRemoved = false;
         for (const [name, until] of loop.buyFreezeUntil) {
-            if (cleanupNow >= until) loop.buyFreezeUntil.delete(name);
+            if (cleanupNow >= until) { loop.buyFreezeUntil.delete(name); freezeRemoved = true; }
         }
+        if (freezeRemoved) saveBuyFreeze(bot, resolveFreezeAccountName(bot), loop.buyFreezeUntil);
         if (removed > 0) {
             cache.save();
             debugLog(bot, `Auto: periodic cache cleanup removed ${removed} expired entr${removed === 1 ? 'y' : 'ies'}`);
@@ -680,6 +746,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 const freezeKey = slot.itemName.trim().toLowerCase();
                 const freezeUntil = Date.now() + BUY_FREEZE_DURATION_MS;
                 loop.buyFreezeUntil.set(freezeKey, freezeUntil);
+                saveBuyFreeze(bot, resolveFreezeAccountName(bot), loop.buyFreezeUntil);
                 titan.logf('[Stark Mercher] Auto: freezing %s from buying for %d min (buy offer aborted — %s)',
                     slot.itemName, Math.round(BUY_FREEZE_DURATION_MS / 60000), reason);
             }
@@ -800,10 +867,16 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                     cache.recordPartialSale(itemName, existingEntry.sellPrice, soldQty);
                     debugLog(bot, `Auto: partial sale recorded — ${soldQty}x ${itemName} @ ${existingEntry.sellPrice}gp (will be included in merch history at cycle completion)`);
                 }
-                // Revise the price downward.
+                // Revise the price downward (escalating reduction + abandon threshold).
                 const revisedPrice = cache.reviseSellPrice(itemName);
                 if (revisedPrice !== null) {
                     sellPrice = revisedPrice;
+                    const revCount = cache.getRevisionCount(itemName);
+                    if (revCount >= 8) {
+                        debugLog(bot, `Auto: ${itemName} final dump — selling at ${revisedPrice}gp (revision ${revCount}) to free slot`);
+                    } else if (revCount >= 6) {
+                        debugLog(bot, `Auto: ${itemName} abandoned — selling at ${revisedPrice}gp (revision ${revCount}, floor dropped to buy-2)`);
+                    }
                 }
             }
 
@@ -889,13 +962,16 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         // Expired freezes are cleaned up lazily here.
         const now = Date.now();
         const frozenNames = new Set<string>();
+        let freezeRemoved = false;
         for (const [name, until] of loop.buyFreezeUntil) {
             if (now < until) {
                 frozenNames.add(name);
             } else {
                 loop.buyFreezeUntil.delete(name);
+                freezeRemoved = true;
             }
         }
+        if (freezeRemoved) saveBuyFreeze(bot, resolveFreezeAccountName(bot), loop.buyFreezeUntil);
         if (frozenNames.size > 0) {
             debugLog(bot, `Auto: ${frozenNames.size} item(s) buy-frozen — skipping: ${[...frozenNames].join(', ')}`);
         }
@@ -990,4 +1066,9 @@ export const resetAutoLoop = (bot: StarkMercher): void => {
     loop.cache = null;
     loop.sellAttemptedItems.clear();
     loop.buyAttemptedItems.clear();
+    // Restore the buy-freeze map from the hidden setting so freezes survive
+    // hot reloads and client restarts. Expired entries are dropped during
+    // load. If no player name is available yet (e.g. logged out at reload
+    // time), the last-active-account fallback is used.
+    loop.buyFreezeUntil = loadBuyFreeze(bot, resolveFreezeAccountName(bot));
 };
