@@ -32,6 +32,8 @@ export interface MerchableItem {
     profitMargin: number;
     /** GE buy limit for this item. */
     limit: number;
+    /** Whether this item is members-only (from OSRS Wiki mapping). */
+    members: boolean;
     /** Quantity to purchase per offer (calculated by determine-flips.mjs). */
     quantityToPurchase: number;
     /** Cash allocation per slot. */
@@ -137,11 +139,14 @@ export const getMerchableItemById = (itemId: number): MerchableItem | null => {
  *   affordability check.
  * @param buyLimitedItemNames - Set of item names (lowercase) that are currently
  *   buy-limited (within the 4-hour GE cooldown). These are skipped. Optional.
+ * @param isMembersWorld - If false, members-only items are skipped. Defaults to
+ *   true so P2P worlds consider every item.
  */
 export const getFirstUnoccupiedMerchableItem = (
     occupiedItemNames: Set<string>,
     availableCoins: number = Infinity,
     buyLimitedItemNames: Set<string> = new Set(),
+    isMembersWorld: boolean = true,
 ): MerchableItem | null => {
     const items = ensureLoaded();
     for (const item of items) {
@@ -149,6 +154,7 @@ export const getFirstUnoccupiedMerchableItem = (
         if (occupiedItemNames.has(lower)) continue;
         if (buyLimitedItemNames.has(lower)) continue;
         if (item.totalPurchasePrice > availableCoins) continue;
+        if (!isMembersWorld && item.members) continue;
         return item;
     }
     return null;

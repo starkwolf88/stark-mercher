@@ -32,6 +32,7 @@ import {
     getOfferSlotState,
     offerSlotCount,
     findEmptyOfferSlot,
+    isMembersWorld,
     type OfferSlotState,
     type GeAudit,
 } from './widgets.js';
@@ -39,6 +40,7 @@ import { clickCollectToInventory } from './actions.js';
 import { openGe, nearGrandExchange, walkToGe } from './clerk.js';
 import { getMerchableItems, getMerchableItem, getFirstUnoccupiedMerchableItem, isMerchable, type MerchableItem } from '../data/merchable-items.js';
 import { OfferCacheManager } from '../data/offer-cache.js';
+import { addDailyProfit } from '../data/daily-profit.js';
 
 // --- Stale offer thresholds ------------------------------------------------
 // Sell: 75% of ETA passed with <25% sold → abort
@@ -330,6 +332,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         // GE not open — try to open it.
         if (!nearGrandExchange()) {
             debugLog(bot, 'Auto: GE not open and not near GE — walking to GE');
+            bot.statusText = 'Walking to Grand Exchange';
             walkToGe();
             const delay = createDelay(2, 50, 5);
             setAction(bot, 'auto_walk', delay);
@@ -338,6 +341,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         }
         // Near GE — try to open it via clerk or booth.
         debugLog(bot, 'Auto: GE not open, near GE — opening via clerk/booth');
+        bot.statusText = 'Opening Grand Exchange';
         if (openGe()) {
             const delay = createDelay(2, 50, 5);
             setAction(bot, 'auto_open_ge', delay);
@@ -345,6 +349,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         } else {
             // Couldn't find clerk or booth — wait and retry.
             debugLog(bot, 'Auto: no clerk/booth found — waiting');
+            bot.statusText = 'Searching for G.E clerk/booth';
             const delay = createDelay(3, 50, 8);
             setAction(bot, 'auto_wait', delay);
             debugLog(bot, `Auto: action=auto_wait delay=${delay}t (no clerk/booth)`);
@@ -356,25 +361,43 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     const audit = auditGeState();
     const slots = audit.slots;
 
-    // --- Step 3: Collect if needed ---
-    if (hasCompletedOrAbortedSlot(slots)) {
-        // Before collecting, check if any sell offer is 100% completed.
-        // If so, update the cache entry — but DON'T remove it, because we
-        // need to retain the buy-limit tracking data (totalBought,
-        // limitReachedAt) across buy/sell cycles. The entry's mode will
-        // be overwritten by the next recordBuyOffer() call.
-        for (const slot of slots) {
-            if (isSellOfferCompleted(slot) && slot.itemName) {
-                const entry = cache.get(slot.itemName);
-                if (entry) {
-                    debugLog(bot, `Auto: sell offer for ${slot.itemName} completed — keeping cache entry for buy-limit tracking (totalBought=${entry.totalBought ?? 0})`);
-                }
-            }
+    // --- Step 3: Completed-sell sweep + Collect ---
+    // First, sweep for 100% completed sells. After a sell offer completes
+    // fully and is collected, the item is no longer in any GE slot or
+    // inventory. The cache entry still has mode='sell' and sellQuantity > 0.
+    // We record the profit and clear sellQuantity to prevent double-counting.
+    // This runs every tick (when GE is open and no flow is active) — it's
+    // cheap: iterate cache entries, check slots + inventory.
+    const playerName = bot.currentPlayerName || titan.state.client.localPlayer?.name || '';
+    for (const cacheKey of cache.getAllItemNames()) {
+        const entry = cache.get(cacheKey);
+        if (!entry || entry.mode !== 'sell' || entry.sellQuantity === undefined || entry.sellQuantity <= 0) continue;
+        // Is this item still in any GE slot? (active or completed/aborted)
+        const inSlot = slots.some(s => s.itemName && s.itemName.trim().toLowerCase() === cacheKey.trim().toLowerCase());
+        if (inSlot) continue; // still in a slot — not yet collected
+        // Is this item in inventory? (returned after an abort — profit
+        // will be recorded at re-list time in Step 5)
+        const inInv = titan.utils.inventory.find(cacheKey);
+        if (inInv) continue; // in inventory — abort case, handled at re-list
+        // Item is not in any slot or inventory → sell completed 100%.
+        const soldQty = entry.sellQuantity;
+        const profitPerItem = entry.sellPrice - entry.buyPrice;
+        const profit = profitPerItem * soldQty;
+        if (profit !== 0 && playerName) {
+            addDailyProfit(bot, playerName, profit);
+            debugLog(bot, `Auto: daily profit += ${profit}gp (${soldQty}x ${cacheKey} @ ${profitPerItem}gp/item — 100% completed sell)`);
         }
+        cache.clearSellQuantity(cacheKey);
         cache.save();
+        debugLog(bot, `Auto: completed-sell sweep — ${cacheKey} sold 100% (${soldQty}x), profit recorded`);
+    }
 
-        // Click collect to inventory.
+    if (hasCompletedOrAbortedSlot(slots)) {
+        // Completed/aborted slot detected — click collect to inventory.
+        // Profit for completed sells is recorded by the sweep above (for
+        // 100% completed) or at re-list time in Step 5 (for partial aborts).
         debugLog(bot, 'Auto: completed/aborted offer detected — collecting to inventory');
+        bot.statusText = 'Collecting from G.E';
         if (clickCollectToInventory()) {
             const delay = createDelay(1, 50, 3);
             setAction(bot, 'auto_collect', delay);
@@ -390,12 +413,14 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
 
     // --- Step 4: Stale offers flow ---
     // Check each occupied slot for stale conditions.
+    bot.statusText = 'Checking for stale offers';
     for (let i = 0; i < slots.length; i++) {
         const slot = slots[i];
         if (slot.type === 'empty' || slot.status !== 'active') continue;
 
         if (isSellOfferStale(slot, cache) || isBuyOfferStale(slot, cache)) {
             debugLog(bot, `Auto: aborting stale offer in slot ${i + 1} (${slot.type} ${slot.itemName})`);
+            bot.statusText = `Aborting stale offer for ${slot.itemName ?? 'unknown'} in slot ${i + 1}`;
             loop.activeAbortFlow = new AbortOfferFlow({
                 slotIndex: i,
                 delayFn: createDelay,
@@ -452,11 +477,23 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             }
 
             // Check if this is a re-listing (item already in cache with a
-            // previous sell offer that didn't sell). If so, revise the price.
+            // previous sell offer that didn't sell). If so, record profit
+            // for the items that sold before the abort, then revise the price.
             const existingEntry = cache.get(itemName);
-            if (existingEntry && existingEntry.mode === 'sell') {
-                // This item was previously listed for sale but didn't sell
-                // (it's back in inventory after an abort/collect).
+            if (existingEntry && existingEntry.mode === 'sell' && existingEntry.sellQuantity !== undefined) {
+                // This item was previously listed for sale but was aborted
+                // (it's back in inventory after collect). The difference
+                // between the listed quantity and what's in inventory now
+                // is the quantity that actually sold.
+                const soldQty = existingEntry.sellQuantity - item.quantity;
+                if (soldQty > 0) {
+                    const profitPerItem = existingEntry.sellPrice - existingEntry.buyPrice;
+                    const profit = profitPerItem * soldQty;
+                    if (profit !== 0 && playerName) {
+                        addDailyProfit(bot, playerName, profit);
+                        debugLog(bot, `Auto: daily profit += ${profit}gp (${soldQty}x ${itemName} sold @ ${profitPerItem}gp/item before abort)`);
+                    }
+                }
                 // Revise the price downward.
                 const revisedPrice = cache.reviseSellPrice(itemName);
                 if (revisedPrice !== null) {
@@ -476,6 +513,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
 
             // Start the sell flow.
             debugLog(bot, `Auto: selling ${item.quantity}x ${itemName} @ ${sellPrice}gp each in slot ${emptySlot + 1}`);
+            bot.statusText = `Placing sell offer for ${itemName} - x${item.quantity} - ${sellPrice}gp each`;
             loop.activeSellFlow = new SellOfferFlow({
                 itemName,
                 quantity: item.quantity,
@@ -508,7 +546,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         if (buyLimitedNames.size > 0) {
             debugLog(bot, `Auto: ${buyLimitedNames.size} item(s) buy-limited — skipping: ${[...buyLimitedNames].join(', ')}`);
         }
-        const merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames);
+        const merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld());
 
         if (merch) {
             const lowerName = merch.itemName.trim().toLowerCase();
@@ -520,6 +558,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 cache.save();
 
                 debugLog(bot, `Auto: buying ${merch.quantityToPurchase}x ${merch.itemName} @ ${merch.purchasePrice}gp each (total ${merch.totalPurchasePrice}gp) in slot ${emptyBuySlot + 1} — coins available: ${coinCount}`);
+                bot.statusText = `Placing buy offer for ${merch.itemName} - x${merch.quantityToPurchase} - ${merch.purchasePrice}gp each`;
                 loop.activeBuyFlow = new BuyOfferFlow({
                     itemName: merch.itemName,
                     quantity: merch.quantityToPurchase,
@@ -553,6 +592,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     const idleDelay = createDelay(1, 30, 5);
     setAction(bot, 'auto_idle', idleDelay);
     debugLog(bot, `Auto: action=auto_idle delay=${idleDelay}t (nothing to do)`);
+    bot.statusText = 'Idle — all slots occupied';
     // Signal that the auto-loop is idle — the break system will use this
     // to trigger a short logout break (2-5 min) when auto mode is on.
     bot.loopIdleForBreak = true;

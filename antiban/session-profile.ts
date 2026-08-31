@@ -56,6 +56,33 @@ export interface SessionProfile {
     longTailMax: number;
     /** Nested long-tail chance (0–1, applied on top of the first long tail). */
     longTailNestedChance: number;
+    /** World hop timing profile. */
+    hopping: HoppingProfile;
+}
+
+export interface HoppingProfile {
+    /** Minimum hop interval in minutes. */
+    minMinutes: number;
+    /** Maximum hop interval in minutes. */
+    maxMinutes: number;
+    /** +/- jitter in minutes applied to the base interval. */
+    jitterMinutes: number;
+    /** Chance (0–100) of a long-tail outlier stretching beyond maxMinutes. */
+    outlierChance: number;
+    /** Multiplier applied to the interval on an outlier. */
+    outlierMultiplier: number;
+    /** Chance (0–100) of a nested outlier on top of the first. */
+    outlierNestedChance: number;
+    /** Multiplier applied on a nested outlier. */
+    outlierNestedMultiplier: number;
+    /** Minimum post-hop cooldown in ticks. */
+    cooldownMinTicks: number;
+    /** Maximum post-hop cooldown in ticks. */
+    cooldownMaxTicks: number;
+    /** Minimum post-hop resume delay in ms. */
+    resumeMinMs: number;
+    /** Maximum post-hop resume delay in ms. */
+    resumeMaxMs: number;
 }
 
 // --- PRNG (deterministic per account name) ----------------------------------
@@ -82,7 +109,7 @@ function hashString(str: string): number {
     return h >>> 0;
 }
 
-function sampleInt(rng: () => number, min: number, max: number): number {
+export function sampleInt(rng: () => number, min: number, max: number): number {
     return Math.floor(rng() * (max - min + 1)) + min;
 }
 
@@ -123,6 +150,23 @@ export function generateSessionProfile(accountName: string): SessionProfile {
         longTailMin: 1,
         longTailMax: 5,
         longTailNestedChance: 0.10,
+
+        // World hop interval: 18–45 min base, 3–6 min jitter,
+        // 3–8% outlier chance with 1.3–1.8x multiplier,
+        // 15–25% nested outlier chance with 1.3–1.5x multiplier.
+        hopping: {
+            minMinutes: sampleInt(rng, 18, 25),
+            maxMinutes: sampleInt(rng, 32, 45),
+            jitterMinutes: sampleInt(rng, 3, 6),
+            outlierChance: sampleInt(rng, 3, 8),
+            outlierMultiplier: Number((rng() * 0.5 + 1.3).toFixed(2)),
+            outlierNestedChance: sampleInt(rng, 15, 25),
+            outlierNestedMultiplier: Number((rng() * 0.2 + 1.3).toFixed(2)),
+            cooldownMinTicks: sampleInt(rng, 20, 35),
+            cooldownMaxTicks: sampleInt(rng, 35, 55),
+            resumeMinMs: sampleInt(rng, 2500, 5000),
+            resumeMaxMs: sampleInt(rng, 5000, 8000),
+        },
     };
 }
 
@@ -144,6 +188,11 @@ export function loadOrCreateSessionProfile(bot: StarkMercher, accountName: strin
                 const key = PROFILE_KEY_PREFIX + accountName;
                 const saved = all[key];
                 if (saved && typeof saved === 'object' && typeof saved.nightlySleepLengthBase === 'number') {
+                    // Migrate old profiles that lack the hopping sub-profile.
+                    if (!saved.hopping) {
+                        saved.hopping = generateSessionProfile(accountName).hopping;
+                        saveSessionProfile(bot, accountName, saved as SessionProfile);
+                    }
                     return saved as SessionProfile;
                 }
             }

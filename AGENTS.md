@@ -11,13 +11,19 @@
 - `stark-mercher.ts` — main plugin class, settings, state, `onEnable`, `onGameTick`, `tickLogic`.
 - `general/timing.ts` — `setAction`, `canPerformAction`, `shouldWait`; tick-based action throttling with backwards-tick recovery.
 - `general/state.ts` — `sanityCheckState` (stub — add per-field stale-state corrections here as state is introduced).
-- `general/lifecycle.ts` — `onEnable`, `terminate` helpers; resets all state including auto-loop state.
-- `general/state-persist.ts` — offer cache persistence via hidden JSON setting (mixology-style per-account). `loadOfferCache`, `saveOfferCache`, `OfferCacheData`, `OfferCacheEntry`.
+- `general/lifecycle.ts` — `onEnable`, `terminate` helpers; resets all state including auto-loop state and hop state.
+- `general/state-persist.ts` — offer cache persistence via hidden JSON setting (mixology-style per-account). `loadOfferCache`, `saveOfferCache`, `OfferCacheData`, `OfferCacheEntry` (includes `sellQuantity` for daily profit tracking).
+- `general/state.ts` — `sanityCheckState` (stub), `resetInFlightActionState` (clears auto-loop flows + test flows on hop/break/login transitions).
+- `general/helpers.ts` — `isPlayerIdle` (stationary + animation grace check, used by hop safe-boundary).
 - `general/debug.ts` — debug widget logging.
 - `general/variables.ts` — shared variables.
 - `data/merchable-items.ts` — typed reader for `merchableItems.json` (inlined at build time by esbuild). `getMerchableItems`, `getMerchableItem`, `isMerchable`, `getFirstUnoccupiedMerchableItem`, `MerchableItem`.
 - `data/offer-cache.ts` — `OfferCacheManager` wrapping the persisted cache with price revision logic (0.05% reduction capped at 5% of gross profit, min 1 gp, never below buyPrice+1) and Wiki API stub. `fetchWikiPrice` (stub — URL not yet configured).
+- `data/daily-profit.ts` — per-account daily profit tracking. `addDailyProfit`, `getDailyProfit`, `resetDailyProfit`, `getDayStartMs`. Persisted in hidden JSON setting. Resets at UK midnight via day-rollover comparison on read/write.
+- `widgets/bot-overlay.ts` — HUD overlay panel. `renderBotOverlay` draws Status, Inventory Coins, and Daily Profit. Registered via `this.overlay({ layer: 'AboveWidgets' })` in `stark-mercher.ts`.
 - `antiban/humanised-delay.ts` — `DelayProfile`, `generateDelayProfile`, `setDelayProfileForAccount`, `createDelay`; per-account deterministic humanised delay function inspired by mixology's anti-ban layers (jitter, hesitation, outlier, jitter amplification).
+- `antiban/hopper.ts` — `hopStep`, `completeHop`, `onChatMessage`. World hop state machine adapted from mixology. Picks a random safe members world at a profile-scheduled interval (18–45 min). Pauses auto-loop during hop and for a short resume delay after.
+- `antiban/session.ts` — break/sleep state machine + hop safe-boundary functions. `breakStep`, `wallClockStep`, `resetBreakState`, `initSessionProfile`, `markNightlyBreakFinished`, `formatUKTime`, `getSafeBoundaryReason`, `isAtSafeBoundary`, `shouldPauseForHopBoundary`, `resetHop`, `forceHop`, `resetHopState`.
 - `input/typing.ts` — `humanType`, `isTyping`, `cancelTyping`, `setTypingProfile`, `setTypingProfileForAccount`; humanised keyboard typing with per-character delays.
 - `input/typing-profile.ts` — `TypingProfile` (`baselineMs`, `jitterMs`), deterministic per-account profile generation via djb2 hash + mulberry32 PRNG.
 - `grand_exchange/buy-offer.ts` — `BuyOfferFlow` multi-tick state machine for placing a buy offer from start to finish (21 steps).
@@ -100,14 +106,14 @@ Every new transient state must be reset in **all** of these places unless there 
 
 When adding or changing state, add a `debugLog`/`humanLog` at the set and the reset. Do not rely on silence to mean success. The `logDebug` UI toggle controls whether debug logs are printed.
 
-## Break and hop safe boundaries (for future implementation)
+## Break and hop safe boundaries
 
-When breaks and world hopping are implemented, the only blocker for a hop or break should be the player actively animating or moving. `getSafeBoundaryReason()` should check only:
+The only blocker for a hop is the player actively animating or moving. `getSafeBoundaryReason()` checks only:
 1. `bot.hopInProgress` — a world hop is already in flight.
 2. `!isPlayerIdle(bot)` — the player is animating or moving.
 3. **Idle buffer** — player has been idle for less than 2 ticks.
 
-All other state (held items, GE interface, location) either persists across hops/logouts or is transient. `shouldPauseForHopBoundary(bot)` should pause `tickLogic()` to prevent starting new actions while a hop or break is waiting to dispatch.
+All other state (held items, GE interface, location) either persists across hops/logouts or is transient. `shouldPauseForHopBoundary(bot)` pauses `tickLogic()` to prevent starting new actions while a forced hop is waiting to dispatch.
 
 ## Login retry timeout (for future implementation)
 
@@ -234,3 +240,186 @@ When an item is no longer in `merchableItems.json` and has no cache entry, `fetc
 ### GE booth object detection
 
 `findGeBooth()` in `grand_exchange/clerk.ts` searches for tile objects within 20 tiles with `nameContains('Grand Exchange')` and `hasAction('Exchange')`. `findExchangePoint()` returns the nearest of clerk NPC or booth object. `openGe()` interacts with whichever is closer. This satisfies the requirement to check for the "Exchange Grand Exchange Booth" object as the first automated operation.
+
+## External flip-selection pipeline (`determine-flips.mjs`)
+
+`determine-flips.mjs` is a standalone Node automation that pulls OSRS Wiki price data, filters and ranks items, and writes `merchableItems.json`. esbuild inlines that JSON into the plugin bundle at build time; the Titan SDK has no runtime filesystem API.
+
+- Skill / deep-reference: `.devin/skills/mercher-flips/SKILL.md`
+- Output file: `merchableItems.json`
+- Plugin consumer: `data/merchable-items.ts`
+
+### Key tunables (user-edited constants)
+
+| Constant | Current value | Meaning |
+|----------|---------------|---------|
+| `MAX_RESULTS` | 100 | Items kept after `flipScore` sorting. |
+| `CASH_STACK_MILLIONS` | 10 | Total GP available for flipping. |
+| `AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO` | 0.20 | Target base cash per slot (20% = 2m with 10m stack). |
+| `MAX_TURNOVER_HOURS` | 2.5 | Max combined buy+sell ETA. |
+
+### Cash-allocation implementation
+
+The iterative, turnover-aware allocation is implemented in `determine-flips.mjs`:
+
+1. **First pass**: for every candidate item, compute `actualProfitPerSlotHour` at the base allocation (`max(AVERAGE_SLOT_CASH_STACK_ALLOCATION, purchasePrice)`).
+2. **Average baseline**: compute `averageActualProfitPerSlotHour` across all candidates.
+3. **Scale**: for each item, scale the base allocation by `sqrt(actualProfit / averageProfit)` (dampened; only above-average items scale up).
+4. **Turnover cap**: using the ETA from the scaled quantity, apply:
+   - `turnoverEtaMinutes < 30` → max 80% of `CASH_STACK`
+   - `30 <= turnoverEtaMinutes < 90` → max 50% of `CASH_STACK`
+   - `turnoverEtaMinutes >= 90` → max 25% of `CASH_STACK`
+5. **Iterate**: repeat allocation → quantity → ETA → cap until `cashAllocation` stabilises (up to 5 iterations), then compute final quantity, ETAs, and profitability.
+
+This also fixes two underlying problems:
+- **Volume double-counting removed**: `calculateSlotCashAllocation` no longer multiplies by `threeHourAverageHourlyVolume` after `maxProfitPerSlotHour` already includes volume.
+- **Scaling uses actual profit per slot hour**: `actualProfitPerSlotHour` (post-ETA) is used instead of `maxProfitPerSlotHour` (pre-ETA), so slow, expensive items are not over-allocated.
+
+### Design intent for flip selection
+
+- Primary objective: **maximum profit per hour**.
+- `AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO` (0.20 = 2m of 10m) is the *base* per-slot allocation.
+- Scaling above the base is allowed only for items that are both **very profitable AND high turnover**.
+- Target ~5 active slots, with ~3 slots used for selling.
+- Allocation must be **iterative and turnover-aware** because ETA depends on quantity and quantity depends on allocation.
+- Confirmed turnover caps:
+  - `< 30 min` → max 80% of stack
+  - `30–90 min` → max 50% of stack
+  - `> 90 min` → max 25% of stack
+
+### F2P / P2P membership handling
+
+- `determine-flips.mjs` reads `mappingEntry.members` from the OSRS Wiki `/mapping`
+  endpoint and stores `members: boolean` on every output item.
+- `data/merchable-items.ts` exposes `members` on the `MerchableItem` interface.
+- `grand_exchange/widgets.ts` already provides `isMembersWorld()` and `offerSlotCount()`
+  (3 slots on F2P, 8 on P2P).
+- `getFirstUnoccupiedMerchableItem` accepts `isMembersWorld` and skips
+  members-only items when the current world is F2P. `grand_exchange/auto-loop.ts`
+  passes `isMembersWorld()` into it.
+
+### Staleness guards
+
+- Every output item now has `dataFetchedAt` and `dataFetchedAtIso`.
+- If `merchableItems.length === 0`, `determine-flips.mjs` preserves the existing `merchableItems.json` instead of writing an empty array.
+- `data/merchable-items.ts` filters out items whose `dataFetchedAt` is older than 10 minutes.
+
+## Overlay HUD
+
+The plugin draws a small on-screen panel via `this.overlay({ layer: 'AboveWidgets', render })` in `stark-mercher.ts`. The render callback calls `renderBotOverlay(bot)` from `widgets/bot-overlay.ts` every frame while `isHudActive` is true.
+
+### Fields
+
+- **Status** — top-level action string from `bot.statusText`. Updated by the auto-loop at each transition (walking to GE, opening GE, collecting, checking stale offers, aborting, placing buy/sell offer, idle). Break phases are handled directly by the overlay's `getStatusText()` (checks `bot.breakPhase` → "Logging out for break...", "On break", "Sleeping", "Logging in..."). Manual test flows set their own status ("Buy test: ...", "Sell test: ...", "Abort test: slot N").
+- **Inventory Coins** — live read of `titan.utils.inventory.count(995)`, formatted with thousands separators (e.g. `1,000,000 gp`).
+- **Daily Profit** — total profit since 00:00 UK, formatted with `+`/`-` sign and thousands separators. Green when positive, red when negative, grey when zero.
+
+### Status text lifecycle
+
+- `statusText` is set to `'Idle'` in `onEnable` and `resetState()` (lifecycle.ts).
+- `statusText` is set to `'Stopped'` in `onDisable` and `terminate()`.
+- The auto-loop sets `statusText` at each step transition.
+- Manual test flows set `statusText` when in-progress and reset to `'Idle'` on completion.
+- The overlay's `getStatusText()` overrides `statusText` for break phases and terminated state.
+
+### Overlay registration
+
+- `isHudActive = false` on the class. Set to `true` in `onEnable`, `false` in `onDisable`.
+- `hud = this.overlay({ layer: 'AboveWidgets', render: () => { if (!this.isHudActive) return; renderBotOverlay(this); } })`.
+- The overlay renders every frame (client tick), not every game tick. All reads (inventory count, daily profit) are cheap cached operations.
+
+## Daily profit tracking
+
+Profit is tracked per-account in a hidden JSON setting (`dailyProfitSetting`, key `dailyProfit`). Each account has a `{ dayStartedAt, profit }` entry.
+
+- **Recording**: Profit is recorded at two points, using `sellQuantity` stored in the offer cache entry:
+  1. **Re-list time (Step 5)**: When an item is re-listed after an abort, `soldQty = entry.sellQuantity - item.quantity` (the difference between what was listed and what's still in inventory = what actually sold). Profit = `(entry.sellPrice - entry.buyPrice) * soldQty`. This handles partial aborts accurately.
+  2. **Completed-sell sweep (Step 3)**: Runs every tick at the top of Step 3. For each cache entry with `mode: 'sell'` and `sellQuantity > 0`, checks if the item is in any GE slot or inventory. If neither, the sell completed 100% — profit = `(entry.sellPrice - entry.buyPrice) * entry.sellQuantity`. Clears `sellQuantity` to prevent double-counting.
+- **`sellQuantity` field**: Stored in `OfferCacheEntry` when `recordSellOffer` is called. Represents the quantity currently listed in an active sell offer. Cleared by `clearSellQuantity()` after profit is recorded.
+- **Day rollover**: `getDayStartMs(now)` returns the epoch ms of midnight (00:00) for the current UK-local day. On every read (`getDailyProfit`) and write (`addDailyProfit`), the stored `dayStartedAt` is compared to the current day's midnight. If they differ, the profit is reset for the new day. This handles the script being stopped before midnight and restarted the next day.
+- **Persistence**: The state is saved to the hidden setting on every `addDailyProfit` call. It survives client restarts and plugin reloads.
+- **Per-account**: Keyed by `currentPlayerName` (or `localPlayer.name` as fallback), same as the offer cache.
+- **GE tax**: Already factored into the `salePrice` from `merchableItems.json`, so no additional tax calculation is needed.
+
+## World hopping
+
+The bot hops to a random safe members world at a profile-scheduled interval (18–45 min base, with jitter and long-tail outliers). This is adapted from stark-mixology's hopper.
+
+### Settings
+
+- `hopWorlds` (boolean, default `true`) — enables/disables world hopping.
+- `hopRegion` (combo, default `0` = Any) — restricts hops to UK, Germany, US, or Any.
+- `resetHop` (button) — clears the scheduled next hop timer.
+- `forceHop` (button) — forces the next hop to become due immediately (still waits for a safe boundary).
+
+### Hop profile (`HoppingProfile` in `SessionProfile`)
+
+- `minMinutes` / `maxMinutes` — base interval range (18–25 / 32–45 min).
+- `jitterMinutes` — +/- jitter (3–6 min).
+- `outlierChance` / `outlierMultiplier` — long-tail outlier (3–8% chance, 1.3–1.8x).
+- `outlierNestedChance` / `outlierNestedMultiplier` — nested outlier (15–25% chance, 1.3–1.5x).
+- `cooldownMinTicks` / `cooldownMaxTicks` — post-hop cooldown (20–35 / 35–55 ticks).
+- `resumeMinMs` / `resumeMaxMs` — post-hop resume delay (2500–5000 / 5000–8000 ms).
+
+### Safe boundary
+
+The only blockers for a hop are:
+1. `hopInProgress` — a hop is already in flight.
+2. `!isPlayerIdle(bot)` — the player is animating or moving.
+3. Idle buffer — player has been idle for less than 2 ticks.
+
+GE interface, inventory items, and location all persist across hops or are transient.
+
+### Hop flow
+
+1. `scheduleNextHop` samples an interval and sets `nextHopAtMs`.
+2. When `Date.now() >= nextHopAtMs`, `forceHopPending` is set to pause new actions.
+3. `isAtSafeBoundary` is checked — waits for player to be idle.
+4. `pickWorld` filters `titan.state.world.list()` for safe members worlds in the chosen region.
+5. `titan.state.world.hopIngame(worldId)` dispatches the hop.
+6. `completeHop` (called from `onGameStateChanged` / `hopStep`) waits for login + world match, then resets state and starts a resume delay.
+7. After the resume delay, the auto-loop resumes normally.
+
+### State lifecycle
+
+- All hop fields are reset in `resetHopState` (called from `resetState` in lifecycle.ts).
+- `resetInFlightActionState` (called by `completeHop`) clears auto-loop flows and test flows.
+- `sessionPlayStartMs` is set to -1 when a nightly break starts, and lazily re-initialised when the player is logged in and not on a break.
+
+### Bot fields
+
+| Field | Type | Default |
+|---|---|---|
+| `nextHopTick` | number | -1 |
+| `nextHopAtMs` | number | -1 |
+| `nextHopStartAtMs` | number | -1 |
+| `nextHopTargetTicks` | number | -1 |
+| `nextHopPausedRemainingMs` | number | -1 |
+| `hopResumeAtMs` | number | -1 |
+| `lastHopTick` | number | -1 |
+| `lastHopMs` | number | -1 |
+| `hopInProgress` | boolean | false |
+| `hopSawLoggedOut` | boolean | false |
+| `hopToWorldId` | number | -1 |
+| `hopCooldownTick` | number | -1 |
+| `hopCooldownTicks` | number | 30 |
+| `forceHopPending` | boolean | false |
+| `hopJustCompleted` | boolean | false |
+| `hopJustCompletedAtMs` | number | -1 |
+| `hopCount` | number | 0 |
+| `sessionPlayStartMs` | number | -1 |
+| `consecutiveMovingTicks` | number | 0 |
+| `lastPlayerStationaryTick` | number | 0 |
+
+## Overlay HUD (updated)
+
+The overlay now includes a TIMERS section beneath the Daily Profit field:
+
+- **Status** — shows break/sleep countdowns: `Sleeping (6h 56m 46s)`, `Breaking (2m 15s)`, `Hopping`, `Resuming`, `Logging out for break...`, `Logging in...`, plus the auto-loop status text.
+- **Inventory Coins** — live coin count with thousands separators.
+- **Daily Profit** — profit since 00:00 UK, green/red/grey.
+- **TIMERS** section:
+  - **Session (Day)** — elapsed since `sessionPlayStartMs`, with target duration in parentheses. Shows "Sleeping" during nightly break.
+  - **Next Hop** — countdown to next world hop, or "Disabled", "Sleeping", "Hopping...", "Resuming...", "On Break", "Waiting to Hop...".
+  - **Sleep Time** — UK-formatted bedtime (HH:MM), or "Sleeping" when currently sleeping.
+  - **Wake Time** — UK-formatted wake time, with countdown `(in Xh Ym Zs)` when sleeping.

@@ -203,6 +203,7 @@ export class OfferCacheManager {
      * starting the 4-hour cooldown.
      *
      * @param quantity - The actual quantity being sold (= actual bought qty).
+     *   Also stored as `sellQuantity` for daily profit tracking.
      * @param limit - The GE buy limit for this item (from merchableItems.json).
      *   If not provided, buy-limit tracking is skipped for this call.
      */
@@ -231,6 +232,14 @@ export class OfferCacheManager {
             };
         }
 
+        // Store the quantity being listed for daily profit tracking.
+        // At re-list time, soldQty = sellQuantity - inventoryQuantity.
+        // At completed-sell sweep, soldQty = sellQuantity (item gone entirely).
+        if (quantity !== undefined) {
+            const entry = this.get(key)!;
+            entry.sellQuantity = quantity;
+        }
+
         // Track cumulative bought quantity for the GE 4-hour buy limit.
         // The sell quantity = actual bought quantity. We add it to totalBought
         // and if it reaches the limit, we start the 4-hour cooldown timer.
@@ -250,6 +259,19 @@ export class OfferCacheManager {
 
         this.dirty = true;
         titan.logf('[Stark Mercher] Cache: recorded sell offer for %s @ %dgp', key, sellPrice);
+    }
+
+    /**
+     * Clears the sellQuantity field on an entry (after profit has been
+     * recorded for the completed/aborted sell cycle). Prevents double-
+     * counting on subsequent ticks.
+     */
+    clearSellQuantity(itemName: string): void {
+        const entry = this.get(itemName);
+        if (entry && entry.sellQuantity !== undefined) {
+            entry.sellQuantity = undefined;
+            this.dirty = true;
+        }
     }
 
     // --- Price revision ---

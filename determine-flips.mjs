@@ -1,12 +1,12 @@
 import { promises as fs } from 'fs';
 
 const debug = false;
-const MAX_RESULTS = 20; // Maximum number of merchable items to output after sorting by profitability
+const MAX_RESULTS = 100; // Maximum number of merchable items to output after sorting by profitability
 const GE_TAX_PERCENTAGE = 2; // Grand Exchange sale tax percentage deducted from sell price
-const CASH_STACK_MILLIONS = 87; // Total flipping cash in millions for readability
+const CASH_STACK_MILLIONS = 10; // Total flipping cash in millions for readability
 const CASH_STACK = CASH_STACK_MILLIONS * 1000000; // Total GP available for flipping
 const SALE_BUFFER_PERCENTAGE = 0.01; // Extra safety margin removed from sell price to protect against price movement
-const AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO = 0.25; // Percentage of total cash assumed to be used per GE slot (~5 slots)
+const AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO = 0.20; // Percentage of total cash assumed to be used per GE slot (~5 slots)
 const AVERAGE_SLOT_CASH_STACK_ALLOCATION = CASH_STACK * AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO; // Average GP allocated per GE slot
 const MARKET_SHARE_ASSUMPTION_PERCENTAGE = 35; // calculateEtas() Assume 35% market share to estimate ETA's better
 const MAX_TURNOVER_HOURS = 2.5; // calculateEtas() Maximum allowed time for a full flip cycle (purchase + sale)
@@ -44,7 +44,6 @@ let filteredItemsWithTimeSeries = [];
 let filteredItemsWithFullData = [];
 let filteredItemsBeforeCashAllocation = [];
 let merchableItems = [];
-let averageProfitPerSlotHour = 0;
 
 // Filter variables
 let mappingEntryFiltered = 0;
@@ -122,11 +121,12 @@ const buildItemDataObject = (itemData) => {
     }
     itemData.itemName = mappingEntry.name;
 
-    // Determine item limit.
+    // Determine item limit and membership flag.
     itemData.limit = mappingEntry.limit;
     if (!itemData.limit) {
         itemData.itemId in ESTIMATED_LIMIT_FIXES ? itemData.limit = ESTIMATED_LIMIT_FIXES[itemData.itemId] : itemData.limit = 4;
     }
+    itemData.members = mappingEntry.members === true;
 
     // Add five minute data if available.
     const fiveMinuteEntry = fiveMinuteDataMap.get(itemData.itemId);
@@ -530,42 +530,108 @@ const calculateMaxProfitPerSlotHour = (itemData) => {
     return true;
 };
 
-const calculateSlotCashAllocation = (itemData) => {
-    const capitalEfficiency = itemData.profitMargin / itemData.purchasePrice;
-    const weightedProfit = itemData.maxProfitPerSlotHour * Math.sqrt(1 + capitalEfficiency) * itemData.threeHourAverageHourlyVolume;
-    itemData.cashAllocation = Math.min(AVERAGE_SLOT_CASH_STACK_ALLOCATION * (weightedProfit / averageProfitPerSlotHour), CASH_STACK);
+// --- Helpers for iterative allocation ----------------------------------------
+
+const computeQuantityForAllocation = (itemData, cashAllocation) => {
+    if (!itemData.purchasePrice || itemData.purchasePrice <= 0) return 0;
+    return Math.min(
+        Math.floor(cashAllocation / itemData.purchasePrice),
+        itemData.limit,
+        Math.floor(itemData.threeHourAverageHourlyVolume)
+    );
+};
+
+const computeEtasForQuantity = (itemData, quantity) => {
+    const effectivePurchaseVolume = Math.min(
+        itemData.twoHourAverageHourlyPurchaseVolume * (1 - TWO_HOUR_VOLUME_BUFFER_PERCENTAGE / 100),
+        itemData.oneHourPurchaseVolume
+    ) * (MARKET_SHARE_ASSUMPTION_PERCENTAGE / 100);
+    const effectiveSaleVolume = Math.min(
+        itemData.twoHourAverageHourlySaleVolume * (1 - TWO_HOUR_VOLUME_BUFFER_PERCENTAGE / 100),
+        itemData.oneHourSaleVolume
+    ) * (MARKET_SHARE_ASSUMPTION_PERCENTAGE / 100);
+    if (effectivePurchaseVolume <= 0 || effectiveSaleVolume <= 0) return null;
+
+    const purchaseEtaMinutes = quantity / (effectivePurchaseVolume / 60);
+    const saleEtaMinutes = quantity / (effectiveSaleVolume / 60);
+    const turnoverEtaMinutes = purchaseEtaMinutes + saleEtaMinutes;
+    return { purchaseEtaMinutes, saleEtaMinutes, turnoverEtaMinutes };
+};
+
+const computeProfitabilityForQuantity = (itemData, quantity, turnoverEtaMinutes) => {
+    if (!quantity || quantity <= 0 || !turnoverEtaMinutes || turnoverEtaMinutes <= 0) return 0;
+    return (quantity * itemData.profitMargin) * (60 / turnoverEtaMinutes);
+};
+
+const getTurnoverCap = (turnoverEtaMinutes) => {
+    if (turnoverEtaMinutes < 30) return CASH_STACK * 0.8;
+    if (turnoverEtaMinutes < 90) return CASH_STACK * 0.5;
+    return CASH_STACK * 0.25;
+};
+
+// --- Cash allocation (iterative, turnover-aware) -----------------------------
+
+const calculateSlotCashAllocation = (itemData, averageActualProfitPerSlotHour) => {
+    // Base allocation is the per-slot target, but we must be able to afford at
+    // least one unit so expensive items can still be considered.
+    const baseAllocation = Math.max(AVERAGE_SLOT_CASH_STACK_ALLOCATION, itemData.purchasePrice);
+
+    // Compute actual profit per slot hour at the base allocation. Because
+    // actualProfitPerSlotHour is independent of quantity (it depends only on
+    // profit margin and effective hourly volume), this value is stable for the
+    // item once quantity >= 1.
+    const baseQuantity = computeQuantityForAllocation(itemData, baseAllocation);
+    const baseEtas = computeEtasForQuantity(itemData, baseQuantity);
+    const baseActualProfit = baseEtas
+        ? computeProfitabilityForQuantity(itemData, baseQuantity, baseEtas.turnoverEtaMinutes)
+        : 0;
+
+    // Scale the base allocation by how this item's actual profit compares to
+    // the average. Use a dampened scale (sqrt) to avoid runaway allocations.
+    let scale = 1;
+    if (averageActualProfitPerSlotHour > 0 && baseActualProfit > averageActualProfitPerSlotHour) {
+        scale = Math.sqrt(baseActualProfit / averageActualProfitPerSlotHour);
+    }
+
+    // Iteratively refine allocation: allocation determines quantity, quantity
+    // determines ETA, and ETA determines the turnover cap. The profit scale is
+    // fixed (actualProfit is quantity-independent), so we converge on the
+    // tightest turnover cap that still allows the scaled allocation.
+    let allocation = baseAllocation;
+    for (let i = 0; i < 5; i++) {
+        const quantity = computeQuantityForAllocation(itemData, allocation);
+        const etas = computeEtasForQuantity(itemData, quantity);
+        if (!etas) break;
+        const turnoverCap = getTurnoverCap(etas.turnoverEtaMinutes);
+        const newAllocation = Math.min(baseAllocation * scale, turnoverCap, CASH_STACK);
+        if (Math.abs(newAllocation - allocation) < 1000) break;
+        allocation = newAllocation;
+    }
+
+    itemData.cashAllocation = Math.round(allocation);
 };
 
 const calculateQuantityToPurchase = (itemData) => {
-    itemData.quantityToPurchase = Math.min(Math.floor(itemData.cashAllocation / itemData.purchasePrice), itemData.limit, Math.floor(itemData.threeHourAverageHourlyVolume));
+    itemData.quantityToPurchase = computeQuantityForAllocation(itemData, itemData.cashAllocation);
     itemData.totalPurchasePrice = itemData.purchasePrice * itemData.quantityToPurchase;
-
-    // Minimal change: If the item takes a long time to turnover (>= 1 hour), cap total allocation to 50% of total cash stack
-    const ONE_HOUR_IN_MINUTES = 60;
-    const MAX_SLOW_ITEM_ALLOCATION = CASH_STACK * 0.5;
-    if (itemData.turnoverEtaMinutes && itemData.turnoverEtaMinutes >= ONE_HOUR_IN_MINUTES && itemData.totalPurchasePrice > MAX_SLOW_ITEM_ALLOCATION) {
-        itemData.quantityToPurchase = Math.max(1, Math.floor(MAX_SLOW_ITEM_ALLOCATION / itemData.purchasePrice));
-        itemData.totalPurchasePrice = itemData.purchasePrice * itemData.quantityToPurchase;
-    }
 
     if (itemData.quantityToPurchase < 1) {
         quantityToPurchaseFiltered++;
         return false;
     }
     return true;
-}
+};
 
 const calculateEtas = (itemData) => {
-    const effectivePurchaseVolume = Math.min(itemData.twoHourAverageHourlyPurchaseVolume * (1 - TWO_HOUR_VOLUME_BUFFER_PERCENTAGE / 100), itemData.oneHourPurchaseVolume) * (MARKET_SHARE_ASSUMPTION_PERCENTAGE / 100);
-    const effectiveSaleVolume = Math.min(itemData.twoHourAverageHourlySaleVolume * (1 - TWO_HOUR_VOLUME_BUFFER_PERCENTAGE / 100), itemData.oneHourSaleVolume) * (MARKET_SHARE_ASSUMPTION_PERCENTAGE / 100);
-    if (effectivePurchaseVolume <= 0 || effectiveSaleVolume <= 0) {
+    const etas = computeEtasForQuantity(itemData, itemData.quantityToPurchase);
+    if (!etas) {
         etaVolumeLowFiltered++;
         return false;
     }
 
-    itemData.purchaseEtaMinutes = itemData.quantityToPurchase / (effectivePurchaseVolume / 60);
-    itemData.saleEtaMinutes = itemData.quantityToPurchase / (effectiveSaleVolume / 60);
-    itemData.turnoverEtaMinutes = itemData.purchaseEtaMinutes + itemData.saleEtaMinutes;
+    itemData.purchaseEtaMinutes = etas.purchaseEtaMinutes;
+    itemData.saleEtaMinutes = etas.saleEtaMinutes;
+    itemData.turnoverEtaMinutes = etas.turnoverEtaMinutes;
     if (itemData.turnoverEtaMinutes > (MAX_TURNOVER_HOURS * 60)) {
         etaTurnoverFiltered++;
         return false;
@@ -576,6 +642,10 @@ const calculateEtas = (itemData) => {
 const PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD = 30000 // Minimum profit per hour an item could make before being filtered
 const ROI_MINIMUM_PERCENTAGE_THRESHOLD = 1; // Minimum R.O.I %
 const calculateProfitability = (itemData) => {
+    if (!itemData.turnoverEtaMinutes || itemData.turnoverEtaMinutes <= 0) {
+        actualProfitPerSlotHourFiltered++;
+        return false;
+    }
     itemData.actualProfitPerSlotHour = (itemData.quantityToPurchase * itemData.profitMargin) * (60 / itemData.turnoverEtaMinutes);
     if (itemData.actualProfitPerSlotHour < PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD) {
         actualProfitPerSlotHourFiltered++;
@@ -735,14 +805,29 @@ async function getMerchableItems() {
         filteredItemsBeforeCashAllocation.push(itemData);
     };
 
-    // Calculate average profit per slot hour for calculateSlotCashAllocation()
-    averageProfitPerSlotHour = filteredItemsBeforeCashAllocation.reduce((sum, itemData) => sum + itemData.maxProfitPerSlotHour, 0) / filteredItemsBeforeCashAllocation.length;
+    // First pass: compute actual profit per slot hour for each item at the base
+    // allocation. This gives us an honest per-item baseline for scaling cash.
+    // We use a parallel array rather than storing on itemData to avoid adding
+    // extra fields to merchableItems.json.
+    const baseActualProfits = [];
+    for (const itemData of filteredItemsBeforeCashAllocation) {
+        const baseAllocation = Math.max(AVERAGE_SLOT_CASH_STACK_ALLOCATION, itemData.purchasePrice);
+        const baseQuantity = computeQuantityForAllocation(itemData, baseAllocation);
+        const baseEtas = computeEtasForQuantity(itemData, baseQuantity);
+        const baseActualProfit = baseEtas
+            ? computeProfitabilityForQuantity(itemData, baseQuantity, baseEtas.turnoverEtaMinutes)
+            : 0;
+        baseActualProfits.push(baseActualProfit);
+    }
+    const averageActualProfitPerSlotHour = baseActualProfits.length > 0
+        ? baseActualProfits.reduce((sum, p) => sum + p, 0) / baseActualProfits.length
+        : 0;
 
     // Iterate items again.
     for (const itemData of filteredItemsBeforeCashAllocation) {
 
-        // Calculate slot cash allocation.
-        calculateSlotCashAllocation(itemData);
+        // Calculate slot cash allocation (iterative, turnover-aware).
+        calculateSlotCashAllocation(itemData, averageActualProfitPerSlotHour);
 
         // Calculate quantity to buy.
         if (!calculateQuantityToPurchase(itemData)) continue;

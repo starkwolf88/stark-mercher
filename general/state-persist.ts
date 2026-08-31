@@ -52,6 +52,14 @@ export interface OfferCacheEntry {
      *  The 4-hour cooldown starts from this moment. Reset (to undefined)
      *  when the timer expires. */
     limitReachedAt?: number;
+    /** Quantity currently listed in an active sell offer. Set when a sell
+     *  offer is placed, cleared when the sell cycle completes (100% sold
+     *  or fully aborted + collected). Used to compute actual sold quantity
+     *  for daily profit tracking:
+     *    soldQty = sellQuantity - inventoryQuantity (at re-list time)
+     *    soldQty = sellQuantity (at completed-sell sweep, when item is
+     *              no longer in any GE slot or inventory). */
+    sellQuantity?: number;
 }
 
 // --- Load / Save -----------------------------------------------------------

@@ -71,7 +71,7 @@ export class AbortOfferFlow {
     /** Tick count to wait after the last dispatched action (read by the caller). */
     lastDelay: number = 1;
 
-    private readonly slotIndex: number;
+    readonly slotIndex: number;
     private readonly delayFn: (base: number, triggerChance: number, max?: number) => number;
     private readonly debugLog: (msg: string) => void;
 

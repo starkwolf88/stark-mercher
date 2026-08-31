@@ -8,9 +8,11 @@ import { getOfferSlotStateWithProgress, offerSlotCount, auditGeState } from './g
 import { setDelayProfileForAccount, createDelay, getActiveDelayProfile } from './antiban/humanised-delay.js';
 import { setClickJitterProfile, generateClickJitterProfile, setClickJitterDebugLog } from './antiban/click-jitter.js';
 import { autoLoopTick, createAutoLoopState, resetAutoLoop, type AutoLoopState } from './grand_exchange/auto-loop.js';
-import { breakStep, wallClockStep, resetBreakState, initSessionProfile, markNightlyBreakFinished } from './antiban/session.js';
+import { breakStep, wallClockStep, resetBreakState, initSessionProfile, markNightlyBreakFinished, resetHop, forceHop, shouldPauseForHopBoundary } from './antiban/session.js';
 import { resetLoginState } from './antiban/login.js';
 import { resetLogoutState } from './antiban/logout.js';
+import { hopStep, completeHop, onChatMessage as onHopChatMessage } from './antiban/hopper.js';
+import { renderBotOverlay } from './widgets/bot-overlay.js';
 import type { SessionProfile } from './antiban/session-profile.js';
 
 export class StarkMercher extends titan.Plugin {
@@ -23,6 +25,14 @@ export class StarkMercher extends titan.Plugin {
     terminated = false;
     terminationReason = '';
     isRunning = false;
+
+    // --- Overlay HUD ---
+    // isHudActive gates the overlay render callback. Set true on enable,
+    // false on disable.
+    isHudActive = false;
+    // statusText is the human-readable top-level action string shown in the
+    // overlay's Status field. Updated by the auto-loop and test flows.
+    statusText = 'Stopped';
 
     // Action throttle state
     lastActionTick = -1;
@@ -102,6 +112,39 @@ export class StarkMercher extends titan.Plugin {
     logoutNextAttemptMs = 0;
     logoutComplete = false;
 
+    // --- Player idle tracking (for hop safe-boundary checks) ---
+    consecutiveMovingTicks = 0;
+    lastPlayerStationaryTick = 0;
+
+    // --- Session day timer ---
+    // Tracks when the current day session started (wall-clock ms). Set lazily
+    // when the player is logged in and not on a break. Reset to -1 when a
+    // nightly break starts (the day session ends). Used by the overlay to
+    // show "Session (Day): elapsed (target)".
+    sessionPlayStartMs = -1;
+
+    // --- World hop state ---
+    // Adapted from stark-mixology. The bot hops to a random safe members world
+    // at a profile-scheduled interval. Hopping pauses the auto-loop while the
+    // hop is in progress and for a short resume delay afterwards.
+    nextHopTick = -1;
+    nextHopAtMs = -1;
+    nextHopStartAtMs = -1;
+    nextHopTargetTicks = -1;
+    nextHopPausedRemainingMs = -1;
+    hopResumeAtMs = -1;
+    lastHopTick = -1;
+    lastHopMs = -1;
+    hopInProgress = false;
+    hopSawLoggedOut = false;
+    hopToWorldId = -1;
+    hopCooldownTick = -1;
+    hopCooldownTicks = 30;
+    forceHopPending = false;
+    hopJustCompleted = false;
+    hopJustCompletedAtMs = -1;
+    hopCount = 0;
+
     // --- Hidden session profile setting ---
     // Stores per-account session profiles as JSON (sleep/wake/break timing).
     // Keyed by "sessionProfile:<accountName>".
@@ -120,6 +163,38 @@ export class StarkMercher extends titan.Plugin {
         name: 'Offer cache (hidden)',
         default: '{}',
         hidden: true,
+    });
+
+    // --- Hidden daily profit setting ---
+    // Stores per-account daily profit as JSON. Keyed by account name.
+    // Each entry has { dayStartedAt, profit }. Day rollover is handled by
+    // comparing dayStartedAt to the current day's midnight on read/write.
+    dailyProfitSetting: titan.Setting<string> = this.stringSetting({
+        key: 'dailyProfit',
+        name: 'Daily profit (hidden)',
+        default: '{}',
+        hidden: true,
+    });
+
+    // --- Hidden hop state setting ---
+    // Stores per-account hop timer state as JSON (nextHopAtMs, hopCount, etc.).
+    // Survives client restarts and plugin reloads.
+    hopStateSetting: titan.Setting<string> = this.stringSetting({
+        key: 'hopState',
+        name: 'Hop state (hidden)',
+        default: '{}',
+        hidden: true,
+    });
+
+    // --- Overlay HUD registration ---
+    // The overlay renders every frame while isHudActive is true. It draws
+    // the Status, Inventory Coins, and Daily Profit fields.
+    hud = this.overlay({
+        layer: 'AboveWidgets',
+        render: () => {
+            if (!this.isHudActive) return;
+            renderBotOverlay(this);
+        },
     });
 
     // --- Auto / Manual mode toggle ---
@@ -215,6 +290,44 @@ export class StarkMercher extends titan.Plugin {
         key: 'logDebug',
         name: 'Debug logging',
         default: false,
+    });
+
+    // --- World hop settings ---
+    hopWorlds: titan.Setting<boolean> = this.boolSetting({
+        key: 'hopWorlds',
+        name: 'Hop Worlds',
+        default: true,
+        tooltip: 'When disabled, the bot will not perform world hops.',
+        position: -1,
+    });
+
+    hopRegion: titan.Setting<number> = this.comboSetting({
+        key: 'hopRegion',
+        name: 'Hop Region',
+        default: 0,
+        tooltip: 'Restrict world hops to a specific region. Any uses all safe members worlds.',
+        position: -1,
+        choices: [
+            { value: 0, label: 'Any' },
+            { value: 1, label: 'UK' },
+            { value: 2, label: 'Germany' },
+            { value: 3, label: 'US' },
+        ],
+    });
+
+    resetHop: titan.Setting<void> = this.buttonSetting({
+        key: 'resetHop',
+        name: 'Reset Hop',
+        position: -1,
+        onClick: () => { resetHop(this); },
+    });
+
+    forceHop: titan.Setting<void> = this.buttonSetting({
+        key: 'forceHop',
+        name: 'Force Hop',
+        position: -1,
+        tooltip: 'Forces the next hop to become due. The hop still waits for a safe boundary.',
+        onClick: () => { forceHop(this); },
     });
 
     // --- Slot check buttons (1-8) ---
@@ -331,8 +444,14 @@ export class StarkMercher extends titan.Plugin {
         }
     }
 
-    onEnable() { onEnable(this); }
+    onEnable() {
+        onEnable(this);
+        this.isHudActive = true;
+        this.statusText = 'Idle';
+    }
     onDisable() {
+        this.isHudActive = false;
+        this.statusText = 'Stopped';
         if (this.terminated && this.terminationReason) {
             titan.logf("[Stark Mercher] Stopped: %s", this.terminationReason);
         }
@@ -401,7 +520,7 @@ export class StarkMercher extends titan.Plugin {
         }
     };
 
-    // onGameStateChanged — detect unexpected logouts and nightly wake
+    // onGameStateChanged — detect unexpected logouts, nightly wake, and hop completion
     onGameStateChanged = (event: titan.GameStateChangedEvent) => {
         if (this.terminated) return;
         // Detect unexpected logout (not a bot-initiated break)
@@ -417,6 +536,19 @@ export class StarkMercher extends titan.Plugin {
         if (event.newState === titan.LoginGameState.LoggedIn && this.breakType === 'nightly') {
             markNightlyBreakFinished(this);
         }
+        // Drive hop completion from game state changes too
+        if (this.hopInProgress) {
+            if (event.newState !== titan.LoginGameState.LoggedIn) {
+                this.hopSawLoggedOut = true;
+            }
+            completeHop(this, titan.state.client.tick);
+        }
+    };
+
+    // onChatMessage — listen for world switcher rejection messages
+    onChatMessage = (event: titan.ChatMessageEvent) => {
+        if (this.terminated) return;
+        onHopChatMessage(this, event);
     };
 }
 titan.register(new StarkMercher());
@@ -435,6 +567,22 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
     // breakStep returns false.
     if (breakStep(bot, tick)) return;
 
+    // World hop handling — returns true when a hop is in progress or being
+    // dispatched, pausing the auto-loop. Also drives hop completion.
+    if (hopStep(bot, tick)) return;
+
+    // Post-hop resume delay — wait a few seconds after arriving in the new
+    // world before resuming the auto-loop, so the client has time to settle.
+    if (bot.hopResumeAtMs > 0 && Date.now() < bot.hopResumeAtMs) return;
+    if (bot.hopResumeAtMs > 0 && Date.now() >= bot.hopResumeAtMs) {
+        bot.hopResumeAtMs = -1;
+    }
+
+    // Pause new actions while a hop or break is pending (waiting for a safe
+    // boundary to dispatch). This prevents starting a new GE flow right
+    // before a hop is about to fire.
+    if (shouldPauseForHopBoundary(bot)) return;
+
     // Throttle: block dispatch while the previous action's delay is pending.
     if (shouldWait(bot)) return;
 
@@ -445,6 +593,7 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
     if (bot.buyOfferTest) {
         const flow = bot.buyOfferTest;
         if (flow.status === 'in_progress') {
+            bot.statusText = `Buy test: ${flow.itemName} - x${flow.quantity} - ${flow.price}gp each`;
             if (flow.tick()) {
                 setAction(bot, 'buy_offer', flow.lastDelay); // humanised delay from the flow
             }
@@ -456,6 +605,7 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
             titan.logf('[Stark Mercher] Buy-offer test failed: %s', flow.error);
         }
         bot.buyOfferTest = null;
+        bot.statusText = 'Idle';
         return;
     }
 
@@ -465,6 +615,7 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
     if (bot.abortOfferTest) {
         const abortFlow = bot.abortOfferTest;
         if (abortFlow.status === 'in_progress') {
+            bot.statusText = `Abort test: slot ${abortFlow.slotIndex + 1}`;
             if (abortFlow.tick()) {
                 setAction(bot, 'abort_offer', abortFlow.lastDelay);
             }
@@ -476,6 +627,7 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
             titan.logf('[Stark Mercher] Abort-offer test failed: %s', abortFlow.error);
         }
         bot.abortOfferTest = null;
+        bot.statusText = 'Idle';
         return;
     }
 
@@ -485,6 +637,7 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
     if (bot.sellOfferTest) {
         const sellFlow = bot.sellOfferTest;
         if (sellFlow.status === 'in_progress') {
+            bot.statusText = `Sell test: ${sellFlow.itemName} - x${sellFlow.quantity} - ${sellFlow.price}gp each`;
             if (sellFlow.tick()) {
                 setAction(bot, 'sell_offer', sellFlow.lastDelay);
             }
@@ -496,6 +649,7 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
             titan.logf('[Stark Mercher] Sell-offer test failed: %s', sellFlow.error);
         }
         bot.sellOfferTest = null;
+        bot.statusText = 'Idle';
         return;
     }
 

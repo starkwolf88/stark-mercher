@@ -85,9 +85,11 @@ export class BuyOfferFlow {
     lastDelay: number = 1;
 
     private slotIndex: number = -1; // 0-indexed, -1 = first available
-    private itemName: string = '';
-    private readonly quantity: number;
-    private readonly price: number;
+    private _itemName: string = '';
+    /** The item name being bought (public read-only access for overlay). */
+    get itemName(): string { return this._itemName; }
+    readonly quantity: number;
+    readonly price: number;
     private readonly delayFn: (base: number, triggerChance: number, max?: number) => number;
     private readonly debugLog: (msg: string) => void;
 
@@ -111,11 +113,11 @@ export class BuyOfferFlow {
 
         // Resolve item name — need it for the GE search.
         if (opts.itemName) {
-            this.itemName = opts.itemName;
+            this._itemName = opts.itemName;
         } else if (opts.itemId !== undefined) {
             const def = titan.state.itemDef(opts.itemId);
             if (def && def.name) {
-                this.itemName = def.name;
+                this._itemName = def.name;
             } else {
                 this.fail(`Could not resolve item name for ID ${opts.itemId}`);
                 return;
@@ -180,8 +182,8 @@ export class BuyOfferFlow {
                 this.resolveSlotFromAudit(audit);
                 return;
             }
-            if (configName.toLowerCase() !== this.itemName.toLowerCase()) {
-                this.fail(`Resume: wrong item in config screen — expected "${this.itemName}", got "${configName}"`);
+            if (configName.toLowerCase() !== this._itemName.toLowerCase()) {
+                this.fail(`Resume: wrong item in config screen — expected "${this._itemName}", got "${configName}"`);
                 return;
             }
             // Item matches. Check qty and price to determine step.
@@ -204,7 +206,7 @@ export class BuyOfferFlow {
         // Main GE screen — check if our offer was already placed.
         for (let i = 0; i < audit.slots.length; i++) {
             const s = audit.slots[i];
-            if (s.type === 'buy' && s.itemName && s.itemName.toLowerCase() === this.itemName.toLowerCase()) {
+            if (s.type === 'buy' && s.itemName && s.itemName.toLowerCase() === this._itemName.toLowerCase()) {
                 this.log(`Resume: offer already placed in slot ${i + 1} — done`);
                 this.slotIndex = i;
                 this.status = 'done';
@@ -224,7 +226,7 @@ export class BuyOfferFlow {
     private resolveSlotFromAudit(audit: GeAudit): void {
         for (let i = 0; i < audit.slots.length; i++) {
             const s = audit.slots[i];
-            if (s.type === 'buy' && s.itemName && s.itemName.toLowerCase() === this.itemName.toLowerCase()) {
+            if (s.type === 'buy' && s.itemName && s.itemName.toLowerCase() === this._itemName.toLowerCase()) {
                 this.slotIndex = i;
                 this.log(`Resume: identified slot ${i + 1} from audit`);
                 return;
@@ -373,9 +375,9 @@ export class BuyOfferFlow {
 
     // Step 3: Start typing the item name.
     private startTypingSearch(): boolean {
-        this.log(`Step 3: Typing search "${this.itemName}"`);
+        this.log(`Step 3: Typing search "${this._itemName}"`);
         if (!this.typingStarted) {
-            if (!typeString(this.itemName)) {
+            if (!typeString(this._itemName)) {
                 return this.waitTick(); // typing couldn't start, retry
             }
             this.typingStarted = true;
@@ -404,17 +406,17 @@ export class BuyOfferFlow {
     // search result text widgets for an exact case-insensitive name match
     // and click that specific result by its child slot index.
     private clickSearchResultStep(): boolean {
-        const { active, matchIndex } = scanSearchResults(this.itemName);
+        const { active, matchIndex } = scanSearchResults(this._itemName);
         if (!active) {
             // Results not visible yet — wait for them to appear.
             return this.waitTick();
         }
         if (matchIndex < 0) {
             // Results are visible but no exact match — fail.
-            this.fail(`No exact match for "${this.itemName}" in GE search results`);
+            this.fail(`No exact match for "${this._itemName}" in GE search results`);
             return false;
         }
-        this.log(`Step 5: Clicking search result "${this.itemName}" (index ${matchIndex})`);
+        this.log(`Step 5: Clicking search result "${this._itemName}" (index ${matchIndex})`);
         if (!clickSearchResult(matchIndex)) {
             return this.waitTick();
         }
@@ -442,11 +444,11 @@ export class BuyOfferFlow {
             this.fail('Could not read item name from offer config screen');
             return false;
         }
-        if (loadedName.toLowerCase() !== this.itemName.toLowerCase()) {
+        if (loadedName.toLowerCase() !== this._itemName.toLowerCase()) {
             // Wrong item loaded — Escape out and fail.
-            this.log(`Item mismatch: expected "${this.itemName}", got "${loadedName}" — escaping`);
+            this.log(`Item mismatch: expected "${this._itemName}", got "${loadedName}" — escaping`);
             titan.keyboard.sendKey(titan.keyboard.Key.Escape);
-            this.fail(`Wrong item loaded: expected "${this.itemName}", got "${loadedName}"`);
+            this.fail(`Wrong item loaded: expected "${this._itemName}", got "${loadedName}"`);
             return false;
         }
         this.log(`Item validated: "${loadedName}"`);
@@ -595,8 +597,8 @@ export class BuyOfferFlow {
         const loadedName = readOfferItemName();
 
         const errors: string[] = [];
-        if (loadedName && loadedName.toLowerCase() !== this.itemName.toLowerCase()) {
-            errors.push(`item: expected "${this.itemName}", got "${loadedName}"`);
+        if (loadedName && loadedName.toLowerCase() !== this._itemName.toLowerCase()) {
+            errors.push(`item: expected "${this._itemName}", got "${loadedName}"`);
         }
         if (loadedQty !== null && loadedQty !== this.quantity) {
             errors.push(`quantity: expected ${this.quantity}, got ${loadedQty}`);
@@ -614,7 +616,7 @@ export class BuyOfferFlow {
             return false;
         }
 
-        this.log(`Offer validated: ${this.quantity}x ${this.itemName} @ ${this.price}gp each`);
+        this.log(`Offer validated: ${this.quantity}x ${this._itemName} @ ${this.price}gp each`);
         // Set a delay before the next action (clicking confirm).
         this.computeDelay(1, 100, 3);
         this.advance();
@@ -650,11 +652,11 @@ export class BuyOfferFlow {
         }
         // Verify the slot contains the correct item.
         const slotState = getOfferSlotState(this.slotIndex);
-        if (slotState.itemName && slotState.itemName.toLowerCase() !== this.itemName.toLowerCase()) {
-            this.fail(`Offer placed with wrong item: expected "${this.itemName}", got "${slotState.itemName}"`);
+        if (slotState.itemName && slotState.itemName.toLowerCase() !== this._itemName.toLowerCase()) {
+            this.fail(`Offer placed with wrong item: expected "${this._itemName}", got "${slotState.itemName}"`);
             return false;
         }
-        this.log(`Offer confirmed in slot ${this.slotIndex + 1}: ${slotState.itemName ?? this.itemName}`);
+        this.log(`Offer confirmed in slot ${this.slotIndex + 1}: ${slotState.itemName ?? this._itemName}`);
         this.advance();
         return false;
     }

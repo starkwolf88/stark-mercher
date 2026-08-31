@@ -92,9 +92,11 @@ export class SellOfferFlow {
     lastDelay: number = 1;
 
     private slotIndex: number = -1; // 0-indexed, -1 = first available
-    private readonly itemName: string;
-    private readonly quantity: number;
-    private readonly price: number;
+    private readonly _itemName: string;
+    /** The item name being sold (public read-only access for overlay). */
+    get itemName(): string { return this._itemName; }
+    readonly quantity: number;
+    readonly price: number;
     private readonly delayFn: (base: number, triggerChance: number, max?: number) => number;
     private readonly debugLog: (msg: string) => void;
 
@@ -104,7 +106,7 @@ export class SellOfferFlow {
     private reattempts = 0;
 
     constructor(opts: SellOfferOptions) {
-        this.itemName = opts.itemName;
+        this._itemName = opts.itemName;
         this.quantity = opts.quantity;
         this.price = opts.price;
         this.delayFn = opts.delayFn ?? ((base: number) => Math.max(1, base));
@@ -203,16 +205,16 @@ export class SellOfferFlow {
             return false;
         }
         // Verify the item is in the inventory.
-        const item = titan.utils.inventory.find(this.itemName);
+        const item = titan.utils.inventory.find(this._itemName);
         if (!item) {
-            this.fail(`Item "${this.itemName}" not found in inventory`);
+            this.fail(`Item "${this._itemName}" not found in inventory`);
             return false;
         }
         if (item.quantity < this.quantity) {
-            this.fail(`Not enough "${this.itemName}" in inventory: have ${item.quantity}, need ${this.quantity}`);
+            this.fail(`Not enough "${this._itemName}" in inventory: have ${item.quantity}, need ${this.quantity}`);
             return false;
         }
-        this.log(`Found ${item.quantity}x ${this.itemName} in inventory (slot ${item.slot})`);
+        this.log(`Found ${item.quantity}x ${this._itemName} in inventory (slot ${item.slot})`);
         this.computeDelay(1, 100, 3);
         this.advance();
         return true;
@@ -250,15 +252,15 @@ export class SellOfferFlow {
     //   opcode=57 (CC_OP), identifier=1, childSlot=item.slot
     // The inventory widget packed ID is 30605312 (group 467, child 0).
     private clickInventoryItem(): boolean {
-        this.log(`Step 3: Clicking "${this.itemName}" in inventory`);
-        const item = titan.utils.inventory.find(this.itemName);
+        this.log(`Step 3: Clicking "${this._itemName}" in inventory`);
+        const item = titan.utils.inventory.find(this._itemName);
         if (!item) {
             // Item may have moved or been consumed — re-check.
             if (this.waitTicks < 2) {
                 this.waitTicks++;
                 return false;
             }
-            this.fail(`Item "${this.itemName}" disappeared from inventory`);
+            this.fail(`Item "${this._itemName}" disappeared from inventory`);
             return false;
         }
         const invWidget = titan.state.widgets.find(GE_SELL_INVENTORY_WIDGET);
@@ -289,10 +291,10 @@ export class SellOfferFlow {
             this.fail('Could not read item name from offer config screen');
             return false;
         }
-        if (loadedName.toLowerCase() !== this.itemName.toLowerCase()) {
-            this.log(`Item mismatch: expected "${this.itemName}", got "${loadedName}" — escaping`);
+        if (loadedName.toLowerCase() !== this._itemName.toLowerCase()) {
+            this.log(`Item mismatch: expected "${this._itemName}", got "${loadedName}" — escaping`);
             titan.keyboard.sendKey(titan.keyboard.Key.Escape);
-            this.fail(`Wrong item loaded: expected "${this.itemName}", got "${loadedName}"`);
+            this.fail(`Wrong item loaded: expected "${this._itemName}", got "${loadedName}"`);
             return false;
         }
         this.log(`Item validated: "${loadedName}"`);
@@ -393,8 +395,8 @@ export class SellOfferFlow {
         const loadedName = readOfferItemName();
 
         const errors: string[] = [];
-        if (loadedName && loadedName.toLowerCase() !== this.itemName.toLowerCase()) {
-            errors.push(`item: expected "${this.itemName}", got "${loadedName}"`);
+        if (loadedName && loadedName.toLowerCase() !== this._itemName.toLowerCase()) {
+            errors.push(`item: expected "${this._itemName}", got "${loadedName}"`);
         }
         if (loadedPrice !== null && loadedPrice !== this.price) {
             errors.push(`price: expected ${this.price}, got ${loadedPrice}`);
@@ -408,7 +410,7 @@ export class SellOfferFlow {
             return false;
         }
 
-        this.log(`Offer validated: ${this.itemName} @ ${this.price}gp each`);
+        this.log(`Offer validated: ${this._itemName} @ ${this.price}gp each`);
         this.computeDelay(1, 100, 3);
         this.advance();
         return true;
@@ -439,11 +441,11 @@ export class SellOfferFlow {
             return false;
         }
         const slotState = getOfferSlotState(this.slotIndex);
-        if (slotState.itemName && slotState.itemName.toLowerCase() !== this.itemName.toLowerCase()) {
-            this.fail(`Offer placed with wrong item: expected "${this.itemName}", got "${slotState.itemName}"`);
+        if (slotState.itemName && slotState.itemName.toLowerCase() !== this._itemName.toLowerCase()) {
+            this.fail(`Offer placed with wrong item: expected "${this._itemName}", got "${slotState.itemName}"`);
             return false;
         }
-        this.log(`Sell offer confirmed in slot ${this.slotIndex + 1}: ${slotState.itemName ?? this.itemName}`);
+        this.log(`Sell offer confirmed in slot ${this.slotIndex + 1}: ${slotState.itemName ?? this._itemName}`);
         this.advance();
         return false;
     }

@@ -27,6 +27,7 @@ import type { SessionProfile } from './session-profile.js';
 import { loadOrCreateSessionProfile, formatTime } from './session-profile.js';
 import { logoutForBreak, resetLogoutState } from './logout.js';
 import { loginStep, resetLoginState } from './login.js';
+import { isPlayerIdle } from '../general/helpers.js';
 
 const MS_PER_MINUTE = 60000;
 const MS_PER_DAY = 1440 * MS_PER_MINUTE;
@@ -76,6 +77,15 @@ function getUKMidnightMs(ms: number): number {
     const p = getUKParts(new Date(ms));
     const wholeSeconds = Math.floor(ms / 1000) * 1000;
     return wholeSeconds - (p.hour * 60 + p.minute) * MS_PER_MINUTE - p.second * 1000;
+}
+
+/** Format a UTC timestamp as HH:MM in UK local time (with DST). */
+export function formatUKTime(ms: number): string {
+    if (!Number.isFinite(ms) || ms < 0) return '-';
+    const p = getUKParts(new Date(ms));
+    const hour = p.hour.toString().padStart(2, '0');
+    const minute = p.minute.toString().padStart(2, '0');
+    return `${hour}:${minute}`;
 }
 
 // --- Break phase ------------------------------------------------------------
@@ -267,11 +277,91 @@ export function resetBreakState(bot: StarkMercher): void {
     bot.nightlySleepMinutes = -1;
     bot.nightlyBreakFinished = -1;
     bot.loopIdleForBreak = false;
+    bot.sessionPlayStartMs = -1;
     bot.currentPlayerName = '';
     bot.sessionProfile = null;
     bot.unexpectedLogoutAtMs = 0;
     resetLogoutState(bot);
     resetLoginState(bot);
+}
+
+/** Reset hop state (in-memory). Called on enable. Persisted timers are
+ *  restored separately by loadHopState. */
+export function resetHopState(bot: StarkMercher): void {
+    bot.nextHopTick = -1;
+    bot.nextHopAtMs = -1;
+    bot.nextHopStartAtMs = -1;
+    bot.nextHopTargetTicks = -1;
+    bot.nextHopPausedRemainingMs = -1;
+    bot.hopResumeAtMs = -1;
+    bot.lastHopTick = -1;
+    bot.lastHopMs = -1;
+    bot.hopInProgress = false;
+    bot.hopSawLoggedOut = false;
+    bot.hopToWorldId = -1;
+    bot.hopCooldownTick = -1;
+    bot.hopCooldownTicks = Math.floor(Math.random() * 11) + 25;
+    bot.forceHopPending = false;
+    bot.hopJustCompleted = false;
+    bot.hopJustCompletedAtMs = -1;
+}
+
+/** Reset the hop timer (button-triggered). Clears the scheduled next hop. */
+export function resetHop(bot: StarkMercher): void {
+    bot.nextHopAtMs = -1;
+    bot.nextHopStartAtMs = -1;
+    bot.nextHopTick = -1;
+    bot.nextHopTargetTicks = -1;
+    bot.nextHopPausedRemainingMs = -1;
+    bot.hopCooldownTick = -1;
+    bot.forceHopPending = false;
+    titan.log('[Stark Mercher] Hop timer reset');
+}
+
+/** Force the next hop to become due immediately (button-triggered).
+ *  The hop still waits for a safe boundary before dispatching. */
+export function forceHop(bot: StarkMercher): void {
+    if (bot.hopInProgress) {
+        titan.log('[Stark Mercher] Hop already in progress — ignoring force hop');
+        return;
+    }
+    const now = Date.now();
+    const tick = titan.state.client.tick;
+    bot.nextHopAtMs = now;
+    bot.nextHopStartAtMs = now;
+    bot.nextHopTick = tick;
+    bot.nextHopTargetTicks = 0;
+    bot.nextHopPausedRemainingMs = -1;
+    bot.hopCooldownTick = -1;
+    bot.forceHopPending = true;
+    titan.log('[Stark Mercher] Hop forced — will dispatch at next safe boundary');
+}
+
+// --- Safe boundary (for hop dispatch) ----------------------------------------
+
+const SAFE_BOUNDARY_IDLE_BUFFER_TICKS = 2;
+
+/** Returns a reason string if not safe to hop, or null if safe. */
+export function getSafeBoundaryReason(bot: StarkMercher): string | null {
+    if (bot.hopInProgress) return 'hop in progress';
+    if (!isPlayerIdle(bot)) return 'player not idle';
+    const tick = titan.state.client.tick;
+    if (bot.lastPlayerStationaryTick > 0 && tick - bot.lastPlayerStationaryTick < SAFE_BOUNDARY_IDLE_BUFFER_TICKS) {
+        return 'player recently idle';
+    }
+    return null;
+}
+
+/** True when it's safe to dispatch a world hop. */
+export function isAtSafeBoundary(bot: StarkMercher): boolean {
+    return getSafeBoundaryReason(bot) === null;
+}
+
+/** True when tickLogic should pause new actions because a hop or break is
+ *  pending and waiting to dispatch. */
+export function shouldPauseForHopBoundary(bot: StarkMercher): boolean {
+    if (bot.forceHopPending) return true;
+    return false;
 }
 
 /**
@@ -368,10 +458,18 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
         return true;
     }
 
+    // --- Lazy init sessionPlayStartMs ---
+    // Set when the player is logged in, not on a break, and the timer hasn't
+    // been started yet. This handles post-wake and post-enable.
+    if (bot.breakPhase === 'none' && bot.sessionPlayStartMs < 0) {
+        bot.sessionPlayStartMs = now;
+    }
+
     // --- Check for nightly break ---
     if (isNightlyBreakDue(bot)) {
         if (bot.breakPhase === 'none') {
-            // Start nightly break
+            // Start nightly break — end the day session
+            bot.sessionPlayStartMs = -1;
             bot.breakPhase = 'logging_out';
             bot.breakType = 'nightly';
             bot.breakStartMs = now;
