@@ -1070,7 +1070,7 @@ async function getMerchableItems() {
     }
 
     // Write to JSON file.
-    await fs.writeFile('C:\\Users\\Zsus\\Documents\\GitHub\\stark-mercher\\merchableItems.json', JSON.stringify(merchableItems, null, 2), 'utf-8');
+    await fs.writeFile('merchableItems.json', JSON.stringify(merchableItems, null, 2), 'utf-8');
 
     // Write priceHistory.json — a lightweight fallback price lookup for
     // items that end up in inventory but aren't in merchableItems.json or
@@ -1090,7 +1090,7 @@ async function getMerchableItems() {
             fetchedAt: dataFetchedAt,
         };
     }
-    await fs.writeFile('C:\\Users\\Zsus\\Documents\\GitHub\\stark-mercher\\priceHistory.json', JSON.stringify(priceHistory, null, 2), 'utf-8');
+    await fs.writeFile('priceHistory.json', JSON.stringify(priceHistory, null, 2), 'utf-8');
 
     console.log('-------------------------------------------------------------------------------------------------------------------------------------------------------------');
     if (debug) {
