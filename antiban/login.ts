@@ -26,8 +26,13 @@ const LOGIN_OVERALL_TIMEOUT_MS = 5 * 60 * 1000;
 const STAGED_LOGIN_INDEX = 10;
 const STAGED_LOGIN_INDEX_LEGACY = 2;
 const GAME_UPDATE_LOGIN_INDEX = 9;
-const GAME_UPDATE_RETRY_MIN_MS = 30 * 1000;
-const GAME_UPDATE_RETRY_MAX_MS = 60 * 1000;
+// Index 9 covers both "game update in progress" and "you were signed out".
+// We can't distinguish them by message text (the snapshot doesn't expose it),
+// so we use exponential backoff: start at 5s, double each retry up to 60s.
+// If it's "signed out", the first fast retry succeeds. If it's a game update
+// (which can last 30+ min), we back off to avoid hammering the login server.
+const INDEX9_RETRY_INITIAL_MS = 5 * 1000;
+const INDEX9_RETRY_MAX_MS = 60 * 1000;
 const LOGIN_SUBMIT_DELAY_TICKS_MIN = 2;
 const LOGIN_SUBMIT_DELAY_TICKS_MAX = 4;
 
@@ -145,25 +150,41 @@ function tryStageAndSubmitLogin(bot: StarkMercher): boolean {
         return false;
     }
 
-    // Game update in progress
+    // Index 9 — "game update in progress" OR "you were signed out".
+    // The snapshot doesn't expose the message text, so we can't distinguish
+    // them. We use exponential backoff (5s → 10s → 20s → 40s → 60s cap) and
+    // re-stage credentials on each retry. If it's "signed out", the first
+    // fast retry succeeds. If it's a game update, we back off to avoid
+    // hammering the login server for 30+ minutes.
+    // loginGameUpdateWaitAtMs is repurposed as the last retry delay (ms).
     if (snap.loginIndex === GAME_UPDATE_LOGIN_INDEX) {
         if (bot.loginGameUpdateWaitAtMs <= 0) {
-            bot.loginGameUpdateWaitAtMs = now;
+            // First detection — start with the initial delay.
+            bot.loginGameUpdateWaitAtMs = INDEX9_RETRY_INITIAL_MS;
             bot.loginFirstAttemptAtMs = 0;
-            const retryMs = sampleInt(GAME_UPDATE_RETRY_MIN_MS, GAME_UPDATE_RETRY_MAX_MS);
-            bot.loginStageNextAttemptAt = now + retryMs;
-            humanLog(bot, 'Game update in progress (loginIndex=9); retrying login in %ds', Math.round(retryMs / 1000));
+            bot.loginStageNextAttemptAt = now + INDEX9_RETRY_INITIAL_MS;
+            humanLog(bot, 'Login screen message (loginIndex=9); retrying in %ds', Math.round(INDEX9_RETRY_INITIAL_MS / 1000));
         } else if (now >= bot.loginStageNextAttemptAt) {
             bot.loginFirstAttemptAtMs = 0;
-            const retryMs = sampleInt(GAME_UPDATE_RETRY_MIN_MS, GAME_UPDATE_RETRY_MAX_MS);
+            // Re-stage credentials on each retry — handles "signed out" where
+            // the credential fields were cleared.
+            const characterName = bot.currentPlayerName?.trim() || '';
+            if (characterName) {
+                titan.state.login.stageCredentials(characterName);
+            }
+            // Exponential backoff: double the last delay, capped at max.
+            const lastDelay = bot.loginGameUpdateWaitAtMs;
+            const retryMs = Math.min(INDEX9_RETRY_MAX_MS, lastDelay * 2);
+            bot.loginGameUpdateWaitAtMs = retryMs;
             bot.loginStageNextAttemptAt = now + retryMs;
-            debugLog(bot, 'Game update still in progress; retrying login in %ds', Math.round(retryMs / 1000));
+            debugLog(bot, 'Login screen message persists (loginIndex=9); re-staged %s, retrying in %ds',
+                characterName || '(no name)', Math.round(retryMs / 1000));
         }
         return true;
     }
 
     if (bot.loginGameUpdateWaitAtMs > 0) {
-        debugLog(bot, 'Game update finished (loginIndex=%d); resuming login flow', snap.loginIndex);
+        debugLog(bot, 'Login screen message cleared (loginIndex=%d); resuming login flow', snap.loginIndex);
         bot.loginGameUpdateWaitAtMs = 0;
         bot.loginStageNextAttemptAt = 0;
     }
