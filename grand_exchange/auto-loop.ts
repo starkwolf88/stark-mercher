@@ -102,6 +102,37 @@ const FAST_SELL_PRICE_MULTIPLIER = 0.5;  // 50% of sell price
 // shift but short enough to not miss opportunities.
 const BUY_FREEZE_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 
+// --- Consecutive failure tracking -------------------------------------------
+// Major "stuck" states (GE won't open, sub-screen won't close, collect button
+// not clickable) terminate the bot after this many consecutive failures.
+// Recoverable failures (price mismatch, quantity validation, search not found)
+// do NOT use this system — they press Esc and retry the loop.
+const MAX_CONSECUTIVE_FAILURES = 3;
+
+/** Increments the failure counter for a given key. Returns the new count. */
+const recordFailure = (loop: AutoLoopState, key: string): number => {
+    loop.failureCounters[key] = (loop.failureCounters[key] ?? 0) + 1;
+    return loop.failureCounters[key];
+};
+
+/** Resets the failure counter for a given key to 0 (call on success). */
+const resetFailure = (loop: AutoLoopState, key: string): void => {
+    loop.failureCounters[key] = 0;
+};
+
+/** Terminates the bot with an error message when a failure counter hits the
+ *  limit. Returns true if the bot was terminated (caller should return). */
+const checkFailureTerminate = (bot: StarkMercher, loop: AutoLoopState, key: string, label: string): boolean => {
+    const count = loop.failureCounters[key] ?? 0;
+    if (count >= MAX_CONSECUTIVE_FAILURES) {
+        bot.terminated = true;
+        bot.terminationReason = `${label} failed ${count}x consecutively — terminating to prevent stuck state`;
+        titan.logf('[Stark Mercher] ERROR: %s', bot.terminationReason);
+        return true;
+    }
+    return false;
+};
+
 // --- Buy-freeze persistence -------------------------------------------------
 // The buy-freeze map is persisted in a hidden JSON setting (keyed by account
 // name) so it survives hot reloads and client restarts. Without persistence,
@@ -220,6 +251,11 @@ export interface AutoLoopState {
      *  expired buy-freeze entries, keeping the cache bounded during long
      *  sessions without breaks. */
     lastCleanupMs: number;
+    /** Consecutive failure counters for major "stuck" states. When any
+     *  counter reaches MAX_CONSECUTIVE_FAILURES, the bot terminates with
+     *  an error log. Counters reset to 0 on success. Keys: 'geOpen',
+     *  'geSubScreen', 'collect'. */
+    failureCounters: Record<string, number>;
 }
 
 export const createAutoLoopState = (): AutoLoopState => ({
@@ -238,6 +274,7 @@ export const createAutoLoopState = (): AutoLoopState => ({
     needsPostLoginCleanup: true,
     abortSlotInfo: null,
     lastCleanupMs: 0,
+    failureCounters: {},
 });
 
 // --- Helper: initialise profiles ------------------------------------------
@@ -561,28 +598,39 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             debugLog(bot, 'Auto: GE not open and not near GE — walking to GE');
             bot.statusText = 'Walking to Grand Exchange';
             walkToGe();
-            const delay = createDelay(2, 30, 8);
+            const delay = createDelay(5, 30, 8);
             setAction(bot, 'auto_walk', delay);
             debugLog(bot, `Auto: action=auto_walk delay=${delay}t`);
             return true;
         }
         // Near GE — try to open it via clerk or booth.
+        // Use a longer delay (8-15 ticks / 4.8-9s) after clicking so the
+        // player has time to walk to the booth and the interface has time
+        // to open. Without this, the loop re-clicks every 1-4 ticks,
+        // sending the player running around the GE area.
         debugLog(bot, 'Auto: GE not open, near GE — opening via clerk/booth');
         bot.statusText = 'Opening Grand Exchange';
         if (openGe()) {
-            const delay = createDelay(2, 30, 8);
+            const failures = recordFailure(loop, 'geOpen');
+            debugLog(bot, `Auto: GE open click dispatched (attempt ${failures}/${MAX_CONSECUTIVE_FAILURES})`);
+            if (checkFailureTerminate(bot, loop, 'geOpen', 'Opening Grand Exchange')) return true;
+            const delay = createDelay(8, 15, 3);
             setAction(bot, 'auto_open_ge', delay);
-            debugLog(bot, `Auto: action=auto_open_ge delay=${delay}t`);
+            debugLog(bot, `Auto: action=auto_open_ge delay=${delay}t (waiting for GE to open)`);
         } else {
             // Couldn't find clerk or booth — wait and retry.
-            debugLog(bot, 'Auto: no clerk/booth found — waiting');
+            const failures = recordFailure(loop, 'geOpen');
+            debugLog(bot, `Auto: no clerk/booth found — waiting (attempt ${failures}/${MAX_CONSECUTIVE_FAILURES})`);
+            if (checkFailureTerminate(bot, loop, 'geOpen', 'Finding G.E clerk/booth')) return true;
             bot.statusText = 'Searching for G.E clerk/booth';
-            const delay = createDelay(3, 50, 8);
+            const delay = createDelay(5, 50, 8);
             setAction(bot, 'auto_wait', delay);
             debugLog(bot, `Auto: action=auto_wait delay=${delay}t (no clerk/booth)`);
         }
         return true;
     }
+    // GE is open — reset the failure counter.
+    resetFailure(loop, 'geOpen');
 
     // --- Step 1b: Close GE sub-screens ---
     // If the offer config screen, search prompt, or price prompt is open
@@ -590,13 +638,17 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     // Escape to return to the main GE view. Without this, slot clicks would
     // land on the sub-screen instead of the intended slot.
     if (isOfferConfigOpen() || isSearchPromptShown() || isPricePromptShown()) {
-        debugLog(bot, 'Auto: GE sub-screen open (offer config / search / price prompt) — closing with Escape');
+        const failures = recordFailure(loop, 'geSubScreen');
+        debugLog(bot, `Auto: GE sub-screen open (offer config / search / price prompt) — closing with Escape (attempt ${failures}/${MAX_CONSECUTIVE_FAILURES})`);
+        if (checkFailureTerminate(bot, loop, 'geSubScreen', 'Closing GE sub-screen')) return true;
         bot.statusText = 'Closing GE sub-screen';
         sendKeyWithJitter(() => titan.keyboard.sendKey(titan.keyboard.Key.Escape), { reason: 'close GE sub-screen' });
         const delay = createDelay(2, 30, 8);
         setAction(bot, 'auto_close_ge_screen', delay);
         return true;
     }
+    // No sub-screen open — reset the failure counter.
+    resetFailure(loop, 'geSubScreen');
 
     // --- Step 2: Get all slot states ---
     const audit = auditGeState();
@@ -715,7 +767,9 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         // Completed/aborted slot detected — click collect to inventory.
         // Profit for completed sells is recorded by the sweep above (for
         // 100% completed) or at re-list time in Step 5 (for partial aborts).
-        debugLog(bot, 'Auto: completed/aborted offer detected — collecting to inventory');
+        const failures = recordFailure(loop, 'collect');
+        debugLog(bot, `Auto: completed/aborted offer detected — collecting to inventory (attempt ${failures}/${MAX_CONSECUTIVE_FAILURES})`);
+        if (checkFailureTerminate(bot, loop, 'collect', 'Collecting completed/aborted offer')) return true;
         bot.statusText = 'Collecting from G.E';
         if (clickCollectToInventory()) {
             const delay = createDelay(2, 40, 8);
@@ -729,6 +783,8 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         }
         return true;
     }
+    // No completed/aborted slots — reset the collect failure counter.
+    resetFailure(loop, 'collect');
 
     // --- Step 4: Stale offers flow ---
     // Check each occupied slot for stale conditions.
@@ -1133,4 +1189,5 @@ export const resetAutoLoop = (bot: StarkMercher): void => {
     // load. If no player name is available yet (e.g. logged out at reload
     // time), the last-active-account fallback is used.
     loop.buyFreezeUntil = loadBuyFreeze(bot, resolveFreezeAccountName(bot));
+    loop.failureCounters = {};
 };
