@@ -706,6 +706,15 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                     continue; // buy-limit window still active — keep entry
                 }
             }
+            // Preserve entries with pending sell profit — the completed-sell
+            // sweep (Step 3) needs to record the profit before this entry can
+            // be safely removed. Without this, a hot-reload between collecting
+            // a completed sell and the sweep running loses the profit
+            // permanently (the item is no longer in any slot or inventory, so
+            // reconciliation would otherwise treat it as orphaned).
+            if (entry && entry.mode === 'sell' && entry.sellQuantity !== undefined && entry.sellQuantity > 0) {
+                continue; // pending sell profit — let the sweep handle it
+            }
             // Orphaned — not in any slot or inventory, no active buy-limit
             cache.remove(cacheKey);
             removed.push(cacheKey);
