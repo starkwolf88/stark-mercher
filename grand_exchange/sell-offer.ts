@@ -350,7 +350,7 @@ export class SellOfferFlow {
     private startTypingPrice(): boolean {
         this.log(`Step 8: Typing price "${this.price}"`);
         if (!this.typingStarted) {
-            if (!typeString(String(this.price))) {
+            if (!typeString(String(this.price), 'price')) {
                 return this.waitTick();
             }
             this.typingStarted = true;

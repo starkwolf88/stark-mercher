@@ -377,7 +377,7 @@ export class BuyOfferFlow {
     private startTypingSearch(): boolean {
         this.log(`Step 3: Typing search "${this._itemName}"`);
         if (!this.typingStarted) {
-            if (!typeString(this._itemName)) {
+            if (!typeString(this._itemName, 'name')) {
                 return this.waitTick(); // typing couldn't start, retry
             }
             this.typingStarted = true;
@@ -488,7 +488,7 @@ export class BuyOfferFlow {
     private startTypingQty(): boolean {
         this.log(`Step 10: Typing quantity "${this.quantity}"`);
         if (!this.typingStarted) {
-            if (!typeString(String(this.quantity))) {
+            if (!typeString(String(this.quantity), 'quantity')) {
                 return this.waitTick();
             }
             this.typingStarted = true;
@@ -548,7 +548,7 @@ export class BuyOfferFlow {
     private startTypingPrice(): boolean {
         this.log(`Step 15: Typing price "${this.price}"`);
         if (!this.typingStarted) {
-            if (!typeString(String(this.price))) {
+            if (!typeString(String(this.price), 'price')) {
                 return this.waitTick();
             }
             this.typingStarted = true;

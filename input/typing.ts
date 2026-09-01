@@ -12,10 +12,24 @@
 // ============================================================================
 
 import { generateTypingProfile, getTypingRange, type TypingProfile } from './typing-profile.js';
+import { cancelTypingMistakeSequence } from './typing-mistakes.js';
 
 // Active typing profile. Set via setTypingProfile() when the account is
 // known, or generated on first use from the account name.
 let activeProfile: TypingProfile | null = null;
+
+// Mistake-sequence flag. Set to true by typing-mistakes.ts while a
+// wrong-character + backspace correction sequence is in progress (the gap
+// between part1's completion and part2's start, when the SDK's own
+// isTyping() returns false but we're not done yet). isTyping() below
+// ORs this with the SDK flag so the flow's waitForTyping step doesn't
+// advance prematurely.
+let mistakeSequenceActive = false;
+
+/** Internal — called by typing-mistakes.ts to mark the gap active/inactive. */
+export const setMistakeSequenceActive = (active: boolean): void => {
+    mistakeSequenceActive = active;
+};
 
 // setTypingProfile()
 // Set the active typing profile directly (e.g., loaded from persistence).
@@ -70,10 +84,15 @@ export const humanType = (
 };
 
 // isTyping()
-// Returns true while a humanType operation is in progress.
-export const isTyping = (): boolean => titan.keyboard.isTyping();
+// Returns true while a humanType operation is in progress OR a typing-mistake
+// correction sequence is mid-gap (between part1 completion and part2 start,
+// when the SDK's isTyping() is false but we're not done yet).
+export const isTyping = (): boolean => mistakeSequenceActive || titan.keyboard.isTyping();
 
 // cancelTyping()
-// Cancel any in-progress humanType operation. The onDone callback fires
-// with false.
-export const cancelTyping = (): void => titan.keyboard.cancelTypeString();
+// Cancel any in-progress humanType operation and any pending mistake
+// sequence. Both onDone callbacks fire with false.
+export const cancelTyping = (): void => {
+    cancelTypingMistakeSequence();
+    titan.keyboard.cancelTypeString();
+};

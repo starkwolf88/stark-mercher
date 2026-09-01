@@ -1,5 +1,6 @@
 import { findWidget, widgetShown } from './widgets.js';
 import { humanType } from '../input/typing.js';
+import { typeStringWithMistake, type TypingKind } from '../input/typing-mistakes.js';
 import { clickWithJitter, sendKeyWithJitter } from '../antiban/click-jitter.js';
 import {
     GE_OFFER_SLOT_WIDGET_IDS,
@@ -80,13 +81,18 @@ export const clickWidget = (
 
 // typeString()
 // Type a string into the active search/price/quantity input with humanlike
-// per-character delays. Accepts optional delay range override and a
-// completion callback (fires with true when done, false if cancelled).
+// per-character delays. Routes through the typing-mistake system so a small
+// per-type chance of a wrong-character + backspace correction applies.
+// `kind` selects which mistake chance to use: 'name' (item search),
+// 'quantity' (qty entry), or 'price' (price entry). Accepts optional delay
+// range override and a completion callback (fires with true when done, false
+// if cancelled).
 export const typeString = (
     str: string,
+    kind: TypingKind = 'name',
     opts?: { minDelayMs?: number; maxDelayMs?: number },
     onDone?: (completed: boolean) => void,
-): boolean => humanType(str, opts, onDone);
+): boolean => typeStringWithMistake(str, kind, opts, onDone);
 
 // pressEnter()
 // Press Enter with reaction-time jitter (deferred to a client tick).

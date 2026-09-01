@@ -26,6 +26,7 @@ import { setAction } from '../general/timing.js';
 import { formatQty, formatGpShort } from '../general/helpers.js';
 import { createDelay, getActiveDelayProfile, setDelayProfileForAccount } from '../antiban/humanised-delay.js';
 import { setClickJitterProfile, generateClickJitterProfile, setClickJitterDebugLog, sendKeyWithJitter } from '../antiban/click-jitter.js';
+import { setTypingMistakeProfileForAccount, setTypingMistakeDebugLog } from '../input/typing-mistakes.js';
 import { BuyOfferFlow, SellOfferFlow, AbortOfferFlow } from './index.js';
 import {
     isGeOpen,
@@ -286,8 +287,10 @@ const ensureProfiles = (bot: StarkMercher): void => {
         setDelayProfileForAccount(playerName);
         const delayProfile = getActiveDelayProfile();
         if (delayProfile) setClickJitterProfile(generateClickJitterProfile(delayProfile));
+        setTypingMistakeProfileForAccount(playerName);
     }
     setClickJitterDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
+    setTypingMistakeDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
     bot.autoLoop.profilesInitialised = true;
 };
 

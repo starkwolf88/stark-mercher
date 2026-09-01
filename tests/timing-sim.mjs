@@ -60,6 +60,19 @@ function generateClickJitterProfile(delayProfile) {
   return { reactionJitterClientTicks, doubleClickChance };
 }
 
+// ─── Typing mistake profile (replicated from typing-mistakes.ts) ────
+function generateTypingMistakeProfile(accountName) {
+  const baseSeed = hashString(accountName + ':typing-mistakes');
+  const nameRng = mulberry32(baseSeed ^ 0x9e3779b1);
+  const qtyRng = mulberry32(baseSeed ^ 0x85ebca6b);
+  const priceRng = mulberry32(baseSeed ^ 0xc2b2ae35);
+  return {
+    nameMistakeChance: sampleFloat(nameRng, 0.3, 1.0),
+    quantityMistakeChance: sampleFloat(qtyRng, 0.3, 1.0),
+    priceMistakeChance: sampleFloat(priceRng, 0.3, 1.0),
+  };
+}
+
 // ─── Session profile (replicated from session-profile.ts) ───────────
 function generateSessionProfile(accountName) {
   // FNV-1a hash (same as session-profile.ts)
@@ -288,6 +301,9 @@ function createBot(accountName, seed) {
     sellFlows: 0,
     abortFlows: 0,
     distractions: 0,
+    typingMistakes: 0,
+    // Typing mistake profile (deterministic per account, same as runtime)
+    typingMistakeProfile: generateTypingMistakeProfile(accountName),
   };
 }
 
@@ -306,13 +322,40 @@ function runFlow(bot, steps, flowType) {
     const result = createDelay(bot.rng, bot.delayProfile, step.base, step.trigger, step.max);
     const triggerFired = bot.rng() * 100 <= step.trigger; // approx — actual roll is inside createDelay
 
+    // Typing mistake simulation: if this is a typing step, roll the
+    // appropriate mistake chance. If it fires, add the correction delay
+    // (realisation 1-3 ticks + 1 tick backspace gap) to the step's delay.
+    let mistakeTicks = 0;
+    let mistakeFired = false;
+    const mp = bot.typingMistakeProfile;
+    if (step.action.includes('type_search')) {
+      if (bot.rng() * 100 < mp.nameMistakeChance) {
+        mistakeFired = true;
+        mistakeTicks = sampleInt(bot.rng, 1, 3) + 1; // realise + backspace gap
+      }
+    } else if (step.action.includes('type_qty')) {
+      if (bot.rng() * 100 < mp.quantityMistakeChance) {
+        mistakeFired = true;
+        mistakeTicks = sampleInt(bot.rng, 1, 3) + 1;
+      }
+    } else if (step.action.includes('type_price')) {
+      if (bot.rng() * 100 < mp.priceMistakeChance) {
+        mistakeFired = true;
+        mistakeTicks = sampleInt(bot.rng, 1, 3) + 1;
+      }
+    }
+    if (mistakeFired) bot.typingMistakes++;
+
+    const totalTicks = result.ticks + mistakeTicks;
+
     bot.actionLog.push({
       tick: bot.tick,
       action: step.action,
       baseDelay: step.base,
-      finalDelay: result.ticks,
+      finalDelay: totalTicks,
       distracted: result.distracted,
       triggerFired,
+      mistakeFired,
     });
 
     bot.delayLog.push({
@@ -320,7 +363,7 @@ function runFlow(bot, steps, flowType) {
       base: step.base,
       trigger: step.trigger,
       max: step.max,
-      result: result.ticks,
+      result: totalTicks,
       distracted: result.distracted,
     });
 
@@ -334,7 +377,7 @@ function runFlow(bot, steps, flowType) {
     });
 
     // Advance ticks
-    bot.tick += result.ticks;
+    bot.tick += totalTicks;
   }
 
   if (flowType === 'buy') bot.buyFlows++;
@@ -507,6 +550,8 @@ function simulateAccount(accountName, seed, totalTicks) {
     sellFlows: bot.sellFlows,
     abortFlows: bot.abortFlows,
     distractions: bot.distractions,
+    typingMistakes: bot.typingMistakes,
+    typingMistakeProfile: bot.typingMistakeProfile,
     actionLog: bot.actionLog,
     clickLog: bot.clickLog,
     breakLog: bot.breakLog,
@@ -525,6 +570,8 @@ function analyzeResults(results) {
     console.log(`\n─ Account: ${result.accountName} ${'─'.repeat(Math.max(0, 60 - result.accountName.length))}`);
     console.log(`  Buy flows: ${result.buyFlows}  |  Sell flows: ${result.sellFlows}  |  Abort flows: ${result.abortFlows}`);
     console.log(`  Distractions: ${result.distractions}  |  Breaks: ${result.breakLog.length}`);
+    const mp = result.typingMistakeProfile;
+    console.log(`  Typing mistakes: ${result.typingMistakes}  (chances: name=${mp.nameMistakeChance.toFixed(2)}% qty=${mp.quantityMistakeChance.toFixed(2)}% price=${mp.priceMistakeChance.toFixed(2)}%)`);
     console.log(`  Total clicks logged: ${result.clickLog.length}`);
     console.log(`  Total delays logged: ${result.delayLog.length}`);
 

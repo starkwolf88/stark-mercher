@@ -7,6 +7,7 @@ import { BuyOfferFlow, AbortOfferFlow, SellOfferFlow } from './grand_exchange/in
 import { getOfferSlotStateWithProgress, offerSlotCount, auditGeState } from './grand_exchange/widgets.js';
 import { setDelayProfileForAccount, createDelay, getActiveDelayProfile } from './antiban/humanised-delay.js';
 import { setClickJitterProfile, generateClickJitterProfile, setClickJitterDebugLog } from './antiban/click-jitter.js';
+import { setTypingMistakeProfileForAccount, setTypingMistakeDebugLog } from './input/typing-mistakes.js';
 import { autoLoopTick, createAutoLoopState, resetAutoLoop, type AutoLoopState } from './grand_exchange/auto-loop.js';
 import { breakStep, wallClockStep, resetBreakState, saveBreakState, initSessionProfile, markNightlyBreakFinished, resetHop, forceHop, shouldPauseForHopBoundary } from './antiban/session.js';
 import { resetLoginState, loginStep } from './antiban/login.js';
@@ -655,10 +656,14 @@ export class StarkMercher extends titan.Plugin {
             titan.logf('[Stark Mercher] Startup audit: resuming buy-offer flow for %ix %s @ %igp', quantity, itemName, price);
             // Generate delay/jitter profiles for humanised timing.
             const playerName = titan.state.client.localPlayer?.name;
-            if (playerName) setDelayProfileForAccount(playerName);
+            if (playerName) {
+                setDelayProfileForAccount(playerName);
+                setTypingMistakeProfileForAccount(playerName);
+            }
             const delayProfile = getActiveDelayProfile();
             if (delayProfile) setClickJitterProfile(generateClickJitterProfile(delayProfile));
             setClickJitterDebugLog((msg: string) => { if (this.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
+            setTypingMistakeDebugLog((msg: string) => { if (this.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
             const flow = new BuyOfferFlow({
                 itemName, quantity, price,
                 delayFn: createDelay,
@@ -947,13 +952,17 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
         // Generate the per-account delay profile from the player name so
         // humanised delays are deterministic per account.
         const playerName = titan.state.client.localPlayer?.name;
-        if (playerName) setDelayProfileForAccount(playerName);
+        if (playerName) {
+            setDelayProfileForAccount(playerName);
+            setTypingMistakeProfileForAccount(playerName);
+        }
         // Generate the click-jitter profile from the delay profile so click
         // timing is also deterministic per account.
         const delayProfile = getActiveDelayProfile();
         if (delayProfile) setClickJitterProfile(generateClickJitterProfile(delayProfile));
         // Route click-jitter debug logs through the same UI toggle.
         setClickJitterDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
+        setTypingMistakeDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
         bot.buyOfferTest = new BuyOfferFlow({
             itemName, quantity, price,
             delayFn: createDelay,
@@ -973,10 +982,14 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
         // Generate the per-account delay profile from the player name so
         // humanised delays are deterministic per account.
         const playerName = titan.state.client.localPlayer?.name;
-        if (playerName) setDelayProfileForAccount(playerName);
+        if (playerName) {
+            setDelayProfileForAccount(playerName);
+            setTypingMistakeProfileForAccount(playerName);
+        }
         const delayProfile = getActiveDelayProfile();
         if (delayProfile) setClickJitterProfile(generateClickJitterProfile(delayProfile));
         setClickJitterDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
+        setTypingMistakeDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
         bot.abortOfferTest = new AbortOfferFlow({
             slotIndex: slotNum - 1, // 1-based UI to 0-based index
             delayFn: createDelay,
@@ -1004,10 +1017,14 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
             return;
         }
         const playerName = titan.state.client.localPlayer?.name;
-        if (playerName) setDelayProfileForAccount(playerName);
+        if (playerName) {
+            setDelayProfileForAccount(playerName);
+            setTypingMistakeProfileForAccount(playerName);
+        }
         const delayProfile = getActiveDelayProfile();
         if (delayProfile) setClickJitterProfile(generateClickJitterProfile(delayProfile));
         setClickJitterDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
+        setTypingMistakeDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
         bot.sellOfferTest = new SellOfferFlow({
             itemName, quantity, price,
             delayFn: createDelay,
