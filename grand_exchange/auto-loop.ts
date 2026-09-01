@@ -577,10 +577,27 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             // entry is stale and would confuse future stale checks.
             // Partial buys (progress > 0) keep their entry — the collected
             // items will be sold in the next loop iteration.
+            // IMPORTANT: The progress value in abortSlotInfo was captured at
+            // abort trigger time, not at completion time. The buy offer may
+            // have partially filled during the abort flow (especially if the
+            // first abort attempt failed and had to be retried). Check the
+            // inventory to see if any items were actually collected before
+            // removing the cache entry — if items are in inventory, keep the
+            // entry so buy-limit tracking (totalBought) is preserved.
             if (loop.abortSlotInfo && loop.abortSlotInfo.type === 'buy' && loop.abortSlotInfo.progress <= 0) {
-                cache.remove(loop.abortSlotInfo.itemName);
-                cache.save();
-                debugLog(bot, `Auto: removed cache entry for ${loop.abortSlotInfo.itemName} (buy offer aborted with 0% progress — nothing to collect)`);
+                const itemName = loop.abortSlotInfo.itemName;
+                const inInventory = titan.utils.inventory.find(itemName);
+                if (inInventory) {
+                    // The buy partially filled during the abort flow — items
+                    // were collected to inventory. Keep the cache entry so
+                    // buy-limit tracking is preserved. The sell scan will
+                    // pick up the items and sell them in the next iteration.
+                    debugLog(bot, `Auto: keeping cache entry for ${itemName} (buy offer partially filled during abort — items in inventory, buy-limit tracking preserved)`);
+                } else {
+                    cache.remove(itemName);
+                    cache.save();
+                    debugLog(bot, `Auto: removed cache entry for ${itemName} (buy offer aborted with 0% progress — nothing to collect)`);
+                }
             }
         } else if (flow.status === 'failed') {
             titan.logf('[Stark Mercher] Auto: abort failed: %s', flow.error);
@@ -824,13 +841,21 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             // If this is a buy offer, freeze the item so we don't immediately
             // re-list it at the same price. The freeze lasts 15 minutes —
             // long enough for market conditions to shift.
+            // Skip the freeze if the item is already frozen (e.g. a previous
+            // abort attempt failed and we're retrying — don't extend the
+            // freeze timer by the duration of the failed attempt).
             if (slot.type === 'buy' && slot.itemName) {
                 const freezeKey = slot.itemName.trim().toLowerCase();
-                const freezeUntil = Date.now() + BUY_FREEZE_DURATION_MS;
-                loop.buyFreezeUntil.set(freezeKey, freezeUntil);
-                saveBuyFreeze(bot, resolveFreezeAccountName(bot), loop.buyFreezeUntil);
-                titan.logf('[Stark Mercher] Auto: freezing %s from buying for %d min (buy offer aborted — %s)',
-                    slot.itemName, Math.round(BUY_FREEZE_DURATION_MS / 60000), reason);
+                const existingFreeze = loop.buyFreezeUntil.get(freezeKey);
+                if (existingFreeze && existingFreeze > Date.now()) {
+                    debugLog(bot, `Auto: ${slot.itemName} already frozen (expires in ${Math.round((existingFreeze - Date.now()) / 60000)} min) — not re-freezing`);
+                } else {
+                    const freezeUntil = Date.now() + BUY_FREEZE_DURATION_MS;
+                    loop.buyFreezeUntil.set(freezeKey, freezeUntil);
+                    saveBuyFreeze(bot, resolveFreezeAccountName(bot), loop.buyFreezeUntil);
+                    titan.logf('[Stark Mercher] Auto: freezing %s from buying for %d min (buy offer aborted — %s)',
+                        slot.itemName, Math.round(BUY_FREEZE_DURATION_MS / 60000), reason);
+                }
             }
             loop.activeAbortFlow = new AbortOfferFlow({
                 slotIndex: i,
