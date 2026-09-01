@@ -983,7 +983,18 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             debugLog(bot, `Auto: ${frozenNames.size} item(s) buy-frozen — skipping: ${[...frozenNames].join(', ')}`);
         }
 
-        const merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames);
+        let merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames);
+
+        // Fallback: if no non-frozen item was found, try again allowing frozen
+        // items. An empty slot earns 0gp — a frozen item might buy now if the
+        // price issue that caused the freeze has resolved. This only triggers
+        // when there are genuinely no other merchable items available.
+        if (!merch && frozenNames.size > 0) {
+            merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld());
+            if (merch) {
+                debugLog(bot, `Auto: using frozen item ${merch.itemName} as fallback — no other merchable items available (empty slot is worse than a frozen item)`);
+            }
+        }
 
         if (merch) {
             const lowerName = merch.itemName.trim().toLowerCase();
@@ -1038,6 +1049,50 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
 
         loop.buyAttemptedItems.clear();
     } else {
+        // All slots occupied. Check if any buy slot has a frozen item that
+        // should be swapped out for a non-frozen merchable item. The frozen
+        // item was only placed as a fallback (no other items were available
+        // at the time). If a non-frozen merchable item is now available,
+        // abort the frozen item's slot to make room. Skip offers that are
+        // nearly complete (>= 50% progress) — let them finish naturally.
+        const nowSwap = Date.now();
+        const swapFrozenNames = new Set<string>();
+        for (const [name, until] of loop.buyFreezeUntil) {
+            if (nowSwap < until) swapFrozenNames.add(name);
+        }
+        if (swapFrozenNames.size > 0) {
+            const swapOccupiedNames = getOccupiedItemNames(slots);
+            const swapCoinCount = titan.utils.inventory.count(995);
+            const swapBuyLimitedNames = cache.getBuyLimitedItemNames();
+            for (let i = 0; i < slots.length; i++) {
+                const slot = slots[i];
+                if (slot.type !== 'buy' || !slot.itemName || slot.status !== 'active') continue;
+                const slotItemLower = slot.itemName.trim().toLowerCase();
+                if (!swapFrozenNames.has(slotItemLower)) continue;
+                if (slot.progress >= 0.5) continue; // nearly done — let it finish
+
+                // Is there a non-frozen merchable item available to replace it?
+                const swapCandidate = getFirstUnoccupiedMerchableItem(swapOccupiedNames, swapCoinCount, swapBuyLimitedNames, isMembersWorld(), swapFrozenNames);
+                if (swapCandidate) {
+                    debugLog(bot, `Auto: aborting frozen fallback buy ${slot.itemName} in slot ${i + 1} (${(slot.progress * 100).toFixed(0)}% progress) — replacing with non-frozen merchable item ${swapCandidate.itemName}`);
+                    bot.statusText = `Swapping frozen ${slot.itemName} for ${swapCandidate.itemName}`;
+                    // Don't re-freeze — the item is already frozen.
+                    loop.activeAbortFlow = new AbortOfferFlow({
+                        slotIndex: i,
+                        delayFn: createDelay,
+                        debugLog: (msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); },
+                    });
+                    loop.abortSlotInfo = {
+                        type: 'buy',
+                        itemName: slot.itemName,
+                        progress: slot.progress,
+                    };
+                    loop.phase = 'aborting';
+                    return true;
+                }
+                break; // only check the first frozen buy slot
+            }
+        }
         debugLog(bot, 'Auto: no empty slots for buying — all slots occupied');
     }
 
