@@ -137,9 +137,13 @@ Both break types log the player out via `logoutForBreak()`. GE offers continue f
 
 `loopIdleSinceTick` and `shortBreakDelayTicks` are reset in all the same places as `loopIdleForBreak`: `resetBreakState()`, login recovery, nightly break start, short break start, and at the top of `autoLoopTick()`.
 
-## Login retry timeout (for future implementation)
+## Login retry timeout
 
-When automated login is implemented, `tryStageAndSubmitLogin()` should track the first attempt timestamp. If 60 seconds elapse without login, the bot terminates. A 3-attempt `submitCredentials` limit within 1 minute is a faster failure path. `loginIndex === 10` means staged; `loginIndex === 9` means game update — retry every 30-60 seconds randomly, bypassing the 60-second timeout.
+`tryStageAndSubmitLogin()` tracks `bot.loginFirstAttemptAtMs`. If 5 minutes elapse without login, the bot terminates. A 10-attempt `submitCredentials` limit is a faster failure path. `loginIndex === 10` (or legacy `2`) means staged; `loginIndex === 9` covers both "game update in progress" and "you were signed out" — the snapshot doesn't expose message text, so we can't distinguish them. Index 9 uses exponential backoff (5s → 10s → 20s → 40s → 60s cap) with credential re-staging on each retry. If it's "signed out", the first fast retry succeeds. If it's a game update (which can last 30+ min), we back off to avoid hammering the login server.
+
+## Post-login settle delay
+
+After the title screen disappears and the player is in-world, `loginStep()` sets `bot.postLoginResumeAtMs = now + createDelay(3, 5) ticks` (1.8-3s humanized settle). `tickLogic()` blocks until this elapses, giving the client time to render the world and clear promo/overlay widgets. After clicking "Click here to play", `postLoginResumeAtMs` is set to `MAX_SAFE_INTEGER` to block until the title disappears; the title-gone re-check interval is 8 ticks (~4.8s). When the settle completes, failure counters are reset (the login transition can cause false strikes e.g. GE not openable while the world is still loading).
 
 ## Reset Break ends an active break immediately (for future implementation)
 
@@ -306,10 +310,22 @@ The Wiki API fallback (`fetchWikiPrice` in `data/offer-cache.ts`) remains a stub
 - `autoLoop.profilesInitialised` — set to `true` after delay/jitter profiles are loaded. Reset to `false` in `resetAutoLoop()`.
 - `autoLoop.sellAttemptedItems/buyAttemptedItems` — cleared after each loop iteration and in `resetAutoLoop()`.
 - `autoLoop.buyFreezeUntil` — persisted in the hidden `buyFreezeSetting` (key `buyFreeze`, default `'{}'`, `hidden: true`). Keyed by account name, each value a map of lowercase item name → freeze-until timestamp (ms). Set when a stale buy offer is aborted (15-min freeze). Restored in `resetAutoLoop()` on script start via `loadBuyFreeze()` (expired entries dropped during load). Saved on every freeze set and on every cleanup that prunes expired entries (post-login, periodic 60s, buy-scan lazy). Survives hot reloads and client restarts so a freeze applied after aborting a stale buy offer is not lost. **Frozen items are skipped during buy scans, but used as a fallback** when no other merchable items are available — an empty slot earns 0gp, while a frozen item might buy if the price issue has resolved. The fallback retry calls `getFirstUnoccupiedMerchableItem()` without the frozen filter and logs which frozen item is being used. **Swap-out**: when all slots are occupied and a buy slot has a frozen item with < 50% progress, the bot checks if a non-frozen merchable item is now available. If so, it aborts the frozen item's buy offer (without re-freezing — the item is already frozen) to make room for the non-frozen item. Offers at >= 50% progress are left to finish naturally.
+- `autoLoop.failureCounters` — `Record<string, number>` mapping failure key (`geOpen`, `geSubScreen`, `collect`) to consecutive failure count. Incremented by `recordFailure()`, reset to 0 by `resetFailure()` on success, cleared entirely in `resetAutoLoop()` and when the post-login settle completes. See "Consecutive failure termination" section.
 
 ### GE booth object detection
 
 `findGeBooth()` in `grand_exchange/clerk.ts` searches for tile objects within 20 tiles with `nameContains('Grand Exchange')` and `hasAction('Exchange')`. `findExchangePoint()` returns the nearest of clerk NPC or booth object. `openGe()` interacts with whichever is closer. This satisfies the requirement to check for the "Exchange Grand Exchange Booth" object as the first automated operation.
+
+### Consecutive failure termination
+
+Major "stuck" states terminate the bot after 3 consecutive failures (`MAX_CONSECUTIVE_FAILURES` in `auto-loop.ts`). Recoverable failures (price mismatch, quantity validation, search not found) do NOT use this system — they press Esc and retry the loop.
+
+Tracked operations:
+- **`geOpen`** — GE cannot be opened or no clerk/booth found. Counter increments on each failed attempt, resets when `isGeOpen()` returns true.
+- **`geSubScreen`** — GE sub-screen (offer config / search / price prompt) cannot be closed with Escape. Counter increments on each Escape attempt, resets when no sub-screen is detected.
+- **`collect`** — Completed/aborted offer cannot be collected. Counter increments when collect click fails, resets when no completed/aborted slots remain.
+
+On the 3rd consecutive failure, `bot.terminated = true` and `bot.terminationReason` is set with a clear message. Counters are stored in `autoLoop.failureCounters` (a `Record<string, number>`), reset in `resetAutoLoop()` and when the post-login settle completes.
 
 ## External flip-selection pipeline (`determine-flips.mjs`)
 

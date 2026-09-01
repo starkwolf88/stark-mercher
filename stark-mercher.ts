@@ -835,6 +835,9 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
         bot.postLoginResumeAtMs = -1;
         bot.loginSettled = true;
         bot.autoLoop.needsPostLoginCleanup = true;
+        // Reset failure counters — the login transition can cause false
+        // strikes (e.g. GE not openable while the world is still loading).
+        bot.autoLoop.failureCounters = {};
         titan.log('[Stark Mercher] Post-login settle complete — resuming');
     }
 

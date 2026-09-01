@@ -12,11 +12,11 @@ import type { StarkMercher } from '../stark-mercher.js';
 import { createDelay } from './humanised-delay.js';
 
 const LOGIN_THROTTLE_MS = 1000;
-const LOGIN_SUCCESS_LOCKOUT_MS = 5 * 600; // re-check title every 5 ticks (~3s)
+const LOGIN_SUCCESS_LOCKOUT_MS = 8 * 600; // re-check title every 8 ticks (~4.8s)
 const TITLE_CLICK_PACKED_ID = 24772680;
 const TITLE_CLICK_TEXT = 'Click here to play';
 
-const POST_LOGIN_RESUME_TICKS_MIN = 2;
+const POST_LOGIN_RESUME_TICKS_MIN = 3;
 const POST_LOGIN_RESUME_TICKS_MAX = 5;
 
 const LOGIN_STAGE_THROTTLE_MS = 2000;
@@ -78,7 +78,7 @@ function tryClickTitle(bot: StarkMercher): boolean {
             // Store as wall-clock timestamp (not setAction) because the
             // tick counter resets on first tick after login, which would
             // wipe the action delay.
-            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, 50, 8);
+            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, POST_LOGIN_RESUME_TICKS_MAX, 8);
             // Reset login state BEFORE setting settle values, otherwise
             // resetLoginState wipes postLoginResumeAtMs/loginSettled.
             resetLoginState(bot);
@@ -93,7 +93,7 @@ function tryClickTitle(bot: StarkMercher): boolean {
     if (!titleExists) {
         if (isInWorld() && !bot.loginSettled) {
             debugLog(bot, 'Title screen gone; player in-world; settling');
-            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, 50, 8);
+            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, POST_LOGIN_RESUME_TICKS_MAX, 8);
             // Reset login state BEFORE setting settle values, otherwise
             // resetLoginState wipes postLoginResumeAtMs/loginSettled.
             resetLoginState(bot);
@@ -284,7 +284,7 @@ export function loginStep(bot: StarkMercher): void {
     if (bot.titleWaitingForGone) {
         if (!titleExists) {
             if (isInWorld()) {
-                const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, 50);
+                const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, POST_LOGIN_RESUME_TICKS_MAX);
                 // Reset login state BEFORE setting settle values, otherwise
                 // resetLoginState wipes postLoginResumeAtMs/loginSettled.
                 resetLoginState(bot);
