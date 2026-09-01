@@ -431,6 +431,59 @@ export class StarkMercher extends titan.Plugin {
         },
     });
 
+    // --- Log buy freezes button ---
+    // Click to dump the current buy-freeze state to the log. Shows which
+    // items are frozen from buying, when each freeze expires, and how many
+    // minutes remain. Useful for verifying freezes are applied after stale
+    // buy aborts and that they expire correctly.
+    logBuyFreezes: titan.Setting<void> = this.buttonSetting({
+        key: 'logBuyFreezes',
+        name: 'Log Buy Freezes',
+        position: -1,
+        onClick: () => {
+            const accountName = this.currentPlayerName || titan.state.client.localPlayer?.name || '';
+            if (!accountName) {
+                titan.log('[Stark Mercher] Cannot log buy freezes — no account name available.');
+                return;
+            }
+            const raw = this.buyFreezeSetting.value;
+            if (!raw || raw === '{}') {
+                titan.logf('[Stark Mercher] No buy freezes for any account.');
+                return;
+            }
+            let all: Record<string, Record<string, number>>;
+            try {
+                all = JSON.parse(raw);
+            } catch (e) {
+                titan.logf('[Stark Mercher] Failed to parse buy-freeze data: %s', String(e));
+                return;
+            }
+            const accountNames = Object.keys(all);
+            if (accountNames.length === 0) {
+                titan.logf('[Stark Mercher] No buy freezes for any account.');
+                return;
+            }
+            for (const acct of accountNames) {
+                const freezes = all[acct];
+                const items = Object.keys(freezes);
+                if (items.length === 0) {
+                    titan.logf('[Stark Mercher] Buy freezes for %s: none active.', acct);
+                    continue;
+                }
+                const now = Date.now();
+                const active = items.filter(name => freezes[name] > now);
+                const expired = items.length - active.length;
+                titan.logf('[Stark Mercher] Buy freezes for %s (%d active, %d expired):', acct, active.length, expired);
+                for (const name of active) {
+                    const until = freezes[name];
+                    const minsLeft = Math.max(0, Math.ceil((until - now) / 60000));
+                    titan.logf('[Stark Mercher]   %s: expires in %d min (at %s)', name, minsLeft, new Date(until).toISOString());
+                }
+            }
+            titan.logf('[Stark Mercher] Buy freeze dump complete.');
+        },
+    });
+
     // --- Configurable test parameters ---
     testItemName: titan.Setting<string> = this.stringSetting({
         key: 'testItemName',
