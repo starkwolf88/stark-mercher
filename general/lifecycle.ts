@@ -43,11 +43,17 @@ const resetState = (bot: StarkMercher) => {
     bot.sellTestRequested = false;
     bot.startupAuditDone = false;
     // Reset the auto-merch loop state (flows, cache handle, attempted-item sets).
-    // The persisted offer cache (hidden setting) is NOT cleared here — it
-    // survives restarts and hot reloads. The cache is re-loaded from the
-    // hidden setting on the first autoLoopTick via OfferCacheManager.
+    // The persisted offer cache is NOT cleared here — it survives hot reloads.
+    // The cache is re-loaded from the setting on the first autoLoopTick via
+    // OfferCacheManager. Note: hidden settings do NOT survive client restarts
+    // (Titan's host app does not persist them to disk). On client restart, the
+    // cache is empty and must be reconstructed from live GE state (reverse
+    // reconciliation in auto-loop.ts Step 2b — TODO).
+    // The persisted offer cache is NOT cleared here — it survives restarts
+    // and hot reloads. The cache is re-loaded from the setting on the first
+    // autoLoopTick via OfferCacheManager.
     resetAutoLoop(bot);
-    // Restore break/login state from the hidden setting if a valid saved
+    // Restore break/login state from the persisted setting if a valid saved
     // state exists (e.g. hot reload during a sleep or short break). Otherwise
     // reset to defaults. The persisted session profile is NOT cleared — it
     // survives restarts and is re-loaded on the first tick.

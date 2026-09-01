@@ -180,8 +180,13 @@ export class StarkMercher extends titan.Plugin {
     });
 
     // --- Hidden offer cache setting ---
-    // Stores the per-account offer cache as JSON (mixology-style hidden
-    // setting persistence). Survives client restarts and plugin reloads.
+    // Stores the per-account offer cache as JSON. Survives hot reloads
+    // (plugin off/on within the same client session) but NOT client
+    // restarts — Titan's host app does not persist hidden settings to
+    // plugin_settings.json, and plugin-side .value writes are not marked
+    // dirty for disk persistence. On client restart, the cache is empty
+    // and must be reconstructed from live GE state (reverse reconciliation
+    // in auto-loop.ts Step 2b).
     offerCacheSetting: titan.Setting<string> = this.stringSetting({
         key: 'offerCache',
         name: 'Offer cache (hidden)',
@@ -193,6 +198,7 @@ export class StarkMercher extends titan.Plugin {
     // Stores per-account daily profit as JSON. Keyed by account name.
     // Each entry has { dayStartedAt, profit }. Day rollover is handled by
     // comparing dayStartedAt to the current day's midnight on read/write.
+    // Same persistence limitation as offerCacheSetting — hot reload only.
     dailyProfitSetting: titan.Setting<string> = this.stringSetting({
         key: 'dailyProfit',
         name: 'Daily profit (hidden)',
@@ -202,7 +208,7 @@ export class StarkMercher extends titan.Plugin {
 
     // --- Hidden hop state setting ---
     // Stores per-account hop timer state as JSON (nextHopAtMs, hopCount, etc.).
-    // Survives client restarts and plugin reloads.
+    // Same persistence limitation as offerCacheSetting — hot reload only.
     hopStateSetting: titan.Setting<string> = this.stringSetting({
         key: 'hopState',
         name: 'Hop state (hidden)',
@@ -213,7 +219,8 @@ export class StarkMercher extends titan.Plugin {
     // --- Hidden last active account setting ---
     // Stores the last active account name. Used as a fallback when the
     // login snapshot doesn't have a displayName (e.g. account not staged
-    // yet at script start). Survives client restarts and plugin reloads.
+    // yet at script start). Same persistence limitation as
+    // offerCacheSetting — hot reload only.
     lastActiveAccountSetting: titan.Setting<string> = this.stringSetting({
         key: 'lastActiveAccount',
         name: 'Last active account (hidden)',
@@ -227,6 +234,7 @@ export class StarkMercher extends titan.Plugin {
     // nightly sleep schedule, session start, and unexpected logout timestamp.
     // Restored on enable so the overlay shows the correct countdown and the
     // bot knows to continue sleeping / wait for login.
+    // Same persistence limitation as offerCacheSetting — hot reload only.
     breakStateSetting: titan.Setting<string> = this.stringSetting({
         key: 'breakState',
         name: 'Break state (hidden)',
@@ -238,6 +246,7 @@ export class StarkMercher extends titan.Plugin {
     // Stores per-account merch history (profits and losses) as JSON.
     // Each entry records item, qty, profit/loss, date, buy price, avg sold
     // price, and revision count for a completed merch cycle.
+    // Same persistence limitation as offerCacheSetting — hot reload only.
     merchHistorySetting: titan.Setting<string> = this.stringSetting({
         key: 'merchHistory',
         name: 'Merch history (hidden)',
@@ -248,8 +257,9 @@ export class StarkMercher extends titan.Plugin {
     // --- Hidden buy-freeze setting ---
     // Stores per-account buy-freeze state as JSON. Keyed by account name,
     // each value is a map of lowercase item name -> freeze-until timestamp
-    // (ms). Survives client restarts and plugin reloads so a buy freeze
-    // applied after aborting a stale buy offer is not lost on hot reload.
+    // (ms). Survives hot reloads so a buy freeze applied after aborting a
+    // stale buy offer is not lost on plugin toggle.
+    // Same persistence limitation as offerCacheSetting — hot reload only.
     buyFreezeSetting: titan.Setting<string> = this.stringSetting({
         key: 'buyFreeze',
         name: 'Buy freeze (hidden)',

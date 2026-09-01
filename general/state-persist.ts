@@ -2,8 +2,12 @@
 // State persistence — offer cache stored in a hidden plugin setting
 // ============================================================================
 // The Titan SDK has no file-system API, so we persist the offer cache in a
-// hidden string setting (JSON-encoded). This survives client restarts and
-// plugin reloads. The pattern mirrors the mixology bot's humanizationState.
+// hidden string setting (JSON-encoded). This survives hot reloads (plugin
+// off/on within the same client session) but NOT client restarts — Titan's
+// host app does not persist hidden settings to plugin_settings.json, and
+// plugin-side .value writes are not marked dirty for disk persistence.
+// On client restart, the cache is empty and must be reconstructed from live
+// GE state (reverse reconciliation in auto-loop.ts Step 2b — TODO).
 //
 // The cache is keyed by in-game player name so each account has its own
 // offer history. On login / plugin enable, loadOfferCache() reads the

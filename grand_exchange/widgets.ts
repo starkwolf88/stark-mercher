@@ -18,12 +18,34 @@ import {
     GE_DETAIL_STATUS_SLOT,
 } from './constants.js';
 
+let cachedChildrenTick = -1;
+const cachedChildren: Record<number, titan.WidgetState[]> = {};
+
+const childrenForParent = (packedId: number): titan.WidgetState[] => {
+    const tick = titan.state.client.tick;
+    if (cachedChildrenTick !== tick) {
+        cachedChildrenTick = tick;
+        for (const key of Object.keys(cachedChildren)) {
+            delete cachedChildren[key as any];
+        }
+    }
+    if (cachedChildren[packedId] !== undefined) {
+        return cachedChildren[packedId];
+    }
+    try {
+        cachedChildren[packedId] = titan.state.widgets.children(packedId);
+    } catch (e) {
+        cachedChildren[packedId] = [];
+    }
+    return cachedChildren[packedId];
+};
+
 // findWidget()
 // Direct cached-state read via find()/children() — avoids the expensive
 // titan.queries.widgets() query-builder API (~570ms per call).
 export const findWidget = (packedId: number, slot?: number): titan.WidgetState | null => {
     if (slot === undefined) return titan.state.widgets.find(packedId);
-    const children = titan.state.widgets.children(packedId);
+    const children = childrenForParent(packedId);
     return children[slot] || null;
 };
 
@@ -111,7 +133,7 @@ export const readOfferItemName = (): string | null => {
 export const readOfferQuantity = (): number | null => {
     // The quantity display is in a child of GE_AMOUNT_WIDGET.
     // We scan visible children for a numeric text value.
-    const children = titan.state.widgets.children(GE_AMOUNT_WIDGET);
+    const children = childrenForParent(GE_AMOUNT_WIDGET);
     for (let i = 0; i < children.length; i++) {
         const w = children[i];
         if (!w || !w.visible || !w.text) continue;
@@ -142,7 +164,7 @@ export const readOfferQuantity = (): number | null => {
 // confirm button and offer slot opening fixes).
 export const scanSearchResults = (itemName: string): { active: boolean; matchIndex: number } => {
     const wanted = itemName.trim().toLowerCase();
-    const children = titan.state.widgets.children(GE_SEARCH_RESULT_TEXT_WIDGET);
+    const children = childrenForParent(GE_SEARCH_RESULT_TEXT_WIDGET);
     let active = false;
     for (let i = 0; i < children.length; i++) {
         const w = children[i];
@@ -233,7 +255,7 @@ const readOfferProgress = (packedId: number): { fill: number; full: number } => 
 
 // getOfferSlotState()
 // Fast read of offer slot state from cached child widgets, including progress.
-// Uses only titan.state.widgets.children() — no query builder — so it's safe
+// Uses only childrenForParent() — no query builder — so it's safe
 // to call on every tick.
 export const getOfferSlotState = (index: number): OfferSlotState => {
     const packedId = GE_OFFER_SLOT_WIDGET_IDS[index];
