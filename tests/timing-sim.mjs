@@ -275,6 +275,7 @@ function createBot(accountName, seed) {
     loopIdleForBreak: false,
     loopIdleSinceTick: -1,
     shortBreakDelayTicks: -1,
+    nextActionEtaMin: -1,
     // GE slots (simulated)
     slots: [null, null, null], // null = empty, {type, item} = occupied
     // Logging
@@ -455,6 +456,7 @@ function simulateAccount(accountName, seed, totalTicks) {
         bot.loopIdleForBreak = false;
         bot.loopIdleSinceTick = -1;
         bot.shortBreakDelayTicks = -1;
+        bot.nextActionEtaMin = -1;
         // Reschedule nightly if it was nightly
         if (bot.breakType === 'nightly') {
           bot.sessionPlayStartMs = nowMs;
@@ -490,6 +492,7 @@ function simulateAccount(accountName, seed, totalTicks) {
         bot.loopIdleForBreak = false;
         bot.loopIdleSinceTick = -1;
         bot.shortBreakDelayTicks = -1;
+        bot.nextActionEtaMin = -1;
         continue;
       }
     }

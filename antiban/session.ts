@@ -208,6 +208,34 @@ function sampleShortBreakDuration(bot: StarkMercher): number {
     return total * MS_PER_MINUTE;
 }
 
+// --- ETA-based break duration sampling --------------------------------------
+// When the auto-loop goes idle with all slots occupied, it computes the
+// minimum remaining time until the next action on any slot (earlier of
+// completion or stale-abort threshold) and stores it in bot.nextActionEtaMin.
+// This function converts that hint into a break duration, clamped to
+// 2–10 min with ±15% jitter so the return isn't precisely at the ETA.
+// Falls back to sampleShortBreakDuration() when no ETA data is available.
+const ETA_BREAK_FLOOR_MIN = 2;
+const ETA_BREAK_CEILING_MIN = 10;
+const ETA_BREAK_JITTER = 0.15; // ±15%
+
+function sampleEtaBasedBreakDuration(bot: StarkMercher): number {
+    const etaMin = bot.nextActionEtaMin;
+    if (etaMin <= 0) {
+        return sampleShortBreakDuration(bot);
+    }
+
+    // Apply ±15% jitter so we don't return at the exact ETA second.
+    const jitterMultiplier = 1 + (Math.random() * 2 - 1) * ETA_BREAK_JITTER;
+    let durationMin = etaMin * jitterMultiplier;
+
+    // Clamp to 2–10 min. The floor prevents anti-ban-unfriendly short breaks;
+    // the ceiling ensures we return promptly if items buy quicker than expected.
+    durationMin = Math.max(ETA_BREAK_FLOOR_MIN, Math.min(ETA_BREAK_CEILING_MIN, durationMin));
+
+    return Math.round(durationMin) * MS_PER_MINUTE;
+}
+
 // --- Nightly sleep sampling (wake-first) ------------------------------------
 
 function sampleNightlySleepMinutes(bot: StarkMercher): number {
@@ -378,6 +406,7 @@ export function resetBreakState(bot: StarkMercher): void {
     bot.loopIdleForBreak = false;
     bot.loopIdleSinceTick = -1;
     bot.shortBreakDelayTicks = -1;
+    bot.nextActionEtaMin = -1;
     bot.sessionPlayStartMs = -1;
     bot.currentPlayerName = '';
     bot.sessionProfile = null;
@@ -630,6 +659,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
                 bot.loopIdleForBreak = false;
                 bot.loopIdleSinceTick = -1;
                 bot.shortBreakDelayTicks = -1;
+                bot.nextActionEtaMin = -1;
                 resetLoginState(bot);
                 bot.autoLoop.needsPostLoginCleanup = true;
                 humanLog(bot, 'Logged back in, resuming auto-loop');
@@ -659,6 +689,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
         bot.loopIdleForBreak = false;
         bot.loopIdleSinceTick = -1;
         bot.shortBreakDelayTicks = -1;
+        bot.nextActionEtaMin = -1;
         bot.unexpectedLogoutAtMs = 0;
         resetLoginState(bot);
         clearBreakState(bot);
@@ -674,6 +705,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
             bot.loopIdleForBreak = false;
             bot.loopIdleSinceTick = -1;
             bot.shortBreakDelayTicks = -1;
+            bot.nextActionEtaMin = -1;
             resetLoginState(bot);
             clearBreakState(bot);
         }
@@ -687,6 +719,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
             bot.loopIdleForBreak = false;
             bot.loopIdleSinceTick = -1;
             bot.shortBreakDelayTicks = -1;
+            bot.nextActionEtaMin = -1;
             resetLoginState(bot);
             bot.autoLoop.needsPostLoginCleanup = true;
             humanLog(bot, 'Logged back in, resuming auto-loop');
@@ -714,6 +747,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
             bot.loopIdleForBreak = false;
             bot.loopIdleSinceTick = -1;
             bot.shortBreakDelayTicks = -1;
+            bot.nextActionEtaMin = -1;
             resetLogoutState(bot);
             const wakeTime = new Date(bot.breakTargetEndMs);
             humanLog(bot, 'Nightly sleep starting — wake at %s (%d min sleep)',
@@ -755,7 +789,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
         if (elapsed < bot.shortBreakDelayTicks) {
             return false;
         }
-        const duration = sampleShortBreakDuration(bot);
+        const duration = sampleEtaBasedBreakDuration(bot);
         bot.breakPhase = 'logging_out';
         bot.breakType = 'short';
         bot.breakStartMs = now;
@@ -763,6 +797,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
         bot.loopIdleForBreak = false;
         bot.loopIdleSinceTick = -1;
         bot.shortBreakDelayTicks = -1;
+        bot.nextActionEtaMin = -1;
         resetLogoutState(bot);
         humanLog(bot, 'Short break starting — %d min logout', Math.round(duration / MS_PER_MINUTE));
         logoutForBreak(bot, 'short');

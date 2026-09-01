@@ -105,6 +105,13 @@ export class StarkMercher extends titan.Plugin {
      *    + 5-15 ticks (1% chance)
      *  This replaces the old 60-second wall-clock grace period. */
     shortBreakDelayTicks = -1;
+    /** ETA-based break duration hint (in minutes), set by the auto-loop
+     *  when it goes idle. Represents the minimum remaining time until the
+     *  next action on any slot (earlier of completion or stale-abort
+     *  threshold). The break system uses this to time the return so the
+     *  bot logs back in when there's something to do, instead of sampling
+     *  a random 2-5 min duration. -1 = not computed (fall back to random). */
+    nextActionEtaMin = -1;
     // Login state
     currentPlayerName = '';
     sessionProfile: SessionProfile | null = null;
@@ -719,6 +726,7 @@ export class StarkMercher extends titan.Plugin {
             this.loopIdleForBreak = false;
             this.loopIdleSinceTick = -1;
             this.shortBreakDelayTicks = -1;
+            this.nextActionEtaMin = -1;
         }
 
         // --- Startup audit ---

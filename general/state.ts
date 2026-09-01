@@ -73,6 +73,7 @@ export const resetInFlightActionState = (bot: StarkMercher): void => {
     bot.loopIdleForBreak = false;
     bot.loopIdleSinceTick = -1;
     bot.shortBreakDelayTicks = -1;
+    bot.nextActionEtaMin = -1;
     // Clear manual test flows
     bot.buyOfferTest = null;
     bot.buyTestRequested = false;

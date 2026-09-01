@@ -437,6 +437,62 @@ const isBuyOfferStale = (slot: OfferSlotState, cache: OfferCacheManager): string
     return null;
 };
 
+// --- Helper: compute next-action ETA for break timing ----------------------
+// For each active slot, compute the remaining minutes until the next action
+// (earlier of completion or stale-abort threshold). Returns the minimum
+// across all slots, or -1 if no ETA data is available. Used by the break
+// system to time the return so the bot logs back in when there's something
+// to do, instead of sampling a random 2-5 min duration.
+const computeNextActionEtaMin = (slots: OfferSlotState[], cache: OfferCacheManager): number => {
+    const now = Date.now();
+    let minRemaining = -1;
+
+    for (const slot of slots) {
+        if (slot.type === 'empty' || !slot.itemName || slot.status !== 'active') continue;
+
+        const entry = cache.get(slot.itemName);
+        if (!entry || entry.offerPlacedAt <= 0) continue;
+
+        const elapsedMin = (now - entry.offerPlacedAt) / 60000;
+
+        // Determine the ETA and the earliest abort threshold ratio for this slot.
+        let eta = 0;
+        let abortRatio = 1.0; // default: completion (100% of ETA)
+
+        if (slot.type === 'buy') {
+            const merch = getMerchableItem(slot.itemName);
+            eta = merch ? merch.purchaseEtaMinutes : (entry.purchaseEtaMinutes ?? 0);
+            if (eta <= 0) continue;
+            // 0% progress: stale at 100% of ETA (same as completion)
+            // <50% progress: stale at 75% of ETA (earlier than completion)
+            // >=50% progress: stalled check at 100% of ETA (same as completion)
+            if (slot.progress < BUY_PROGRESS_ABORT_THRESHOLD && slot.itemQuantity > 1) {
+                abortRatio = BUY_ETA_ABORT_RATIO_MULTI;
+            }
+        } else if (slot.type === 'sell') {
+            const merch = getMerchableItem(slot.itemName);
+            eta = merch ? merch.saleEtaMinutes : (entry.saleEtaMinutes ?? 0);
+            if (eta <= 0) continue;
+            // <25% progress: stale at dynamic ratio (50-95%, earlier than completion)
+            // >=50% progress: stalled check at 100% of ETA (same as completion)
+            if (slot.progress < SELL_PROGRESS_ABORT_THRESHOLD) {
+                const profit = entry.sellPrice - entry.buyPrice;
+                abortRatio = computeSellEtaAbortRatio(profit);
+            }
+        } else {
+            continue;
+        }
+
+        const thresholdMin = eta * abortRatio;
+        const remaining = thresholdMin - elapsedMin;
+        if (remaining > 0 && (minRemaining < 0 || remaining < minRemaining)) {
+            minRemaining = remaining;
+        }
+    }
+
+    return minRemaining;
+};
+
 // --- The main tick function ------------------------------------------------
 
 /**
@@ -465,6 +521,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     if (!wasIdle) {
         bot.loopIdleSinceTick = -1;
         bot.shortBreakDelayTicks = -1;
+        bot.nextActionEtaMin = -1;
     }
 
     // --- Post-login cleanup ---
@@ -1239,10 +1296,19 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     debugLog(bot, `Auto: action=auto_idle delay=${idleDelay}t (nothing to do — ${occupiedCount}/${slots.length} slots occupied)`);
     bot.statusText = `Idle — ${occupiedCount}/${slots.length} slots occupied`;
     // Signal that the auto-loop is idle — the break system will use this
-    // to trigger a short logout break (2-5 min) when auto mode is on.
+    // to trigger a short logout break when auto mode is on.
     // The break system computes a randomised tick delay (5-20 ticks +
     // variance layers) before actually logging out.
     bot.loopIdleForBreak = true;
+    // Compute the ETA-based break duration hint: the minimum remaining time
+    // until the next action on any slot (earlier of completion or stale-abort
+    // threshold). The break system uses this to time the return so the bot
+    // logs back in when there's something to do. -1 = no ETA data (the break
+    // system will fall back to a random 2-5 min duration).
+    bot.nextActionEtaMin = computeNextActionEtaMin(slots, cache);
+    if (bot.nextActionEtaMin > 0) {
+        debugLog(bot, `Auto: next action ETA ${bot.nextActionEtaMin.toFixed(1)}min (break will target this)`);
+    }
     // Note: do NOT set loopIdleSinceTick here — breakStep() in session.ts
     // sets it and computes the randomised pre-logout delay. If we set it
     // here, breakStep() skips the delay computation and logs out immediately.

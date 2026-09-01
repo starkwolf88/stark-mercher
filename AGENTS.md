@@ -124,18 +124,26 @@ All other state (held items, GE interface, location) either persists across hops
 
 The mercher takes two types of logout breaks:
 
-- **Short breaks** (2-5 min): Triggered when the auto-loop has nothing to do (all slots occupied, nothing to collect/sell/buy). The auto-loop sets `bot.loopIdleForBreak = true` and `bot.loopIdleSinceTick = tick` when it reaches the idle branch. The break system in `breakStep()` checks these flags but enforces a **randomised tick-based delay** before actually logging out:
+- **Short breaks** (2-10 min, ETA-based): Triggered when the auto-loop has nothing to do (all slots occupied, nothing to collect/sell/buy). The auto-loop sets `bot.loopIdleForBreak = true` when it reaches the idle branch. The break system in `breakStep()` checks these flags but enforces a **randomised tick-based delay** before actually logging out:
   - Base: 5-20 ticks
   - + 3 ticks (20% chance)
   - + 1-10 ticks (10% chance)
   - + 5-15 ticks (1% chance)
   
   The delay is computed once when the bot first becomes idle and stored in `bot.shortBreakDelayTicks`. This prevents logging out immediately while adding humanised randomness. The idle tick is reset whenever the auto-loop performs an action (set at the top of `autoLoopTick`).
+
+  **Break duration**: When the auto-loop goes idle, it computes `bot.nextActionEtaMin` — the minimum remaining time (in minutes) until the next action on any slot. For each active slot, this is the earlier of:
+  - **Completion**: the offer filling fully (100% of ETA)
+  - **Stale abort**: the offer hitting its ETA abort threshold (75% for multi-qty buys with <50% progress; 50-95% for sells with <25% progress, scaled by profit margin via `computeSellEtaAbortRatio`; 100% otherwise)
+
+  The break system uses `sampleEtaBasedBreakDuration()` to convert this hint into a break duration: `nextActionEtaMin * (1 ± 15% jitter)`, clamped to **2–10 min**. The floor prevents anti-ban-unfriendly short breaks; the ceiling ensures the bot returns promptly if items buy quicker than expected. If no ETA data is available (`nextActionEtaMin <= 0`), it falls back to `sampleShortBreakDuration()` (random 2-5 min + profile variance/long-tail).
+
+  This ensures the bot logs back in when there's something to do (collect, abort, re-list), instead of sampling a random duration and often returning to find all slots still filling.
 - **Nightly sleep** (3.5-6.5h): Per-account profile with wake-first scheduling. Bedtime = wake time − sleep duration.
 
 Both break types log the player out via `logoutForBreak()`. GE offers continue filling while logged out. After the break duration elapses (wall-clock), `wallClockStep()` → `loginStep()` logs the account back in.
 
-`loopIdleSinceTick` and `shortBreakDelayTicks` are reset in all the same places as `loopIdleForBreak`: `resetBreakState()`, login recovery, nightly break start, short break start, and at the top of `autoLoopTick()`.
+`loopIdleSinceTick`, `shortBreakDelayTicks`, and `nextActionEtaMin` are reset in all the same places as `loopIdleForBreak`: `resetBreakState()`, login recovery, nightly break start, short break start, and at the top of `autoLoopTick()`.
 
 ## Login retry timeout
 
