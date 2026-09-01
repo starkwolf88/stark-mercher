@@ -29,6 +29,98 @@ import { logoutForBreak, resetLogoutState } from './logout.js';
 import { loginStep, resetLoginState } from './login.js';
 import { isPlayerIdle } from '../general/helpers.js';
 import { cancelHop } from './hopper.js';
+import { loadOfferCache } from '../general/state-persist.js';
+import { getMerchHistory } from '../data/merch-history.js';
+
+/** Dumps cache, merch history, and buy-freeze state to the log. Called
+ *  automatically after each logout so the user can review state without
+ *  clicking the log buttons manually. */
+const dumpStateOnLogout = (bot: StarkMercher): void => {
+    const accountName = bot.currentPlayerName || titan.state.client.localPlayer?.name || '';
+    if (!accountName) {
+        titan.log('[Stark Mercher] Cannot dump state on logout — no account name.');
+        return;
+    }
+
+    // --- Offer cache ---
+    const cache = loadOfferCache(bot, accountName);
+    const cacheKeys = Object.keys(cache);
+    if (cacheKeys.length === 0) {
+        titan.logf('[Stark Mercher] Offer cache for %s is empty.', accountName);
+    } else {
+        titan.logf('[Stark Mercher] Offer cache for %s (%d entries):', accountName, cacheKeys.length);
+        for (const key of cacheKeys) {
+            const e = cache[key];
+            const placed = new Date(e.offerPlacedAt).toISOString();
+            const revisions = e.revisedPrices.join(' -> ');
+            const totalBought = e.totalBought !== undefined ? `, totalBought=${e.totalBought}` : '';
+            const firstBought = e.firstBoughtAt !== undefined ? `, firstBought=${new Date(e.firstBoughtAt).toISOString()}` : '';
+            const limitReached = e.limitReachedAt !== undefined ? `, limitReachedAt=${new Date(e.limitReachedAt).toISOString()}` : '';
+            const sellQty = e.sellQuantity !== undefined ? `, sellQty=${e.sellQuantity}` : '';
+            titan.logf('[Stark Mercher]   %s: mode=%s, buy=%d, sell=%d (orig=%d), placed=%s, revisions=[%s]%s%s%s%s',
+                key, e.mode, e.buyPrice, e.sellPrice, e.originalSellPrice, placed, revisions,
+                totalBought, firstBought, limitReached, sellQty);
+        }
+        titan.logf('[Stark Mercher] Cache dump complete (%d entries).', cacheKeys.length);
+    }
+
+    // --- Merch history ---
+    const history = getMerchHistory(bot, accountName);
+    if (history.profits.length === 0 && history.losses.length === 0) {
+        titan.logf('[Stark Mercher] No merch history for %s.', accountName);
+    } else {
+        titan.logf('[Stark Mercher] Merch history for %s:', accountName);
+        if (history.profits.length > 0) {
+            titan.logf('[Stark Mercher] === PROFITS (%d) ===', history.profits.length);
+            let totalProfit = 0;
+            for (const e of history.profits) {
+                titan.logf('[Stark Mercher]   %s: qty=%d, profit=+%dgp, buy=%d, avgSold=%d, revisions=%d, date=%s',
+                    e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, e.date);
+                totalProfit += e.profit;
+            }
+            titan.logf('[Stark Mercher]   Total profit: +%dgp', totalProfit);
+        }
+        if (history.losses.length > 0) {
+            titan.logf('[Stark Mercher] === LOSSES (%d) ===', history.losses.length);
+            let totalLoss = 0;
+            for (const e of history.losses) {
+                titan.logf('[Stark Mercher]   %s: qty=%d, loss=%dgp, buy=%d, avgSold=%d, revisions=%d, date=%s',
+                    e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, e.date);
+                totalLoss += e.profit;
+            }
+            titan.logf('[Stark Mercher]   Total loss: %dgp', totalLoss);
+        }
+        titan.logf('[Stark Mercher] Merch history dump complete.');
+    }
+
+    // --- Buy freezes ---
+    const freezeRaw = bot.buyFreezeSetting.value;
+    if (!freezeRaw || freezeRaw === '{}') {
+        titan.logf('[Stark Mercher] No buy freezes for any account.');
+    } else {
+        try {
+            const all = JSON.parse(freezeRaw);
+            const accountNames = Object.keys(all);
+            for (const acct of accountNames) {
+                const freezes = all[acct];
+                const items = Object.keys(freezes);
+                if (items.length === 0) continue;
+                const now = Date.now();
+                const active = items.filter(name => freezes[name] > now);
+                const expired = items.length - active.length;
+                titan.logf('[Stark Mercher] Buy freezes for %s (%d active, %d expired):', acct, active.length, expired);
+                for (const name of active) {
+                    const until = freezes[name];
+                    const minsLeft = Math.max(0, Math.ceil((until - now) / 60000));
+                    titan.logf('[Stark Mercher]   %s: expires in %d min (at %s)', name, minsLeft, new Date(until).toISOString());
+                }
+            }
+            titan.logf('[Stark Mercher] Buy freeze dump complete.');
+        } catch (e) {
+            titan.logf('[Stark Mercher] Failed to parse buy-freeze data: %s', String(e));
+        }
+    }
+};
 
 const MS_PER_MINUTE = 60000;
 const MS_PER_DAY = 1440 * MS_PER_MINUTE;
@@ -506,6 +598,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
                 bot.breakPhase = 'logged_out';
                 debugLog(bot, `Break: logged out, waiting until ${new Date(bot.breakTargetEndMs).toISOString()}`);
                 saveBreakState(bot);
+                dumpStateOnLogout(bot);
             }
 
             // Check if break duration has elapsed
@@ -716,6 +809,7 @@ export function wallClockStep(bot: StarkMercher): void {
             bot.breakPhase = 'logged_out';
             debugLog(bot, `Break: logged out, waiting until ${new Date(bot.breakTargetEndMs).toISOString()}`);
             saveBreakState(bot);
+            dumpStateOnLogout(bot);
         }
 
         if (bot.breakPhase === 'logged_out' && now >= bot.breakTargetEndMs) {
