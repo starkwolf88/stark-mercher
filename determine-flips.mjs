@@ -160,6 +160,8 @@ const buildItemDataObject = (itemData) => {
         twentyFourHourEntryFiltered++;
         return false;
     }
+    // Store 24h average low for use as a lowball floor in applyLowball().
+    itemData.twentyFourHourAvgLowPrice = twentyFourHourEntry.avgLowPrice;
     return true;
 };
 
@@ -518,12 +520,26 @@ const clampPrices = (itemData) => {
 // IMPORTANT: applyLowball must be idempotent within a single pass. The second
 // pass resets purchasePrice to its pre-lowball value (stored in
 // lowballBasePrice) before re-applying, so the lowball doesn't stack.
+//
+// MARGIN-AWARE CAP: The lowball amount is capped at 50% of the raw margin
+// (rawSalePrice - basePrice). For thin-margin items (e.g. 3gp spread on a
+// 150gp item), a flat 2% lowball (3gp) would eat the entire margin and
+// produce a buy offer below the market floor that never fills. Capping at
+// 50% of the margin ensures the lowball never eliminates more than half the
+// spread. If the capped amount is < 1gp, no lowball is applied.
+//
+// 24H FLOOR: The final purchasePrice is clamped to at least
+// (twentyFourHourAvgLowPrice - 1), but never above basePrice. This prevents
+// the lowball from pushing below the broader 24h market average, which would
+// only capture the bottom tail of the price distribution — not enough volume
+// to fill a large order.
 const LOWBALL_QUANTITY_GATE = 5000;
 const LOWBALL_VOLUME_TIERS = [
     { minVolume: 200000, percent: 2.0 },
     { minVolume: 50000,  percent: 1.5 },
     { minVolume: 10000,  percent: 1.0 },
 ];
+const LOWBALL_MARGIN_CAP_RATIO = 0.5; // cap at 50% of raw margin
 
 const applyLowball = (itemData) => {
     // Use 3h volume if available (second pass), otherwise fall back to 1h
@@ -555,11 +571,44 @@ const applyLowball = (itemData) => {
     // If a previous lowball was applied (second pass after first pass),
     // reset to the base price before re-applying so the lowball doesn't stack.
     const basePrice = itemData.lowballBasePrice ?? itemData.purchasePrice;
-    const amount = Math.max(1, Math.floor(basePrice * percent / 100));
-    itemData.lowballPercent = percent;
-    itemData.lowballAmount = amount;
+    let amount = Math.max(1, Math.floor(basePrice * percent / 100));
+
+    // Margin-aware cap: don't lowball more than 50% of the raw spread.
+    // rawSalePrice may not be set in the first pass (it is set by
+    // determinePurchaseAndSalePrices before the first applyLowball call, so
+    // it should be available, but guard just in case).
+    const rawMargin = (itemData.rawSalePrice ? itemData.rawSalePrice : basePrice) - basePrice;
+    if (rawMargin > 0) {
+        const marginCap = Math.floor(rawMargin * LOWBALL_MARGIN_CAP_RATIO);
+        if (marginCap < 1) {
+            // Spread is too thin to lowball — buy at market.
+            itemData.lowballPercent = 0;
+            itemData.lowballAmount = 0;
+            itemData.lowballBasePrice = basePrice;
+            itemData.purchasePrice = basePrice;
+            return;
+        }
+        amount = Math.min(amount, marginCap);
+    }
+
+    let finalPrice = Math.max(1, basePrice - amount);
+
+    // 24h floor: don't lowball below the 24h average low (minus 1gp for
+    // edge-case tolerance). Never push above basePrice.
+    const floor = itemData.twentyFourHourAvgLowPrice;
+    if (floor && floor > 0) {
+        const flooredPrice = Math.max(finalPrice, floor - 1);
+        finalPrice = Math.min(flooredPrice, basePrice);
+    }
+
+    // Recompute the actual applied amount/percent after cap and floor so
+    // the ETA volume factor reflects reality.
+    const appliedAmount = basePrice - finalPrice;
+    const appliedPercent = basePrice > 0 ? (appliedAmount / basePrice) * 100 : 0;
+    itemData.lowballPercent = appliedPercent;
+    itemData.lowballAmount = appliedAmount;
     itemData.lowballBasePrice = basePrice;
-    itemData.purchasePrice = Math.max(1, basePrice - amount);
+    itemData.purchasePrice = finalPrice;
 };
 
 const determineIrregularVolumes = (itemData) => {

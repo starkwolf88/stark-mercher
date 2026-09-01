@@ -142,6 +142,12 @@ Instead of buying at the 5m average low (instant-buy price), the script applies 
 
 **Gate**: Only applied when `min(volume, limit) >= 5000` — targets high-quantity items where a small per-unit margin adds up.
 
+**Margin-aware cap** (`LOWBALL_MARGIN_CAP_RATIO = 0.5`): The lowball amount is capped at 50% of the raw margin (`rawSalePrice - basePrice`). For thin-margin items (e.g. 3gp spread on a 150gp item), a flat 2% lowball (3gp) would eat the entire margin and produce a buy offer below the market floor that never fills. Capping at 50% of the margin ensures the lowball never eliminates more than half the spread. If the capped amount is < 1gp, no lowball is applied (buy at market).
+
+**24h floor**: The final `purchasePrice` is clamped to at least (`twentyFourHourAvgLowPrice - 1`), but never above `basePrice`. This prevents the lowball from pushing below the broader 24h market average, where only the bottom tail of the price distribution would fill the offer — not enough volume for large orders. The 24h average low is stored on `itemData.twentyFourHourAvgLowPrice` in `buildItemDataObject()`.
+
+**Actual applied percent**: After the margin cap and 24h floor are applied, `lowballPercent` and `lowballAmount` are recomputed to reflect the actual reduction from `basePrice`. This ensures the ETA volume factor is accurate.
+
 **ETA adjustment**: Effective buy volume is reduced by `1.5x lowball%` (e.g., 2% lowball → 97% of volume fills the offer). This is conservative.
 
 **Idempotency**: `applyLowball` stores `lowballBasePrice` (the pre-lowball price) so the second pass can reset and re-apply without stacking.

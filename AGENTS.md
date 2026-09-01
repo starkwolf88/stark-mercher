@@ -356,6 +356,8 @@ On the 3rd consecutive failure, `bot.terminated = true` and `bot.terminationReas
 | `PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD` | 20000 | Minimum `actualProfitPerSlotHour` to pass. |
 | `LOWBALL_QUANTITY_GATE` | 5000 | Only lowball items where `min(volume, limit) >= 5000`. |
 | `LOWBALL_VOLUME_TIERS` | 200k→2%, 50k→1.5%, 10k→1% | Volume-scaled lowball percentages. |
+| `LOWBALL_MARGIN_CAP_RATIO` | 0.5 | Lowball amount capped at 50% of raw margin (`rawSalePrice - basePrice`). Prevents eating the entire spread on thin-margin items. If capped amount < 1gp, no lowball is applied. |
+| `LOWBALL_24H_FLOOR` | `24hAvgLow - 1` | Final buy price clamped to at least the 24h average low minus 1gp, never above `basePrice`. Prevents lowballing below the broader market average where insufficient volume exists to fill large orders. |
 
 ### Cash-allocation implementation
 
