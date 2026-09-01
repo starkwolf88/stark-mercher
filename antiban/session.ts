@@ -278,6 +278,7 @@ function sampleNightlyWakeMinutes(bot: StarkMercher, weekday: number): number {
 // --- Nightly break scheduling -----------------------------------------------
 
 function scheduleNextNightlyBreak(bot: StarkMercher): number {
+    if (bot.doNotSleep?.value) return Infinity;
     const profile = bot.sessionProfile;
     if (!profile) return Infinity;
 
@@ -324,6 +325,7 @@ function scheduleNextNightlyBreak(bot: StarkMercher): number {
 }
 
 function isNightlyBreakDue(bot: StarkMercher): boolean {
+    if (bot.doNotSleep?.value) return false;
     const profile = bot.sessionProfile;
     if (!profile) return false;
 
@@ -622,6 +624,17 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
     if (!playerName || !titan.state.login.isLoggedIn) {
         // We're logged out. Check if we're in an active break.
         if (bot.breakPhase === 'logging_out' || bot.breakPhase === 'logged_out') {
+            // If Do Not Sleep was toggled ON while logged out for a nightly
+            // break, resume immediately so the account can be logged back in.
+            if (bot.doNotSleep?.value && bot.breakType === 'nightly') {
+                humanLog(bot, 'Do Not Sleep enabled; aborting nightly break early');
+                bot.breakPhase = 'logging_in';
+                resetLogoutState(bot);
+                resetLoginState(bot);
+                saveBreakState(bot);
+                loginStep(bot);
+                return true;
+            }
             // Logout complete — transition to logged_out
             if (bot.logoutComplete) {
                 bot.breakPhase = 'logged_out';
@@ -733,6 +746,24 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
     // been started yet. This handles post-wake and post-enable.
     if (bot.breakPhase === 'none' && bot.sessionPlayStartMs < 0) {
         bot.sessionPlayStartMs = now;
+    }
+
+    // If Do Not Sleep was toggled ON while a nightly break is being prepared
+    // (logging_out phase), abort it so the bot continues playing.
+    if (bot.doNotSleep?.value && bot.breakType === 'nightly' && bot.breakPhase === 'logging_out') {
+        humanLog(bot, 'Do Not Sleep enabled; aborting nightly break');
+        bot.breakPhase = 'none';
+        bot.breakType = 'none';
+        bot.breakStartMs = 0;
+        bot.breakTargetEndMs = 0;
+        bot.loopIdleForBreak = false;
+        bot.loopIdleSinceTick = -1;
+        bot.shortBreakDelayTicks = -1;
+        bot.nextActionEtaMin = -1;
+        bot.nightlyBreakTargetTime = -1;
+        bot.nightlySleepMinutes = -1;
+        resetLogoutState(bot);
+        clearBreakState(bot);
     }
 
     // --- Check for nightly break ---

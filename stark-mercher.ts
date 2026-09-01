@@ -535,6 +535,17 @@ export class StarkMercher extends titan.Plugin {
         position: -1,
     });
 
+    // --- Do Not Sleep setting ---
+    // When enabled, the bot will never take a nightly sleep break. Short
+    // breaks still occur. Useful for 24/7 test accounts.
+    doNotSleep: titan.Setting<boolean> = this.boolSetting({
+        key: 'doNotSleep',
+        name: 'Do Not Sleep',
+        default: false,
+        tooltip: 'When enabled, the bot will never take a nightly sleep break. Short breaks still occur. Useful for 24/7 test accounts.',
+        position: -1,
+    });
+
     hopRegion: titan.Setting<number> = this.comboSetting({
         key: 'hopRegion',
         name: 'Hop Region',
@@ -700,6 +711,17 @@ export class StarkMercher extends titan.Plugin {
         this.statusText = 'Stopped';
         if (this.terminated && this.terminationReason) {
             titan.logf("[Stark Mercher] Stopped: %s", this.terminationReason);
+        }
+    }
+    onSettingChanged(key: string) {
+        // When Do Not Sleep is toggled ON, clear any pre-sampled nightly break
+        // planning so the next break is sampled as a short break, not a
+        // nightly break with a stale duration. The breakStep() and logged-out
+        // paths in session.ts also check doNotSleep to abort an already-started
+        // nightly break.
+        if (key === 'doNotSleep' && this.doNotSleep?.value) {
+            this.nightlyBreakTargetTime = -1;
+            this.nightlySleepMinutes = -1;
         }
     }
     onMenuOptionClicked = (event: titan.MenuOptionClicked) => {
