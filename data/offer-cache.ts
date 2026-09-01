@@ -236,6 +236,7 @@ export class OfferCacheManager {
                 existing.revisedPrices.push(sellPrice);
             }
             if (buyPrice !== undefined) existing.buyPrice = buyPrice;
+            existing.sellConfirmed = false;
         } else {
             this.cache[key] = {
                 mode: 'sell',
@@ -244,6 +245,7 @@ export class OfferCacheManager {
                 originalSellPrice: sellPrice,
                 offerPlacedAt: now,
                 revisedPrices: [sellPrice],
+                sellConfirmed: false,
             };
         }
 
@@ -302,6 +304,32 @@ export class OfferCacheManager {
     }
 
     /**
+     * Marks the sell offer as confirmed on the GE. Called after the
+     * SellOfferFlow completes successfully. Once confirmed, the re-list
+     * logic will apply price revisions if the offer is later aborted and
+     * re-listed. Before confirmation, a hot-reload causes the re-list
+     * logic to skip the revision (the offer was never placed).
+     */
+    confirmSellOffer(itemName: string): void {
+        const entry = this.get(itemName);
+        if (entry && entry.mode === 'sell') {
+            entry.sellConfirmed = true;
+            this.dirty = true;
+        }
+    }
+
+    /**
+     * Returns true if the sell offer has been confirmed on the GE.
+     * Backward compat: undefined (existing entries from before this field
+     * was added) is treated as true.
+     */
+    isSellConfirmed(itemName: string): boolean {
+        const entry = this.get(itemName);
+        if (!entry) return true;
+        return entry.sellConfirmed !== false;
+    }
+
+    /**
      * Clears sell-specific fields after a completed sell cycle, preserving
      * buy-limit tracking (totalBought, firstBoughtAt, limitReachedAt) so the
      * bot knows how much of the 4-hour buy limit has been consumed.
@@ -316,6 +344,7 @@ export class OfferCacheManager {
         entry.sellQuantity = undefined;
         entry.partialSales = undefined;
         entry.revisedPrices = [];
+        entry.sellConfirmed = undefined;
         this.dirty = true;
     }
 

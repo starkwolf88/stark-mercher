@@ -81,6 +81,14 @@ export interface OfferCacheEntry {
      *  totalBought transitions from 0 to >0; cleared when the window
      *  expires and totalBought resets. */
     firstBoughtAt?: number;
+    /** Whether the sell offer was actually confirmed on the GE. Set to
+     *  false by recordSellOffer() when the sell flow starts, then set to
+     *  true when the SellOfferFlow completes successfully. If a hot-reload
+     *  interrupts the sell flow, sellConfirmed remains false and the re-list
+     *  logic skips the price revision (the offer was never placed, so it
+     *  never "failed to sell"). Backward compat: undefined (existing entries)
+     *  is treated as true. */
+    sellConfirmed?: boolean;
 }
 
 // --- Load / Save -----------------------------------------------------------

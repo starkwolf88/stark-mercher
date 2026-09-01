@@ -47,7 +47,7 @@ import { getMerchableItems, getMerchableItem, getFirstUnoccupiedMerchableItem, i
 import { getPriceHistoryEntry } from '../data/price-history.js';
 import { OfferCacheManager } from '../data/offer-cache.js';
 import { addDailyProfit } from '../data/daily-profit.js';
-import { recordMerchCycle } from '../data/merch-history.js';
+import { recordMerchCycle, type MerchHistoryEntry } from '../data/merch-history.js';
 
 // --- Stale offer thresholds ------------------------------------------------
 // Sell: dynamic % of ETA passed with <25% sold → abort (scaled by profit margin)
@@ -544,6 +544,10 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         }
         if (flow.status === 'done') {
             titan.log('[Stark Mercher] Auto: sell offer placed successfully.');
+            // Mark the sell as confirmed — the offer is now live on the GE.
+            // This tells the re-list logic that a future abort+re-list is a
+            // genuine "didn't sell" event worthy of a price revision.
+            cache.confirmSellOffer(flow.itemName);
             cache.save();
         } else if (flow.status === 'failed') {
             titan.logf('[Stark Mercher] Auto: sell offer failed: %s', flow.error);
@@ -720,37 +724,44 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         const inInv = titan.utils.inventory.find(cacheKey);
         if (inInv) continue; // in inventory — abort case, handled at re-list
         // Item is not in any slot or inventory → sell completed 100%.
+        // CAPTURE all profit/history data from the cache entry BEFORE clearing
+        // and saving. The cache must be persisted (with sell fields cleared)
+        // BEFORE we write to dailyProfit/merchHistory. This prevents double-
+        // counting on hot-reload: if we crash after profit is written but
+        // before the cache is saved, the sweep would re-trigger and record
+        // the profit again. By saving the cache first, a crash between the
+        // cache save and the profit write loses one tracking entry (the GP
+        // is still correct in the coin pouch) — far better than double-counting.
         const soldQty = entry.sellQuantity;
         const netSellPrice = getNetSellPrice(entry.sellPrice);
         const profitPerItem = netSellPrice - entry.buyPrice;
         const profit = profitPerItem * soldQty;
-        if (profit !== 0 && playerName) {
-            addDailyProfit(bot, playerName, profit);
-            const taxPerItem = getGeTax(entry.sellPrice);
-            debugLog(bot, `Auto: daily profit += ${profit}gp (${soldQty}x ${cacheKey} @ ${profitPerItem}gp/item net — sell=${entry.sellPrice}gp, tax=${taxPerItem}gp, buy=${entry.buyPrice}gp — 100% completed sell)`);
-        }
-        // Record the final partial sale batch and build the merch history entry.
+        const taxPerItem = getGeTax(entry.sellPrice);
+        // Record the final partial sale batch so we can compute the merch
+        // history summary from all partial sales (including this one).
         cache.recordPartialSale(cacheKey, entry.sellPrice, soldQty);
         const partials = cache.getPartialSales(cacheKey);
+        // Capture merch history data from the entry BEFORE clearing.
+        let merchEntry: Omit<MerchHistoryEntry, 'profit'> | null = null;
+        let merchProfit = 0;
         if (partials.length > 0 && playerName) {
             const totalQty = partials.reduce((s, p) => s + p.qty, 0);
             const weightedSum = partials.reduce((s, p) => s + p.price * p.qty, 0);
             const avgSold = totalQty > 0 ? Math.round(weightedSum / totalQty) : 0;
-            // Deduct GE tax from the average sell price for merch history.
             const netAvgSold = getNetSellPrice(avgSold);
-            const totalProfit = (netAvgSold - entry.buyPrice) * totalQty;
+            merchProfit = (netAvgSold - entry.buyPrice) * totalQty;
             const revisions = entry.revisedPrices.length > 0 ? entry.revisedPrices.length - 1 : 0;
             const lastSale = partials[partials.length - 1];
-            recordMerchCycle(bot, playerName, {
+            merchEntry = {
                 item: cacheKey,
                 qty: totalQty,
                 date: new Date(lastSale.timestamp).toISOString(),
                 buy: entry.buyPrice,
                 avgSold,
                 revisions,
-            }, totalProfit);
-            debugLog(bot, `Auto: merch history recorded — ${cacheKey} ${totalQty}x, avgSold=${avgSold}gp (net=${netAvgSold}gp after tax), buy=${entry.buyPrice}gp, profit=${totalProfit}gp, revisions=${revisions}`);
+            };
         }
+        // Now clear sell fields and SAVE the cache BEFORE writing profit/history.
         cache.clearPartialSales(cacheKey);
         cache.clearSellQuantity(cacheKey);
         // Do NOT remove the cache entry — preserve buy-limit tracking
@@ -759,6 +770,16 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         // sell-specific fields and reset mode to 'idle'.
         cache.clearSellFields(cacheKey);
         cache.save();
+        // Now safe to write profit and history — if we crash here, the cache
+        // already shows the sell as cleared so the sweep won't re-trigger.
+        if (profit !== 0 && playerName) {
+            addDailyProfit(bot, playerName, profit);
+            debugLog(bot, `Auto: daily profit += ${profit}gp (${soldQty}x ${cacheKey} @ ${profitPerItem}gp/item net — sell=${entry.sellPrice}gp, tax=${taxPerItem}gp, buy=${entry.buyPrice}gp — 100% completed sell)`);
+        }
+        if (merchEntry && playerName && merchProfit !== 0) {
+            recordMerchCycle(bot, playerName, merchEntry, merchProfit);
+            debugLog(bot, `Auto: merch history recorded — ${cacheKey} ${merchEntry.qty}x, avgSold=${merchEntry.avgSold}gp (net=${getNetSellPrice(merchEntry.avgSold)}gp after tax), buy=${entry.buyPrice}gp, profit=${merchProfit}gp, revisions=${merchEntry.revisions}`);
+        }
         debugLog(bot, `Auto: completed-sell sweep — ${cacheKey} sold 100% (${soldQty}x), profit recorded, buy-limit data preserved`);
     }
     } // end hasActiveSellEntries fast-path
@@ -908,6 +929,13 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             // Check if this is a re-listing (item already in cache with a
             // previous sell offer that didn't sell). If so, record profit
             // for the items that sold before the abort, then revise the price.
+            // CAPTURE the profit data BEFORE any cache mutations, then save
+            // the cache BEFORE writing to dailyProfit. This prevents double-
+            // counting on hot-reload: if we crash after profit is written but
+            // before the cache is saved, the old sellQuantity would still be
+            // present and the bot would re-compute the same partial sale profit.
+            let pendingPartialProfit = 0;
+            let pendingPartialLog = '';
             const existingEntry = cache.get(itemName);
             if (existingEntry && existingEntry.mode === 'sell' && existingEntry.sellQuantity !== undefined) {
                 // This item was previously listed for sale but was aborted
@@ -918,12 +946,9 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 if (soldQty > 0) {
                     const netSellPrice = getNetSellPrice(existingEntry.sellPrice);
                     const profitPerItem = netSellPrice - existingEntry.buyPrice;
-                    const profit = profitPerItem * soldQty;
-                    if (profit !== 0 && playerName) {
-                        addDailyProfit(bot, playerName, profit);
-                        const taxPerItem = getGeTax(existingEntry.sellPrice);
-                        debugLog(bot, `Auto: daily profit += ${profit}gp (${soldQty}x ${itemName} sold @ ${profitPerItem}gp/item net — sell=${existingEntry.sellPrice}gp, tax=${taxPerItem}gp, buy=${existingEntry.buyPrice}gp before abort)`);
-                    }
+                    pendingPartialProfit = profitPerItem * soldQty;
+                    const taxPerItem = getGeTax(existingEntry.sellPrice);
+                    pendingPartialLog = `daily profit += ${pendingPartialProfit}gp (${soldQty}x ${itemName} sold @ ${profitPerItem}gp/item net — sell=${existingEntry.sellPrice}gp, tax=${taxPerItem}gp, buy=${existingEntry.buyPrice}gp before abort)`;
                     // Track this partial sale batch for merch history.
                     // The summary entry is created when the cycle completes
                     // (100% sold) in the completed-sell sweep above.
@@ -931,15 +956,24 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                     debugLog(bot, `Auto: partial sale recorded — ${soldQty}x ${itemName} @ ${existingEntry.sellPrice}gp (will be included in merch history at cycle completion)`);
                 }
                 // Revise the price downward (escalating reduction + abandon threshold).
-                const revisedPrice = cache.reviseSellPrice(itemName);
-                if (revisedPrice !== null) {
-                    sellPrice = revisedPrice;
-                    const revCount = cache.getRevisionCount(itemName);
-                    if (revCount >= 8) {
-                        debugLog(bot, `Auto: ${itemName} final dump — selling at ${revisedPrice}gp (revision ${revCount}) to free slot`);
-                    } else if (revCount >= 6) {
-                        debugLog(bot, `Auto: ${itemName} abandoned — selling at ${revisedPrice}gp (revision ${revCount}, floor dropped to buy-2)`);
+                // Only revise if the previous sell offer was actually confirmed
+                // on the GE. If sellConfirmed is false, the sell flow was
+                // interrupted by a hot-reload before the offer was placed — the
+                // item never had a chance to sell, so revising the price would
+                // unfairly penalize it. Re-list at the same price instead.
+                if (cache.isSellConfirmed(itemName)) {
+                    const revisedPrice = cache.reviseSellPrice(itemName);
+                    if (revisedPrice !== null) {
+                        sellPrice = revisedPrice;
+                        const revCount = cache.getRevisionCount(itemName);
+                        if (revCount >= 8) {
+                            debugLog(bot, `Auto: ${itemName} final dump — selling at ${revisedPrice}gp (revision ${revCount}) to free slot`);
+                        } else if (revCount >= 6) {
+                            debugLog(bot, `Auto: ${itemName} abandoned — selling at ${revisedPrice}gp (revision ${revCount}, floor dropped to buy-2)`);
+                        }
                     }
+                } else {
+                    debugLog(bot, `Auto: ${itemName} re-listing at same price (${existingEntry.sellPrice}gp) — previous sell flow was interrupted before confirmation, no revision applied`);
                 }
             }
 
@@ -966,7 +1000,18 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             const merch = getMerchableItem(itemName);
             const limit = merch?.limit;
             cache.recordSellOffer(itemName, sellPrice, buyPrice, item.quantity, limit);
+            // SAVE the cache BEFORE writing daily profit. This ensures that
+            // if we crash between the cache save and the profit write, the
+            // cache already reflects the new sell state (sellQuantity = current
+            // inventory qty) so the partial profit won't be re-computed on
+            // restart. We lose one profit tracking entry at worst, not a
+            // double-count.
             cache.save();
+            // Now safe to write the pending partial profit.
+            if (pendingPartialProfit !== 0 && playerName) {
+                addDailyProfit(bot, playerName, pendingPartialProfit);
+                debugLog(bot, `Auto: ${pendingPartialLog}`);
+            }
 
             // Start the sell flow.
             if (fastSell) {
