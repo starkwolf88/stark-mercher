@@ -94,15 +94,18 @@ const BUY_PROGRESS_STALLED_THRESHOLD = 0.50; // >=50% bought but not completing
 // When we have a small quantity of low-value items (e.g. 10 chaos runes from
 // a partial buy that got aborted), occupying a GE slot for them isn't worth
 // it. Fast-sell at 50% of the sell price for a guaranteed quick sale to free
-// the slot for a new profitable cycle. Only applies when BOTH conditions are
+// the slot for a new profitable cycle. Only applies when ALL conditions are
 // met:
 //   1. Quantity is small (< FAST_SELL_QTY_THRESHOLD) — a few items isn't
 //      worth a slot regardless of per-item value.
 //   2. Total sell value is low (< FAST_SELL_VALUE_CAP) — even a small
-//      quantity of high-value items (e.g. 1 item at 500k) should sell at
-//      normal price to avoid real GP loss.
+//      quantity of high-value items (e.g. 1 warrior ring at 58k) should sell
+//      at normal price to avoid real GP loss.
+//   3. Halved price must still be above the buy price (never fast-sell at a
+//      loss). If halving would go below buy+1, skip fast-sell and sell at
+//      the normal price.
 const FAST_SELL_QTY_THRESHOLD = 50;
-const FAST_SELL_VALUE_CAP = 100_000;     // 100k GP total sell value
+const FAST_SELL_VALUE_CAP = 10_000;      // 10k GP total sell value
 const FAST_SELL_PRICE_MULTIPLIER = 0.5;  // 50% of sell price
 
 // --- Buy freeze-out --------------------------------------------------------
@@ -1466,14 +1469,24 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             // --- Fast-sell check ---
             // Small quantities of low-value items (e.g. 10 chaos runes from
             // a partial buy) aren't worth occupying a GE slot. Halve the sell
-            // price for a guaranteed quick sale to free the slot. Both the
-            // quantity AND total value must be below their thresholds.
+            // price for a guaranteed quick sale to free the slot. All three
+            // conditions must be met: small qty, low total value, AND the
+            // halved price must still be above the buy price (never fast-sell
+            // at a loss).
+            const fastSellBuyPrice = cache.getBuyPrice(itemName) ?? fallbackBuyPrice;
             let fastSell = false;
             if (item.quantity < FAST_SELL_QTY_THRESHOLD && sellPrice * item.quantity < FAST_SELL_VALUE_CAP) {
-                fastSell = true;
-                sellPrice = Math.max(1, Math.floor(sellPrice * FAST_SELL_PRICE_MULTIPLIER));
-                titan.logf('[Stark Mercher] Auto: fast-selling %dx %s @ %dgp each (50%% of sell price — small qty, low value, freeing slot)',
-                    item.quantity, itemName, sellPrice);
+                const halvedPrice = Math.max(1, Math.floor(sellPrice * FAST_SELL_PRICE_MULTIPLIER));
+                if (fastSellBuyPrice > 0 && halvedPrice <= fastSellBuyPrice) {
+                    // Halving would sell at or below buy price — skip fast-sell
+                    // and sell at normal price to avoid a loss.
+                    debugLog(bot, `Auto: skipping fast-sell for ${itemName} — halved price ${halvedPrice}gp <= buy price ${fastSellBuyPrice}gp (would sell at a loss)`);
+                } else {
+                    fastSell = true;
+                    sellPrice = halvedPrice;
+                    titan.logf('[Stark Mercher] Auto: fast-selling %dx %s @ %dgp each (50%% of sell price — small qty, low value, freeing slot)',
+                        item.quantity, itemName, sellPrice);
+                }
             }
 
             // Record the sell offer in the cache.
