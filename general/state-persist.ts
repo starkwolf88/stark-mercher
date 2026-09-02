@@ -153,3 +153,25 @@ export const clearOfferCache = (bot: StarkMercher, accountName: string): void =>
     delete state[accountName];
     savePersistedState(bot, state);
 };
+
+/**
+ * Returns a map from lowercased item name to the number of OTHER accounts
+ * (excluding `excludeAccount`) that currently have an active buy offer for
+ * that item (mode === 'buy'). Used by the buy scan to avoid multiple
+ * accounts buying the same item and competing on price.
+ */
+export const getCrossAccountBuyingItemCount = (bot: StarkMercher, excludeAccount: string): Map<string, number> => {
+    const state = loadPersistedState(bot);
+    const counts = new Map<string, number>();
+    for (const [accountName, cache] of Object.entries(state)) {
+        if (accountName === excludeAccount) continue;
+        if (!cache || typeof cache !== 'object') continue;
+        for (const [itemName, entry] of Object.entries(cache)) {
+            if (entry && entry.mode === 'buy') {
+                const lower = itemName.trim().toLowerCase();
+                counts.set(lower, (counts.get(lower) ?? 0) + 1);
+            }
+        }
+    }
+    return counts;
+};

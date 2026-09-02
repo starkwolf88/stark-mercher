@@ -24,7 +24,7 @@ The auto-loop previously called `titan.utils.inventory.find()` and `titan.utils.
 - `general/timing.ts` — `setAction`, `canPerformAction`, `shouldWait`; tick-based action throttling with backwards-tick recovery.
 - `general/state.ts` — `sanityCheckState` (per-tick stale-state auto-correction: clears stale `abortSlotInfo`, resets phase when active flow is gone, clears stale `logoutComplete`), `resetInFlightActionState` (clears auto-loop flows + idle-for-break flags + cache reconciliation/reconstruction flags on hop/break/login transitions).
 - `general/lifecycle.ts` — `onEnable`, `terminate` helpers; resets all state including auto-loop state and hop state.
-- `general/state-persist.ts` — offer cache persistence via hidden JSON setting (mixology-style per-account). `loadOfferCache`, `saveOfferCache`, `OfferCacheData`, `OfferCacheEntry` (includes `sellQuantity` for daily profit tracking).
+- `general/state-persist.ts` — offer cache persistence via hidden JSON setting (mixology-style per-account). `loadOfferCache`, `saveOfferCache`, `OfferCacheData`, `OfferCacheEntry` (includes `sellQuantity` for daily profit tracking), `getCrossAccountBuyingItemCount` (reads all accounts' caches to build a `Map<itemName, count>` of active buy offers for cross-account buy dedup).
 - `general/state.ts` — `sanityCheckState` (per-tick stale-state auto-correction), `resetInFlightActionState` (clears auto-loop flows + idle-for-break flags + cache reconciliation flags on hop/break/login transitions).
 - `general/helpers.ts` — `isPlayerIdle` (stationary + animation grace check, used by hop safe-boundary).
 - `general/debug.ts` — debug widget logging.
@@ -181,6 +181,10 @@ The bot supports rotating through a roster of accounts. Each account runs the fu
 
 - Offer cache, merch history, abort history, daily profit, session profile, hop state — all per-account, unchanged.
 - Buy-freeze state — global (not account-keyed), unchanged.
+
+### Cross-account buy dedup
+
+When rotation is enabled (2+ accounts), the buy scan skips items that are already being bought by enough other accounts. This prevents multiple accounts from competing on price for the same item. The threshold is `min(2, rosterSize - 1)`: with a 2-account roster, the threshold is 1 (no overlap — if the other account is buying an item, skip it); with 3+ accounts, the threshold is 2 (up to 2 accounts can buy the same item, but the 3rd skips it). The check reads all accounts' offer caches from the shared `offerCacheSetting` (keyed by account name) via `getCrossAccountBuyingItemCount()`, which returns a `Map<itemName, count>` of active `mode: 'buy'` entries across all other accounts. Items where the count meets the threshold are added to `crossAccountSkipNames` and passed to all buy scan functions (primary, frozen fallback, partial fallback, and swap candidate).
 
 ### Sleep/wake schedules
 

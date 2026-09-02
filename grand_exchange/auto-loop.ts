@@ -45,6 +45,8 @@ import { clickCollectToInventory } from './actions.js';
 import { getNetSellPrice, getGeTax } from './constants.js';
 import { openGe, nearGrandExchange, walkToGe } from './clerk.js';
 import { getMerchableItems, getMerchableItem, getFirstUnoccupiedMerchableItem, getFirstPartialBuyItem, isLowballItem, evaluateItemAtRuntime, RUNTIME_PROFIT_PER_SLOT_HOUR_MINIMUM, RUNTIME_MAX_TURNOVER_MINUTES, type MerchableItem, type PartialBuyResult, type BuyScanResult, type LowballTier } from '../data/merchable-items.js';
+import { getCrossAccountBuyingItemCount } from '../general/state-persist.js';
+import { getRoster } from '../antiban/account-rotation.js';
 import { getPriceHistoryEntry } from '../data/price-history.js';
 import { OfferCacheManager } from '../data/offer-cache.js';
 import { addDailyProfit, getDailyProfit } from '../data/daily-profit.js';
@@ -256,6 +258,7 @@ const getFrozenFallbackItem = (
     buyLimitedNames: Set<string>,
     membersWorld: boolean,
     lowballTier: LowballTier = 'any',
+    crossAccountSkipNames: Set<string> = new Set(),
 ): BuyScanResult | null => {
     // Sort frozen item names by ascending freeze expiry (soonest first).
     const sorted = [...buyFreezeUntil.entries()]
@@ -267,6 +270,7 @@ const getFrozenFallbackItem = (
         const lower = item.itemName.trim().toLowerCase();
         if (occupiedNames.has(lower)) continue;
         if (buyLimitedNames.has(lower)) continue;
+        if (crossAccountSkipNames.has(lower)) continue;
         if (!membersWorld && item.members) continue;
         if (lowballTier === 'non-lowball' && isLowballItem(item)) continue;
         if (lowballTier === 'lowball' && !isLowballItem(item)) continue;
@@ -307,6 +311,7 @@ const getFrozenFallbackPartial = (
     membersWorld: boolean,
     minProfitGp: number = 15000,
     lowballTier: LowballTier = 'any',
+    crossAccountSkipNames: Set<string> = new Set(),
 ): PartialBuyResult | null => {
     const sorted = [...buyFreezeUntil.entries()]
         .sort((a, b) => a[1] - b[1]);
@@ -316,6 +321,7 @@ const getFrozenFallbackPartial = (
         const lower = item.itemName.trim().toLowerCase();
         if (occupiedNames.has(lower)) continue;
         if (buyLimitedNames.has(lower)) continue;
+        if (crossAccountSkipNames.has(lower)) continue;
         if (!membersWorld && item.members) continue;
         if (lowballTier === 'non-lowball' && isLowballItem(item)) continue;
         if (lowballTier === 'lowball' && !isLowballItem(item)) continue;
@@ -1522,6 +1528,29 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     // --- Step 6: Buying flow ---
     // Check for empty slots and merchable items to buy.
     const emptyBuySlot = findEmptyOfferSlot();
+
+    // --- Cross-account buy dedup ---
+    // Prevent multiple accounts from buying the same item and competing
+    // on price. Up to MAX_ACCOUNTS_PER_ITEM (2) accounts can buy the same
+    // item. With a 2-account roster, the threshold is 1 (no overlap).
+    // With 3+ accounts, the threshold is 2 (max 2 accounts per item).
+    const MAX_ACCOUNTS_PER_ITEM = 2;
+    const roster = getRoster(bot);
+    const crossAccountThreshold = Math.min(MAX_ACCOUNTS_PER_ITEM, Math.max(1, roster.length - 1));
+    const crossAccountSkipNames = new Set<string>();
+    if (roster.length >= 2) {
+        const currentAccount = bot.currentPlayerName || '';
+        const buyingCounts = getCrossAccountBuyingItemCount(bot, currentAccount);
+        for (const [name, count] of buyingCounts) {
+            if (count >= crossAccountThreshold) {
+                crossAccountSkipNames.add(name);
+            }
+        }
+        if (crossAccountSkipNames.size > 0) {
+            debugLog(bot, `Auto: ${crossAccountSkipNames.size} item(s) cross-account saturated (threshold ${crossAccountThreshold}) — skipping: ${[...crossAccountSkipNames].join(', ')}`);
+        }
+    }
+
     if (emptyBuySlot !== -1) {
         // --- Max buy slots check ---
         // Reserve slots for sales: P2P can use up to 5 of 8 slots for buys
@@ -1601,11 +1630,11 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         //   3. Lowball, non-frozen (only when all non-lowball exhausted)
         //   4. Lowball, frozen fallback (last resort)
         //   5. Partial fallback (lower profit/hr threshold, longer turnover)
-        let merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 'non-lowball');
+        let merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 'non-lowball', crossAccountSkipNames);
 
         // Tier 2: non-lowball frozen fallback.
         if (!merch && frozenNames.size > 0) {
-            merch = getFrozenFallbackItem(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 'non-lowball');
+            merch = getFrozenFallbackItem(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 'non-lowball', crossAccountSkipNames);
             if (merch) {
                 const freezeMs = loop.buyFreezeUntil.get(merch.item.itemName.trim().toLowerCase()) ?? 0;
                 const remainingMs = freezeMs - Date.now();
@@ -1616,7 +1645,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         // Tier 3: lowball, non-frozen — only when all non-lowball items are
         // occupied, buy-limited, frozen, or unaffordable.
         if (!merch) {
-            merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 'lowball');
+            merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 'lowball', crossAccountSkipNames);
             if (merch) {
                 debugLog(bot, `Auto: using lowball item ${merch.item.itemName} (${merch.item.lowballPercent.toFixed(2)}% lowball) — all non-lowball items occupied/limited/frozen/unaffordable`);
             }
@@ -1624,7 +1653,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
 
         // Tier 4: lowball frozen fallback — last resort.
         if (!merch && frozenNames.size > 0) {
-            merch = getFrozenFallbackItem(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 'lowball');
+            merch = getFrozenFallbackItem(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 'lowball', crossAccountSkipNames);
             if (merch) {
                 const freezeMs = loop.buyFreezeUntil.get(merch.item.itemName.trim().toLowerCase()) ?? 0;
                 const remainingMs = freezeMs - Date.now();
@@ -1638,24 +1667,24 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         let partial: PartialBuyResult | null = null;
         if (!merch) {
             // Non-lowball partial.
-            partial = getFirstPartialBuyItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 15000, 'non-lowball');
+            partial = getFirstPartialBuyItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 15000, 'non-lowball', crossAccountSkipNames);
             if (partial) {
                 debugLog(bot, `Auto: partial-quantity buy — ${partial.item.itemName} buying ${partial.quantity} (profit ${partial.quantity * partial.item.profitMargin}gp, runtime fallback)`);
             } else if (frozenNames.size > 0) {
                 // Non-lowball frozen fallback.
-                partial = getFrozenFallbackPartial(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 15000, 'non-lowball');
+                partial = getFrozenFallbackPartial(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 15000, 'non-lowball', crossAccountSkipNames);
                 if (partial) {
                     debugLog(bot, `Auto: partial-quantity buy (frozen non-lowball fallback) — ${partial.item.itemName} buying ${partial.quantity} (profit ${partial.quantity * partial.item.profitMargin}gp)`);
                 }
             }
             // Lowball partial — only if no non-lowball partial found.
             if (!partial) {
-                partial = getFirstPartialBuyItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 15000, 'lowball');
+                partial = getFirstPartialBuyItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 15000, 'lowball', crossAccountSkipNames);
                 if (partial) {
                     debugLog(bot, `Auto: partial-quantity buy (lowball) — ${partial.item.itemName} buying ${partial.quantity} (profit ${partial.quantity * partial.item.profitMargin}gp, runtime fallback)`);
                 } else if (frozenNames.size > 0) {
                     // Lowball frozen fallback.
-                    partial = getFrozenFallbackPartial(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 15000, 'lowball');
+                    partial = getFrozenFallbackPartial(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 15000, 'lowball', crossAccountSkipNames);
                     if (partial) {
                         debugLog(bot, `Auto: partial-quantity buy (frozen lowball fallback) — ${partial.item.itemName} buying ${partial.quantity} (profit ${partial.quantity * partial.item.profitMargin}gp)`);
                     }
@@ -1787,9 +1816,9 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 // Is there a non-frozen merchable item available to replace it?
                 // Prefer non-lowball (instant-fill) swap candidates first,
                 // then lowball — same tiering as the primary buy scan.
-                let swapCandidate = getFirstUnoccupiedMerchableItem(swapOccupiedNames, swapCoinCount, swapBuyLimitedNames, isMembersWorld(), swapFrozenNames, 'non-lowball');
+                let swapCandidate = getFirstUnoccupiedMerchableItem(swapOccupiedNames, swapCoinCount, swapBuyLimitedNames, isMembersWorld(), swapFrozenNames, 'non-lowball', crossAccountSkipNames);
                 if (!swapCandidate) {
-                    swapCandidate = getFirstUnoccupiedMerchableItem(swapOccupiedNames, swapCoinCount, swapBuyLimitedNames, isMembersWorld(), swapFrozenNames, 'lowball');
+                    swapCandidate = getFirstUnoccupiedMerchableItem(swapOccupiedNames, swapCoinCount, swapBuyLimitedNames, isMembersWorld(), swapFrozenNames, 'lowball', crossAccountSkipNames);
                 }
                 if (swapCandidate) {
                     debugLog(bot, `Auto: aborting frozen fallback buy ${slot.itemName} in slot ${i + 1} (${(slot.progress * 100).toFixed(0)}% progress) — replacing with non-frozen merchable item ${swapCandidate.item.itemName}`);

@@ -322,6 +322,7 @@ const scanItemsAtRuntime = (
     lowballTier: LowballTier,
     minProfitPerSlotHour: number,
     maxTurnoverMinutes: number,
+    crossAccountSkipNames: Set<string> = new Set(),
 ): BuyScanResult | null => {
     const items = ensureLoaded();
     let best: BuyScanResult | null = null;
@@ -330,6 +331,7 @@ const scanItemsAtRuntime = (
         if (occupiedItemNames.has(lower)) continue;
         if (buyLimitedItemNames.has(lower)) continue;
         if (frozenItemNames.has(lower)) continue;
+        if (crossAccountSkipNames.has(lower)) continue;
         if (!isMembersWorld && item.members) continue;
         if (lowballTier === 'non-lowball' && isLowballItem(item)) continue;
         if (lowballTier === 'lowball' && !isLowballItem(item)) continue;
@@ -396,6 +398,7 @@ export const getFirstUnoccupiedMerchableItem = (
     isMembersWorld: boolean = true,
     frozenItemNames: Set<string> = new Set(),
     lowballTier: LowballTier = 'any',
+    crossAccountSkipNames: Set<string> = new Set(),
 ): BuyScanResult | null => {
     return scanItemsAtRuntime(
         occupiedItemNames,
@@ -406,6 +409,7 @@ export const getFirstUnoccupiedMerchableItem = (
         lowballTier,
         RUNTIME_PROFIT_PER_SLOT_HOUR_MINIMUM,
         RUNTIME_MAX_TURNOVER_MINUTES,
+        crossAccountSkipNames,
     );
 };
 
@@ -447,6 +451,7 @@ export const getFirstPartialBuyItem = (
     frozenItemNames: Set<string> = new Set(),
     minProfitGp: number = 15000,
     lowballTier: LowballTier = 'any',
+    crossAccountSkipNames: Set<string> = new Set(),
 ): PartialBuyResult | null => {
     // Use a lower profit/hr threshold for the fallback scan. The primary
     // scan uses 20000; here we use 5000 to catch items that are still
@@ -462,6 +467,7 @@ export const getFirstPartialBuyItem = (
         lowballTier,
         5000, // lower profit/hr threshold for fallback
         240,  // 4 hours max turnover for fallback
+        crossAccountSkipNames,
     );
     if (!result) return null;
     return {
