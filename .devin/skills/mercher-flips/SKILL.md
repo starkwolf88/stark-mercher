@@ -275,8 +275,12 @@ Recent changes:
    `getMerchableItems()` and added to every output item.
 2. If `merchableItems.length === 0`, the script does **not** overwrite
    `merchableItems.json`; it preserves the previous file.
-3. `data/merchable-items.ts` filters out items whose `dataFetchedAt` is older than
-   10 minutes at plugin runtime.
+3. `data/merchable-items.ts` has two data validity safeguards via
+   `isMerchableDataValid()`: (a) the JSON must contain ≥ 30 items, and
+   (b) the newest `dataFetchedAt` across all items must be within the last
+   10 minutes. If either check fails, the bot blocks all account logins
+   and reports the error in the log every 10 seconds. On hot reload with
+   valid data, the bot resumes automatically.
 
 ## Known issues and design concerns
 
@@ -414,10 +418,13 @@ items while freeing up cash for additional slots.
 
 `data/merchable-items.ts` imports `merchableItems.json` at build time and exposes
 `getMerchableItems`, `getMerchableItem`, `getMerchableItemById`,
-`getFirstUnoccupiedMerchableItem`, `getFirstPartialBuyItem`, and `isLowballItem`.
+`getFirstUnoccupiedMerchableItem`, `getFirstPartialBuyItem`, `isLowballItem`,
+and `isMerchableDataValid`.
 The plugin uses `purchasePrice`, `salePrice`, `quantityToPurchase`, `limit`, and
 `totalPurchasePrice` from each item to place GE offers. The `dataFetchedAt`
-timestamp is used to ignore stale data. The `lowballPercent`, `lowballAmount`,
+timestamp is used by `isMerchableDataValid()` as a freshness safeguard — if the
+newest `dataFetchedAt` is older than 10 minutes, the bot blocks all logins and
+reports the error every 10 seconds. The `lowballPercent`, `lowballAmount`,
 and `lowballBasePrice` fields are used by the buy scan to prioritise instant-fill
 (non-lowball) items over slower lowball items — see "Lowball buy-scan tiering" below.
 
