@@ -753,6 +753,10 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         bot.loopIdleSinceTick = -1;
         bot.shortBreakDelayTicks = -1;
         bot.nextActionEtaMin = -1;
+        // Clear the half-ETA check flag — the bot did something on the
+        // previous tick (collect/sell/buy/abort), so the next break should
+        // start fresh at 50% ETA.
+        bot.checkedAtHalfEta = false;
     }
 
     // --- Post-login cleanup ---
