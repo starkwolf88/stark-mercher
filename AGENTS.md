@@ -134,7 +134,7 @@ All other state (held items, GE interface, location) either persists across hops
 
 The mercher takes two types of logout breaks:
 
-- **Short breaks** (1-10 min, ETA-based at 50%): Triggered when the auto-loop has nothing to do (all slots occupied, nothing to collect/sell/buy). The auto-loop sets `bot.loopIdleForBreak = true` when it reaches the idle branch. The break system in `breakStep()` checks these flags but enforces a **randomised tick-based delay** before actually logging out:
+- **Short breaks** (1-10 min, ETA-based two-tier 50%/90%): Triggered when the auto-loop has nothing to do (all slots occupied, nothing to collect/sell/buy). The auto-loop sets `bot.loopIdleForBreak = true` when it reaches the idle branch. The break system in `breakStep()` checks these flags but enforces a **randomised tick-based delay** before actually logging out:
   - Base: 5-20 ticks
   - + 3 ticks (20% chance)
   - + 1-10 ticks (10% chance)
