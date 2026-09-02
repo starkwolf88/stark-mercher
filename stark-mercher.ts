@@ -113,6 +113,11 @@ export class StarkMercher extends titan.Plugin {
     // log in. Persisted in rotationIndexSetting. Advanced by selectNextAccount()
     // each time an account is selected. -1 = not yet loaded from setting.
     rotationIndex = -1;
+    // Throttle for the idle-rotation check in wallClockStep. While waiting
+    // for the current account's break to end, we periodically check if
+    // another account has become eligible and rotate immediately if so.
+    // Timestamp of the last check; 0 = never checked.
+    lastIdleRotationCheckMs = 0;
     // Login FSM fields
     titleNextClickAt = 0;
     titleFirstSeenAtMs = 0;

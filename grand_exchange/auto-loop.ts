@@ -1522,6 +1522,73 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         debugLog(bot, 'Auto: no sellable items found in inventory — falling through to buying');
         loop.sellAttemptedItems.clear();
     } else {
+        // No empty slots for selling. Check if there are sellable items in
+        // inventory that need a slot. If so, abort the oldest buy offer with
+        // 0% progress (nothing bought yet — no loss) to free a slot for the
+        // sell. This keeps the slot usage dynamic: all 8 slots can be used
+        // for buys, but when a sale is needed we sacrifice the least-
+        // productive buy (oldest 0-progress) to make room.
+        const invItemsForAbort = [...getInvSnapshot().values()];
+        const sellableForAbort = invItemsForAbort.filter(i => i.id !== 995);
+        if (sellableForAbort.length > 0) {
+            // Find sellable items that are not currently being bought (those
+            // are skipped during sell anyway — selling them would conflict
+            // with the active buy offer).
+            const occupiedNamesForAbort = getOccupiedItemNames(slots);
+            const trulySellable = sellableForAbort.filter(i => {
+                const lower = i.name.trim().toLowerCase();
+                if (occupiedNamesForAbort.has(lower)) {
+                    // Skip if the item has an active BUY offer (would conflict).
+                    for (const s of slots) {
+                        if (s.itemName && s.itemName.trim().toLowerCase() === lower && s.type === 'buy') {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            });
+            if (trulySellable.length > 0) {
+                // Find the oldest buy offer with 0% progress (nothing bought).
+                let oldestSlotIdx = -1;
+                let oldestPlacedAt = Infinity;
+                for (let i = 0; i < slots.length; i++) {
+                    const s = slots[i];
+                    if (s.type !== 'buy' || s.status !== 'active' || s.progress > 0) continue;
+                    if (!s.itemName) continue;
+                    const entry = cache.get(s.itemName);
+                    const placedAt = entry?.offerPlacedAt ?? Infinity;
+                    if (placedAt < oldestPlacedAt) {
+                        oldestPlacedAt = placedAt;
+                        oldestSlotIdx = i;
+                    }
+                }
+                if (oldestSlotIdx !== -1) {
+                    const abortSlot = slots[oldestSlotIdx];
+                    debugLog(bot, `Auto: no empty sell slot — aborting oldest 0-progress buy ${abortSlot.itemName} in slot ${oldestSlotIdx + 1} to free slot for sell`);
+                    bot.statusText = `Freeing slot for sell — aborting ${abortSlot.itemName}`;
+                    loop.activeAbortFlow = new AbortOfferFlow({
+                        slotIndex: oldestSlotIdx,
+                        delayFn: createDelay,
+                        debugLog: (msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); },
+                    });
+                    const abortEntry = cache.get(abortSlot.itemName);
+                    const abortMerch = getMerchableItem(abortSlot.itemName);
+                    loop.abortSlotInfo = {
+                        type: 'buy',
+                        itemName: abortSlot.itemName,
+                        progress: abortSlot.progress,
+                        reason: 'freeing slot for sell (oldest 0-progress buy)',
+                        category: 'swap' as AbortCategory,
+                        etaMin: abortMerch ? abortMerch.purchaseEtaMinutes : (abortEntry?.purchaseEtaMinutes ?? 0),
+                        requestedQty: abortSlot.itemQuantity,
+                        price: abortEntry?.buyPrice ?? 0,
+                        placedAt: abortEntry?.offerPlacedAt ?? Date.now(),
+                    };
+                    loop.phase = 'aborting';
+                    return true;
+                }
+            }
+        }
         debugLog(bot, 'Auto: no empty slots for selling — all slots occupied');
     }
 
@@ -1552,20 +1619,13 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     }
 
     if (emptyBuySlot !== -1) {
-        // --- Max buy slots check ---
-        // Reserve slots for sales: P2P can use up to 5 of 8 slots for buys
-        // (leaving 3 for sell offers), F2P can use all 3 slots for buys.
-        // Count all slots currently used for buying (active, completed, or
-        // aborted — all occupy a slot until collected).
-        const maxBuySlots = isMembersWorld() ? 5 : 3;
+        // All 8 slots are available for buy offers. When a sell is needed,
+        // the sell scan (Step 5) aborts the oldest 0-progress buy offer to
+        // free a slot — so we don't need to reserve slots for sales here.
         let currentBuySlots = 0;
         for (const s of slots) {
             if (s.type === 'buy') currentBuySlots++;
         }
-        if (currentBuySlots >= maxBuySlots) {
-            debugLog(bot, `Auto: buy scan skipped — ${currentBuySlots}/${maxBuySlots} buy slots occupied (reserving ${slots.length - maxBuySlots} for sales)`);
-        } else {
-        const availableBuySlots = maxBuySlots - currentBuySlots;
         const occupiedNames = getOccupiedItemNames(slots);
         // Count coins from the cached inventory snapshot (single getAll()
         // call shared across all sections of this tick). This is the total
@@ -1590,7 +1650,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         if (buyLimitedNames.size > 0) {
             debugLog(bot, `Auto: ${buyLimitedNames.size} item(s) buy-limited — skipping: ${[...buyLimitedNames].join(', ')}`);
         }
-        debugLog(bot, `Auto: buy scan — empty slot ${emptyBuySlot + 1}, coins=${coinCount}, occupied=${occupiedNames.size}, buyLimited=${buyLimitedNames.size}, buy slots=${currentBuySlots}/${maxBuySlots} (${availableBuySlots} available)`);
+        debugLog(bot, `Auto: buy scan — empty slot ${emptyBuySlot + 1}, coins=${coinCount}, occupied=${occupiedNames.size}, buyLimited=${buyLimitedNames.size}, buy slots=${currentBuySlots}/${slots.length}`);
 
         // Build the set of currently-frozen items (buy offers recently aborted).
         // Expired freezes are cleaned up lazily here.
@@ -1789,7 +1849,6 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         }
 
         loop.buyAttemptedItems.clear();
-        } // end else (buy slots not at max)
     } else {
         // All slots occupied. Check if any buy slot has a frozen item that
         // should be swapped out for a non-frozen merchable item. The frozen

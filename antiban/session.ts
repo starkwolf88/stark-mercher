@@ -518,6 +518,7 @@ export function resetBreakState(bot: StarkMercher): void {
     bot.currentPlayerName = '';
     bot.sessionProfile = null;
     bot.unexpectedLogoutAtMs = 0;
+    bot.lastIdleRotationCheckMs = 0;
     resetLogoutState(bot);
     resetLoginState(bot);
 }
@@ -1039,6 +1040,24 @@ export function wallClockStep(bot: StarkMercher): void {
             // sets breakPhase='logging_in' on success, so the break-timer
             // check below won't fire.
             tryImmediateRotation(bot);
+        }
+
+        // While waiting for the current account's break to end, periodically
+        // check if a DIFFERENT account has become eligible (its break elapsed
+        // or it woke up). If so, rotate immediately instead of wasting time
+        // waiting for the current account's longer break. Throttled to every
+        // 10 seconds to avoid spamming selectNextAccount on every main-loop
+        // tick. tryImmediateRotation only rotates to a different account —
+        // if the same account is selected (no other eligible), it returns
+        // false and we continue waiting for the current break.
+        if (bot.breakPhase === 'logged_out' && now < bot.breakTargetEndMs && isRotationEnabled(bot)) {
+            if (now - bot.lastIdleRotationCheckMs >= 10000) {
+                bot.lastIdleRotationCheckMs = now;
+                if (tryImmediateRotation(bot)) {
+                    humanLog(bot, 'Rotation: another account became eligible during break wait — rotating immediately');
+                    return;
+                }
+            }
         }
 
         if (bot.breakPhase === 'logged_out' && now >= bot.breakTargetEndMs) {
