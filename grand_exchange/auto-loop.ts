@@ -49,6 +49,7 @@ import { getPriceHistoryEntry } from '../data/price-history.js';
 import { OfferCacheManager } from '../data/offer-cache.js';
 import { addDailyProfit } from '../data/daily-profit.js';
 import { recordMerchCycle, type MerchHistoryEntry } from '../data/merch-history.js';
+import { recordAbort } from '../data/abort-history.js';
 
 // --- Stale offer thresholds ------------------------------------------------
 // Sell: dynamic % of ETA passed with <25% sold → abort (scaled by profit margin)
@@ -252,8 +253,23 @@ export interface AutoLoopState {
     /** Info about the slot being aborted, set when an abort flow is
      *  initiated. Used on abort completion to decide whether to clean
      *  the cache entry (buy offers with 0% progress have nothing to
-     *  collect, so the cache entry is removed). */
-    abortSlotInfo: { type: 'buy' | 'sell'; itemName: string; progress: number } | null;
+     *  collect, so the cache entry is removed) and to record an entry
+     *  in abort history for diagnostics. */
+    abortSlotInfo: {
+        type: 'buy' | 'sell';
+        itemName: string;
+        progress: number;
+        /** Stale reason string (or 'frozen swap-out' for swap aborts). */
+        reason: string;
+        /** Original cached ETA in minutes. */
+        etaMin: number;
+        /** Requested offer quantity (from the GE slot). */
+        requestedQty: number;
+        /** Price per item (buy price for buys, sell price for sells). */
+        price: number;
+        /** Timestamp (ms) when the offer was placed (from cache entry). */
+        placedAt: number;
+    } | null;
     /** Wall-clock timestamp of the last periodic cache cleanup. The cache
      *  is cleaned every 60 seconds to remove expired 'idle' entries and
      *  expired buy-freeze entries, keeping the cache bounded during long
@@ -667,6 +683,41 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                     debugLog(bot, `Auto: removed cache entry for ${itemName} (buy offer aborted with 0% progress — nothing to collect)`);
                 }
             }
+            // Record abort history entry for diagnostics. This captures
+            // aborted offers (including 0-fill buys that leave no trace in
+            // merch history) so we can diagnose low overnight profit.
+            const abortPlayerName = bot.currentPlayerName || titan.state.client.localPlayer?.name || '';
+            if (loop.abortSlotInfo && abortPlayerName) {
+                const info = loop.abortSlotInfo;
+                const elapsedMin = (Date.now() - info.placedAt) / 60000;
+                // For buy offers, filledQty = items in inventory (if any).
+                // For sell offers, filledQty = listed qty - remaining in inv.
+                let filledQty = 0;
+                if (info.type === 'buy') {
+                    const inInv = titan.utils.inventory.find(info.itemName);
+                    filledQty = inInv ? inInv.quantity : 0;
+                } else {
+                    // Sell abort: the difference between what was listed and
+                    // what's back in inventory is what sold before the abort.
+                    const entry = cache.get(info.itemName);
+                    const inInv = titan.utils.inventory.find(info.itemName);
+                    if (entry?.sellQuantity !== undefined && inInv) {
+                        filledQty = Math.max(0, entry.sellQuantity - inInv.quantity);
+                    }
+                }
+                recordAbort(bot, abortPlayerName, {
+                    item: info.itemName,
+                    type: info.type,
+                    requestedQty: info.requestedQty,
+                    filledQty,
+                    reason: info.reason,
+                    elapsedMin: Math.round(elapsedMin * 10) / 10,
+                    etaMin: info.etaMin,
+                    price: info.price,
+                    date: new Date().toISOString(),
+                });
+                debugLog(bot, `Auto: abort history recorded — ${info.type} ${info.itemName}, requested=${info.requestedQty}, filled=${filledQty}, elapsed=${(elapsedMin).toFixed(1)}min, eta=${info.etaMin}min, reason="${info.reason}"`);
+            }
         } else if (flow.status === 'failed') {
             titan.logf('[Stark Mercher] Auto: abort failed: %s', flow.error);
         }
@@ -888,6 +939,19 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             merchProfit = (netAvgSold - entry.buyPrice) * totalQty;
             const revisions = entry.revisedPrices.length > 0 ? entry.revisedPrices.length - 1 : 0;
             const lastSale = partials[partials.length - 1];
+            // Diagnostic fields for overnight profit analysis.
+            // requestedBuyQty = totalBought (what the bot actually bought,
+            //   which may be less than the original buy offer requested if
+            //   the buy was aborted with a partial fill).
+            // actualBoughtQty = totalBought (same — what was bought).
+            // sellElapsedMin = time from offer placement (or last revision)
+            //   to now. This is the sell offer duration, not the full cycle.
+            // buyEtaMin / buyAbortReason are not available at this point
+            //   because the buy offer completed naturally (the cache entry
+            //   transitioned from buy → sell). The abort history captures
+            //   aborted buys separately.
+            const actualBoughtQty = entry.totalBought ?? totalQty;
+            const sellElapsedMin = (Date.now() - entry.offerPlacedAt) / 60000;
             merchEntry = {
                 item: cacheKey,
                 qty: totalQty,
@@ -895,6 +959,13 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 buy: entry.buyPrice,
                 avgSold,
                 revisions,
+                requestedBuyQty: actualBoughtQty,
+                actualBoughtQty,
+                buyAbortReason: null,
+                buyElapsedMin: undefined,
+                buyEtaMin: entry.purchaseEtaMinutes,
+                revisionPrices: [...entry.revisedPrices],
+                sellElapsedMin: Math.round(sellElapsedMin * 10) / 10,
             };
         }
         // Now clear sell fields and SAVE the cache BEFORE writing profit/history.
@@ -914,7 +985,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         }
         if (merchEntry && playerName && merchProfit !== 0) {
             recordMerchCycle(bot, playerName, merchEntry, merchProfit);
-            debugLog(bot, `Auto: merch history recorded — ${cacheKey} ${merchEntry.qty}x, avgSold=${merchEntry.avgSold}gp (net=${getNetSellPrice(merchEntry.avgSold)}gp after tax), buy=${entry.buyPrice}gp, profit=${merchProfit}gp, revisions=${merchEntry.revisions}`);
+            debugLog(bot, `Auto: merch history recorded — ${cacheKey} ${merchEntry.qty}x, avgSold=${merchEntry.avgSold}gp (net=${getNetSellPrice(merchEntry.avgSold)}gp after tax), buy=${entry.buyPrice}gp, profit=${merchProfit}gp, revisions=${merchEntry.revisions}, sellElapsed=${merchEntry.sellElapsedMin ?? '?'}min, revisionPrices=[${merchEntry.revisionPrices?.join(',') ?? ''}]`);
         }
         debugLog(bot, `Auto: completed-sell sweep — ${cacheKey} sold 100% (${soldQty}x), profit recorded, buy-limit data preserved`);
     }
@@ -982,14 +1053,32 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 debugLog: (msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); },
             });
             // Record slot info so we can clean up the cache entry on abort
-            // completion. Buy offers with 0% progress have nothing to collect,
-            // so the cache entry is removed. Partial buys keep their entry
-            // (collected items will be sold in the next loop iteration).
-            loop.abortSlotInfo = slot.itemName ? {
-                type: slot.type as 'buy' | 'sell',
-                itemName: slot.itemName,
-                progress: slot.progress,
-            } : null;
+            // completion and record an abort history entry for diagnostics.
+            // Buy offers with 0% progress have nothing to collect, so the
+            // cache entry is removed. Partial buys keep their entry (collected
+            // items will be sold in the next loop iteration).
+            if (slot.itemName) {
+                const abortEntry = cache.get(slot.itemName);
+                const merch = getMerchableItem(slot.itemName);
+                const etaMin = slot.type === 'buy'
+                    ? (merch ? merch.purchaseEtaMinutes : (abortEntry?.purchaseEtaMinutes ?? 0))
+                    : (merch ? merch.saleEtaMinutes : (abortEntry?.saleEtaMinutes ?? 0));
+                const price = slot.type === 'buy'
+                    ? (abortEntry?.buyPrice ?? 0)
+                    : (abortEntry?.sellPrice ?? 0);
+                loop.abortSlotInfo = {
+                    type: slot.type as 'buy' | 'sell',
+                    itemName: slot.itemName,
+                    progress: slot.progress,
+                    reason,
+                    etaMin,
+                    requestedQty: slot.itemQuantity,
+                    price,
+                    placedAt: abortEntry?.offerPlacedAt ?? Date.now(),
+                };
+            } else {
+                loop.abortSlotInfo = null;
+            }
             loop.phase = 'aborting';
             return true; // the flow will be ticked on the next call
         }
@@ -1330,10 +1419,17 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                         delayFn: createDelay,
                         debugLog: (msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); },
                     });
+                    const swapAbortEntry = cache.get(slot.itemName);
+                    const swapMerch = getMerchableItem(slot.itemName);
                     loop.abortSlotInfo = {
                         type: 'buy',
                         itemName: slot.itemName,
                         progress: slot.progress,
+                        reason: 'frozen swap-out',
+                        etaMin: swapMerch ? swapMerch.purchaseEtaMinutes : (swapAbortEntry?.purchaseEtaMinutes ?? 0),
+                        requestedQty: slot.itemQuantity,
+                        price: swapAbortEntry?.buyPrice ?? 0,
+                        placedAt: swapAbortEntry?.offerPlacedAt ?? Date.now(),
                     };
                     loop.phase = 'aborting';
                     return true;

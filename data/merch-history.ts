@@ -14,6 +14,19 @@
 //   - weighted average sell price across all price revisions
 //   - number of price revisions before the cycle completed
 //
+// Diagnostic fields (added for overnight profit analysis):
+//   - requestedBuyQty: what the bot tried to buy (vs qty = what actually sold)
+//   - actualBoughtQty: what was actually bought (may differ from sold if some
+//     are still in inventory or were lost to a sell abort)
+//   - buyAbortReason: null if the buy completed naturally, or the stale
+//     reason string if the buy was aborted (partial fill)
+//   - buyElapsedMin: minutes the buy offer was active
+//   - buyEtaMin: original cached ETA for the buy (for comparing actual vs
+//     expected)
+//   - revisionPrices: array of actual sell prices at each revision (not just
+//     the count) — shows whether prices eroded gradually or were dumped
+//   - sellElapsedMin: minutes the sell offer(s) was active total
+//
 // The data is persisted in a hidden plugin setting (JSON-encoded) keyed by
 // account name, surviving client restarts and plugin reloads.
 // ============================================================================
@@ -35,6 +48,20 @@ export interface MerchHistoryEntry {
     avgSold: number;
     /** Number of price revisions before the cycle completed. */
     revisions: number;
+    /** What the bot tried to buy (vs qty = what actually sold). */
+    requestedBuyQty?: number;
+    /** What was actually bought (may differ from sold if some remain in inv). */
+    actualBoughtQty?: number;
+    /** null if buy completed naturally, or the stale reason if aborted. */
+    buyAbortReason?: string | null;
+    /** Minutes the buy offer was active. */
+    buyElapsedMin?: number;
+    /** Original cached ETA for the buy (minutes). */
+    buyEtaMin?: number;
+    /** Array of actual sell prices at each revision (first = original). */
+    revisionPrices?: number[];
+    /** Minutes the sell offer(s) was active total. */
+    sellElapsedMin?: number;
 }
 
 export interface MerchHistoryData {

@@ -31,6 +31,7 @@ import { isPlayerIdle } from '../general/helpers.js';
 import { cancelHop } from './hopper.js';
 import { loadOfferCache } from '../general/state-persist.js';
 import { getMerchHistory } from '../data/merch-history.js';
+import { getAbortHistory } from '../data/abort-history.js';
 
 /** Dumps cache, merch history, and buy-freeze state to the log. Called
  *  automatically after each logout so the user can review state without
@@ -74,8 +75,11 @@ const dumpStateOnLogout = (bot: StarkMercher): void => {
             titan.logf('[Stark Mercher] === PROFITS (%d) ===', history.profits.length);
             let totalProfit = 0;
             for (const e of history.profits) {
-                titan.logf('[Stark Mercher]   %s: qty=%d, profit=+%dgp, buy=%d, avgSold=%d, revisions=%d, date=%s',
-                    e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, e.date);
+                const revPrices = e.revisionPrices ? `, revPrices=[${e.revisionPrices.join(',')}]` : '';
+                const sellTime = e.sellElapsedMin !== undefined ? `, sellElapsed=${e.sellElapsedMin}min` : '';
+                const reqVsActual = e.requestedBuyQty !== undefined ? `, reqBuy=${e.requestedBuyQty}` : '';
+                titan.logf('[Stark Mercher]   %s: qty=%d, profit=+%dgp, buy=%d, avgSold=%d, revisions=%d%s%s%s, date=%s',
+                    e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, reqVsActual, revPrices, sellTime, e.date);
                 totalProfit += e.profit;
             }
             titan.logf('[Stark Mercher]   Total profit: +%dgp', totalProfit);
@@ -84,13 +88,29 @@ const dumpStateOnLogout = (bot: StarkMercher): void => {
             titan.logf('[Stark Mercher] === LOSSES (%d) ===', history.losses.length);
             let totalLoss = 0;
             for (const e of history.losses) {
-                titan.logf('[Stark Mercher]   %s: qty=%d, loss=%dgp, buy=%d, avgSold=%d, revisions=%d, date=%s',
-                    e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, e.date);
+                const revPrices = e.revisionPrices ? `, revPrices=[${e.revisionPrices.join(',')}]` : '';
+                const sellTime = e.sellElapsedMin !== undefined ? `, sellElapsed=${e.sellElapsedMin}min` : '';
+                const reqVsActual = e.requestedBuyQty !== undefined ? `, reqBuy=${e.requestedBuyQty}` : '';
+                titan.logf('[Stark Mercher]   %s: qty=%d, loss=%dgp, buy=%d, avgSold=%d, revisions=%d%s%s%s, date=%s',
+                    e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, reqVsActual, revPrices, sellTime, e.date);
                 totalLoss += e.profit;
             }
             titan.logf('[Stark Mercher]   Total loss: %dgp', totalLoss);
         }
         titan.logf('[Stark Mercher] Merch history dump complete.');
+    }
+
+    // --- Abort history ---
+    const aborts = getAbortHistory(bot, accountName);
+    if (aborts.aborts.length === 0) {
+        titan.logf('[Stark Mercher] No abort history for %s.', accountName);
+    } else {
+        titan.logf('[Stark Mercher] Abort history for %s (%d entries):', accountName, aborts.aborts.length);
+        for (const a of aborts.aborts) {
+            titan.logf('[Stark Mercher]   %s: %s req=%d filled=%d, elapsed=%.1fmin eta=%.1fmin, price=%d, reason="%s", date=%s',
+                a.item, a.type, a.requestedQty, a.filledQty, a.elapsedMin, a.etaMin, a.price, a.reason, a.date);
+        }
+        titan.logf('[Stark Mercher] Abort history dump complete.');
     }
 
     // --- Buy freezes ---

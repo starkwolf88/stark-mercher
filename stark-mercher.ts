@@ -16,6 +16,7 @@ import { hopStep, completeHop, onChatMessage as onHopChatMessage } from './antib
 import { renderBotOverlay } from './widgets/bot-overlay.js';
 import { loadOfferCache } from './general/state-persist.js';
 import { getMerchHistory } from './data/merch-history.js';
+import { getAbortHistory } from './data/abort-history.js';
 import type { SessionProfile } from './antiban/session-profile.js';
 
 export class StarkMercher extends titan.Plugin {
@@ -275,6 +276,21 @@ export class StarkMercher extends titan.Plugin {
         hidden: false,
     });
 
+    // --- Abort history setting (visible for manual backup) ---
+    // Stores per-account abort history as JSON. Each entry records an
+    // aborted buy or sell offer: item, type, requested/filled qty, reason,
+    // elapsed minutes, original ETA, price, and timestamp. This is the key
+    // diagnostic for low overnight profit — aborted 0-fill buys represent
+    // wasted time and slot occupancy that merch history doesn't capture.
+    // Same persistence limitation as offerCacheSetting — hot reload only.
+    // Visible so you can manually copy/paste the JSON across client restarts.
+    abortHistorySetting: titan.Setting<string> = this.stringSetting({
+        key: 'abortHistory',
+        name: 'Abort history (manual backup)',
+        default: '{}',
+        hidden: false,
+    });
+
     // --- Overlay HUD registration ---
     // The overlay renders every frame while isHudActive is true. It draws
     // the Status, Inventory Coins, and Daily Profit fields.
@@ -414,46 +430,66 @@ export class StarkMercher extends titan.Plugin {
     });
 
     // --- Log merch history button ---
-    // Click to dump the merch history (profits and losses) to the log.
-    // Shows completed merch cycles with item, qty, profit/loss, avg sell
-    // price, buy price, and revision count.
+    // Click to dump the merch history (profits and losses) and abort history
+    // to the log. Shows completed merch cycles with item, qty, profit/loss,
+    // avg sell price, buy price, revision count, revision prices, sell
+    // elapsed time, and requested vs actual bought qty. Also shows aborted
+    // offers with reason, elapsed vs ETA, and fill rate.
     logMerchHistory: titan.Setting<void> = this.buttonSetting({
         key: 'logMerchHistory',
-        name: 'Log Merch History',
+        name: 'Log Merch & Abort History',
         position: -1,
         onClick: () => {
             const accountName = this.currentPlayerName || titan.state.client.localPlayer?.name || '';
             if (!accountName) {
-                titan.log('[Stark Mercher] Cannot log merch history — no account name available.');
+                titan.log('[Stark Mercher] Cannot log history — no account name available.');
                 return;
             }
             const history = getMerchHistory(this, accountName);
             if (history.profits.length === 0 && history.losses.length === 0) {
                 titan.logf('[Stark Mercher] No merch history for %s.', accountName);
-                return;
-            }
-            titan.logf('[Stark Mercher] Merch history for %s:', accountName);
-            if (history.profits.length > 0) {
-                titan.logf('[Stark Mercher] === PROFITS (%d) ===', history.profits.length);
-                let totalProfit = 0;
-                for (const e of history.profits) {
-                    titan.logf('[Stark Mercher]   %s: qty=%d, profit=+%dgp, buy=%d, avgSold=%d, revisions=%d, date=%s',
-                        e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, e.date);
-                    totalProfit += e.profit;
+            } else {
+                titan.logf('[Stark Mercher] Merch history for %s:', accountName);
+                if (history.profits.length > 0) {
+                    titan.logf('[Stark Mercher] === PROFITS (%d) ===', history.profits.length);
+                    let totalProfit = 0;
+                    for (const e of history.profits) {
+                        const revPrices = e.revisionPrices ? `, revPrices=[${e.revisionPrices.join(',')}]` : '';
+                        const sellTime = e.sellElapsedMin !== undefined ? `, sellElapsed=${e.sellElapsedMin}min` : '';
+                        const reqVsActual = e.requestedBuyQty !== undefined ? `, reqBuy=${e.requestedBuyQty}` : '';
+                        titan.logf('[Stark Mercher]   %s: qty=%d, profit=+%dgp, buy=%d, avgSold=%d, revisions=%d%s%s%s, date=%s',
+                            e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, reqVsActual, revPrices, sellTime, e.date);
+                        totalProfit += e.profit;
+                    }
+                    titan.logf('[Stark Mercher]   Total profit: +%dgp', totalProfit);
                 }
-                titan.logf('[Stark Mercher]   Total profit: +%dgp', totalProfit);
-            }
-            if (history.losses.length > 0) {
-                titan.logf('[Stark Mercher] === LOSSES (%d) ===', history.losses.length);
-                let totalLoss = 0;
-                for (const e of history.losses) {
-                    titan.logf('[Stark Mercher]   %s: qty=%d, loss=%dgp, buy=%d, avgSold=%d, revisions=%d, date=%s',
-                        e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, e.date);
-                    totalLoss += e.profit;
+                if (history.losses.length > 0) {
+                    titan.logf('[Stark Mercher] === LOSSES (%d) ===', history.losses.length);
+                    let totalLoss = 0;
+                    for (const e of history.losses) {
+                        const revPrices = e.revisionPrices ? `, revPrices=[${e.revisionPrices.join(',')}]` : '';
+                        const sellTime = e.sellElapsedMin !== undefined ? `, sellElapsed=${e.sellElapsedMin}min` : '';
+                        const reqVsActual = e.requestedBuyQty !== undefined ? `, reqBuy=${e.requestedBuyQty}` : '';
+                        titan.logf('[Stark Mercher]   %s: qty=%d, loss=%dgp, buy=%d, avgSold=%d, revisions=%d%s%s%s, date=%s',
+                            e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, reqVsActual, revPrices, sellTime, e.date);
+                        totalLoss += e.profit;
+                    }
+                    titan.logf('[Stark Mercher]   Total loss: %dgp', totalLoss);
                 }
-                titan.logf('[Stark Mercher]   Total loss: %dgp', totalLoss);
+                titan.logf('[Stark Mercher] Merch history dump complete.');
             }
-            titan.logf('[Stark Mercher] Merch history dump complete.');
+            // Abort history
+            const aborts = getAbortHistory(this, accountName);
+            if (aborts.aborts.length === 0) {
+                titan.logf('[Stark Mercher] No abort history for %s.', accountName);
+            } else {
+                titan.logf('[Stark Mercher] Abort history for %s (%d entries):', accountName, aborts.aborts.length);
+                for (const a of aborts.aborts) {
+                    titan.logf('[Stark Mercher]   %s: %s req=%d filled=%d, elapsed=%.1fmin eta=%.1fmin, price=%d, reason="%s", date=%s',
+                        a.item, a.type, a.requestedQty, a.filledQty, a.elapsedMin, a.etaMin, a.price, a.reason, a.date);
+                }
+                titan.logf('[Stark Mercher] Abort history dump complete.');
+            }
         },
     });
 
