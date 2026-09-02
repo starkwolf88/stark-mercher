@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 const debug = false;
 const MAX_RESULTS = 100; // Maximum number of merchable items to output after sorting by profitability
 const GE_TAX_PERCENTAGE = 2; // Grand Exchange sale tax percentage deducted from sell price
-const CASH_STACK_MILLIONS = 20; // Total flipping cash in millions for readability
+const CASH_STACK_MILLIONS = 50; // Total flipping cash in millions for readability
 const CASH_STACK = CASH_STACK_MILLIONS * 1000000; // Total GP available for flipping
 const SALE_BUFFER_PERCENTAGE = 0.01; // Extra safety margin removed from sell price to protect against price movement
 const AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO = 0.20; // Percentage of total cash assumed to be used per GE slot (~5 slots)
@@ -179,6 +179,11 @@ const determinePurchaseAndSalePrices = (itemData) => {
         itemData.purchasePrice = itemData.fiveMinutePurchasePrice;
         itemData.rawSalePrice = itemData.fiveMinuteSalePrice;
     }
+    // Filter out items that cost more than the simulation cash stack.
+    // This is the "pool width dial": lower cash stack = fewer items
+    // (only affordable items), higher cash stack = more items (expensive
+    // items included). The plugin then evaluates each item at runtime
+    // based on the player's actual coins.
     if (itemData.purchasePrice > CASH_STACK) {
         purchasePriceExceedsCashStackFiltered++;
         return false;
@@ -475,6 +480,8 @@ const validatePurchasePrice = (itemData) => {
             }
         }
     }
+    // Filter out items that cost more than the simulation cash stack
+    // (pool width dial — see determinePurchaseAndSalePrices).
     if (itemData.purchasePrice > CASH_STACK) {
         validatedPurchasePriceExceedsCashStack++;
         return false;
@@ -863,10 +870,11 @@ const calculateEtas = (itemData) => {
     itemData.purchaseEtaMinutes = etas.purchaseEtaMinutes;
     itemData.saleEtaMinutes = etas.saleEtaMinutes;
     itemData.turnoverEtaMinutes = etas.turnoverEtaMinutes;
-    if (itemData.turnoverEtaMinutes > (MAX_TURNOVER_HOURS * 60)) {
-        etaTurnoverFiltered++;
-        return false;
-    }
+    // The MAX_TURNOVER_HOURS filter was removed — the turnover ETA at the
+    // 50m allocation is not meaningful for a player with fewer coins. The
+    // plugin computes a runtime ETA based on the player's actual available
+    // coins and filters there instead. The 50m-allocation ETA is still
+    // written to the JSON for diagnostic reference.
     return true;
 };
 
@@ -878,10 +886,12 @@ const calculateProfitability = (itemData) => {
         return false;
     }
     itemData.actualProfitPerSlotHour = (itemData.quantityToPurchase * itemData.profitMargin) * (60 / itemData.turnoverEtaMinutes);
-    if (itemData.actualProfitPerSlotHour < PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD) {
-        actualProfitPerSlotHourFiltered++;
-        return false;
-    }
+    // The actualProfitPerSlotHour < 20000 filter was removed — this value
+    // is computed at the 50m allocation and doesn't reflect what a player
+    // with fewer coins would achieve. The intrinsic quality gate
+    // (maxProfitPerSlotHour >= 20000, calculated earlier) is the real
+    // filter. The plugin recomputes actualProfitPerSlotHour at runtime
+    // based on the player's actual coin count and filters there.
     itemData.returnOnInvestmentPercentage = (itemData.profitMargin / itemData.purchasePrice) * 100;
     if (itemData.returnOnInvestmentPercentage < ROI_MINIMUM_PERCENTAGE_THRESHOLD) {
         returnOnInvestmentFiltered++;
@@ -951,9 +961,20 @@ const determineLongTermCrash = async (itemData) => {
 };
 
 const determineFlipScore = () => {
+    // flipScore is fully cash-stack-independent. It ranks items by intrinsic
+    // quality only — no simulation-era values (allocation, quantity, ETA) are
+    // used. This means the ranking is identical regardless of what
+    // CASH_STACK_MILLIONS is set to; only the item pool width changes.
+    //
+    // maxProfitPerSlotHour = min(3h volume, limit) * profitMargin — the
+    // theoretical max profit per slot per hour. This already accounts for
+    // volume (high-volume items move more units per hour), so a separate
+    // turnover penalty is redundant and would introduce a cash-stack
+    // dependency (via the simulation-era turnoverEtaMinutes).
+    //
+    // Math.log1p(ROI) favours higher-ROI items with diminishing returns.
     merchableItems.forEach(item => {
-        const turnoverPenalty = Math.exp(-Math.pow(item.turnoverEtaMinutes / 30, 2));
-        item.flipScore = item.actualProfitPerSlotHour * Math.log1p(item.returnOnInvestmentPercentage) * (1 - Math.min(item.totalPurchasePrice / CASH_STACK, 1)) * turnoverPenalty;
+        item.flipScore = item.maxProfitPerSlotHour * Math.log1p(item.returnOnInvestmentPercentage);
     });
     merchableItems.sort((a, b) => b.flipScore - a.flipScore);
 };
@@ -1232,3 +1253,7 @@ const formatEta = (minutesFloat) => {
 };
 
 getMerchableItems();
+
+
+
+

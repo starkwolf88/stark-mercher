@@ -44,7 +44,7 @@ import {
 import { clickCollectToInventory } from './actions.js';
 import { getNetSellPrice, getGeTax } from './constants.js';
 import { openGe, nearGrandExchange, walkToGe } from './clerk.js';
-import { getMerchableItems, getMerchableItem, getFirstUnoccupiedMerchableItem, getFirstPartialBuyItem, isLowballItem, type MerchableItem, type PartialBuyResult, type LowballTier } from '../data/merchable-items.js';
+import { getMerchableItems, getMerchableItem, getFirstUnoccupiedMerchableItem, getFirstPartialBuyItem, isLowballItem, evaluateItemAtRuntime, RUNTIME_PROFIT_PER_SLOT_HOUR_MINIMUM, RUNTIME_MAX_TURNOVER_MINUTES, type MerchableItem, type PartialBuyResult, type BuyScanResult, type LowballTier } from '../data/merchable-items.js';
 import { getPriceHistoryEntry } from '../data/price-history.js';
 import { OfferCacheManager } from '../data/offer-cache.js';
 import { addDailyProfit, getDailyProfit } from '../data/daily-profit.js';
@@ -245,9 +245,10 @@ const saveBuyFreeze = (bot: StarkMercher, freezeMap: Map<string, number>): void 
 
 /** Returns the frozen merchable item with the soonest-expiring freeze that
  *  passes all the standard buy-scan checks (not occupied, affordable, not
- *  buy-limited, members-appropriate). Returns null if no frozen item is
- *  eligible. The `lowballTier` parameter scopes the scan to non-lowball or
- *  lowball items only (or both with `'any'`). */
+ *  buy-limited, members-appropriate) evaluated at runtime based on actual
+ *  coins. Returns null if no frozen item is eligible. The `lowballTier`
+ *  parameter scopes the scan to non-lowball or lowball items only (or both
+ *  with `'any'`). */
 const getFrozenFallbackItem = (
     buyFreezeUntil: Map<string, number>,
     occupiedNames: Set<string>,
@@ -255,30 +256,49 @@ const getFrozenFallbackItem = (
     buyLimitedNames: Set<string>,
     membersWorld: boolean,
     lowballTier: LowballTier = 'any',
-): MerchableItem | null => {
+): BuyScanResult | null => {
     // Sort frozen item names by ascending freeze expiry (soonest first).
     const sorted = [...buyFreezeUntil.entries()]
         .sort((a, b) => a[1] - b[1]);
+    let best: BuyScanResult | null = null;
     for (const [name] of sorted) {
         const item = getMerchableItem(name);
         if (!item) continue;
         const lower = item.itemName.trim().toLowerCase();
         if (occupiedNames.has(lower)) continue;
         if (buyLimitedNames.has(lower)) continue;
-        if (item.totalPurchasePrice > coinCount) continue;
         if (!membersWorld && item.members) continue;
         if (lowballTier === 'non-lowball' && isLowballItem(item)) continue;
         if (lowballTier === 'lowball' && !isLowballItem(item)) continue;
-        return item;
+        // Evaluate at runtime based on actual coins.
+        const evalResult = evaluateItemAtRuntime(item, coinCount);
+        if (!evalResult) continue;
+        if (evalResult.runtimeProfitPerSlotHour < RUNTIME_PROFIT_PER_SLOT_HOUR_MINIMUM) continue;
+        if (evalResult.runtimeTurnoverEtaMinutes > RUNTIME_MAX_TURNOVER_MINUTES) continue;
+        // Among frozen items, prefer the soonest-expiring freeze (first in
+        // sorted order) rather than the highest profit/hr — the freeze
+        // timing is the more important factor for frozen fallbacks.
+        if (!best) {
+            const profitPerCoinHour = evalResult.runtimeTotalCost > 0
+                ? evalResult.runtimeProfitPerSlotHour / evalResult.runtimeTotalCost
+                : 0;
+            best = {
+                item,
+                quantity: evalResult.runtimeQuantity,
+                totalCost: evalResult.runtimeTotalCost,
+                runtimeProfitPerSlotHour: evalResult.runtimeProfitPerSlotHour,
+                runtimeTurnoverEtaMinutes: evalResult.runtimeTurnoverEtaMinutes,
+                runtimeProfitPerCoinHour: profitPerCoinHour,
+            };
+        }
     }
-    return null;
+    return best;
 };
 
-/** Same as getFrozenFallbackItem but for partial-quantity buys (when we
- *  can't afford the full quantityToPurchase). Returns the frozen item with
- *  the soonest-expiring freeze that qualifies for a partial buy, or null.
- *  The `lowballTier` parameter scopes the scan to non-lowball or lowball
- *  items only (or both with `'any'`). */
+/** Same as getFrozenFallbackItem but with a lower profit/hr threshold for
+ *  fallback partial-quantity buys. Uses runtime evaluation based on actual
+ *  coins. Returns the frozen item with the soonest-expiring freeze that
+ *  qualifies, or null. The `lowballTier` parameter scopes the scan. */
 const getFrozenFallbackPartial = (
     buyFreezeUntil: Map<string, number>,
     occupiedNames: Set<string>,
@@ -299,21 +319,15 @@ const getFrozenFallbackPartial = (
         if (!membersWorld && item.members) continue;
         if (lowballTier === 'non-lowball' && isLowballItem(item)) continue;
         if (lowballTier === 'lowball' && !isLowballItem(item)) continue;
-        if (item.purchasePrice > coinCount) continue;
-        // Full quantity is affordable — getFirstUnoccupiedMerchableItem
-        // would have returned it already, but check anyway.
-        if (item.totalPurchasePrice <= coinCount) continue;
-        const reducedQty = Math.min(
-            Math.floor(coinCount / item.purchasePrice),
-            item.limit,
-        );
-        if (reducedQty <= 0) continue;
-        const reducedProfit = reducedQty * item.profitMargin;
-        if (reducedProfit < minProfitGp) continue;
+        // Evaluate at runtime with lower thresholds for fallback.
+        const evalResult = evaluateItemAtRuntime(item, coinCount);
+        if (!evalResult) continue;
+        if (evalResult.runtimeProfitPerSlotHour < 5000) continue;
+        if (evalResult.runtimeTurnoverEtaMinutes > 240) continue;
         return {
             item,
-            quantity: reducedQty,
-            totalCost: reducedQty * item.purchasePrice,
+            quantity: evalResult.runtimeQuantity,
+            totalCost: evalResult.runtimeTotalCost,
         };
     }
     return null;
@@ -1509,6 +1523,20 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     // Check for empty slots and merchable items to buy.
     const emptyBuySlot = findEmptyOfferSlot();
     if (emptyBuySlot !== -1) {
+        // --- Max buy slots check ---
+        // Reserve slots for sales: P2P can use up to 5 of 8 slots for buys
+        // (leaving 3 for sell offers), F2P can use all 3 slots for buys.
+        // Count all slots currently used for buying (active, completed, or
+        // aborted — all occupy a slot until collected).
+        const maxBuySlots = isMembersWorld() ? 5 : 3;
+        let currentBuySlots = 0;
+        for (const s of slots) {
+            if (s.type === 'buy') currentBuySlots++;
+        }
+        if (currentBuySlots >= maxBuySlots) {
+            debugLog(bot, `Auto: buy scan skipped — ${currentBuySlots}/${maxBuySlots} buy slots occupied (reserving ${slots.length - maxBuySlots} for sales)`);
+        } else {
+        const availableBuySlots = maxBuySlots - currentBuySlots;
         const occupiedNames = getOccupiedItemNames(slots);
         // Count coins from the cached inventory snapshot (single getAll()
         // call shared across all sections of this tick). This is the total
@@ -1533,7 +1561,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         if (buyLimitedNames.size > 0) {
             debugLog(bot, `Auto: ${buyLimitedNames.size} item(s) buy-limited — skipping: ${[...buyLimitedNames].join(', ')}`);
         }
-        debugLog(bot, `Auto: buy scan — empty slot ${emptyBuySlot + 1}, coins=${coinCount}, occupied=${occupiedNames.size}, buyLimited=${buyLimitedNames.size}`);
+        debugLog(bot, `Auto: buy scan — empty slot ${emptyBuySlot + 1}, coins=${coinCount}, occupied=${occupiedNames.size}, buyLimited=${buyLimitedNames.size}, buy slots=${currentBuySlots}/${maxBuySlots} (${availableBuySlots} available)`);
 
         // Build the set of currently-frozen items (buy offers recently aborted).
         // Expired freezes are cleaned up lazily here.
@@ -1553,7 +1581,14 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             debugLog(bot, `Auto: ${frozenNames.size} item(s) buy-frozen — skipping: ${[...frozenNames].join(', ')}`);
         }
 
-        // --- Buy scan with lowball tiering ---
+        // --- Buy scan with lowball tiering (cash-stack-aware) ---
+        // Each item is evaluated at runtime based on the player's actual
+        // coins. The runtime quantity is min(floor(coins/price), limit) —
+        // NOT the simulation quantityToPurchase from determine-flips.mjs
+        // (which was computed at a 50m cash stack). The scan returns the
+        // item with the highest runtimeProfitPerSlotHour that passes the
+        // profit/hr and turnover filters.
+        //
         // Non-lowball items (instant-fill, buy at market) are tried first.
         // Lowball items (buy below market, slower fills, less reliable ETA)
         // are only attempted when all non-lowball items are occupied,
@@ -1565,15 +1600,16 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         //   2. Non-lowball, frozen fallback (soonest-expiring freeze)
         //   3. Lowball, non-frozen (only when all non-lowball exhausted)
         //   4. Lowball, frozen fallback (last resort)
+        //   5. Partial fallback (lower profit/hr threshold, longer turnover)
         let merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 'non-lowball');
 
         // Tier 2: non-lowball frozen fallback.
         if (!merch && frozenNames.size > 0) {
             merch = getFrozenFallbackItem(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 'non-lowball');
             if (merch) {
-                const freezeMs = loop.buyFreezeUntil.get(merch.itemName.trim().toLowerCase()) ?? 0;
+                const freezeMs = loop.buyFreezeUntil.get(merch.item.itemName.trim().toLowerCase()) ?? 0;
                 const remainingMs = freezeMs - Date.now();
-                debugLog(bot, `Auto: using frozen non-lowball item ${merch.itemName} as fallback — no other non-lowball items available (freeze expires in ${Math.max(0, Math.round(remainingMs / 60000))} min)`);
+                debugLog(bot, `Auto: using frozen non-lowball item ${merch.item.itemName} as fallback — no other non-lowball items available (freeze expires in ${Math.max(0, Math.round(remainingMs / 60000))} min)`);
             }
         }
 
@@ -1582,7 +1618,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         if (!merch) {
             merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 'lowball');
             if (merch) {
-                debugLog(bot, `Auto: using lowball item ${merch.itemName} (${merch.lowballPercent.toFixed(2)}% lowball) — all non-lowball items occupied/limited/frozen/unaffordable`);
+                debugLog(bot, `Auto: using lowball item ${merch.item.itemName} (${merch.item.lowballPercent.toFixed(2)}% lowball) — all non-lowball items occupied/limited/frozen/unaffordable`);
             }
         }
 
@@ -1590,25 +1626,21 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         if (!merch && frozenNames.size > 0) {
             merch = getFrozenFallbackItem(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 'lowball');
             if (merch) {
-                const freezeMs = loop.buyFreezeUntil.get(merch.itemName.trim().toLowerCase()) ?? 0;
+                const freezeMs = loop.buyFreezeUntil.get(merch.item.itemName.trim().toLowerCase()) ?? 0;
                 const remainingMs = freezeMs - Date.now();
-                debugLog(bot, `Auto: using frozen lowball item ${merch.itemName} as fallback — no other items available (freeze expires in ${Math.max(0, Math.round(remainingMs / 60000))} min)`);
+                debugLog(bot, `Auto: using frozen lowball item ${merch.item.itemName} as fallback — no other items available (freeze expires in ${Math.max(0, Math.round(remainingMs / 60000))} min)`);
             }
         }
 
-        // Partial-quantity fallback: if no item is affordable at its full
-        // quantityToPurchase, look for an item where we can at least buy a
-        // reduced quantity with the available coins. The reduced quantity
-        // is floor(coins / purchasePrice) capped at the GE limit, and the
-        // expected profit (reducedQty * profitMargin) must be >= 15k gp.
-        // This keeps empty slots productive when most of the cash stack is
-        // tied up in other offers. Same lowball tiering: non-lowball first.
+        // Tier 5: Partial fallback — lower profit/hr threshold (5000 vs 20000)
+        // and longer max turnover (240min vs 150min). Only tried when all
+        // standard scans fail. Same lowball tiering: non-lowball first.
         let partial: PartialBuyResult | null = null;
         if (!merch) {
             // Non-lowball partial.
             partial = getFirstPartialBuyItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 15000, 'non-lowball');
             if (partial) {
-                debugLog(bot, `Auto: partial-quantity buy — ${partial.item.itemName} full qty ${partial.item.quantityToPurchase} needs ${partial.item.totalPurchasePrice}gp, have ${coinCount}gp — buying ${partial.quantity} instead (profit ${partial.quantity * partial.item.profitMargin}gp)`);
+                debugLog(bot, `Auto: partial-quantity buy — ${partial.item.itemName} buying ${partial.quantity} (profit ${partial.quantity * partial.item.profitMargin}gp, runtime fallback)`);
             } else if (frozenNames.size > 0) {
                 // Non-lowball frozen fallback.
                 partial = getFrozenFallbackPartial(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 15000, 'non-lowball');
@@ -1620,7 +1652,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             if (!partial) {
                 partial = getFirstPartialBuyItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 15000, 'lowball');
                 if (partial) {
-                    debugLog(bot, `Auto: partial-quantity buy (lowball) — ${partial.item.itemName} full qty ${partial.item.quantityToPurchase} needs ${partial.item.totalPurchasePrice}gp, have ${coinCount}gp — buying ${partial.quantity} instead (profit ${partial.quantity * partial.item.profitMargin}gp)`);
+                    debugLog(bot, `Auto: partial-quantity buy (lowball) — ${partial.item.itemName} buying ${partial.quantity} (profit ${partial.quantity * partial.item.profitMargin}gp, runtime fallback)`);
                 } else if (frozenNames.size > 0) {
                     // Lowball frozen fallback.
                     partial = getFrozenFallbackPartial(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 15000, 'lowball');
@@ -1632,35 +1664,36 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         }
 
         if (merch) {
-            const lowerName = merch.itemName.trim().toLowerCase();
+            const mItem = merch.item;
+            const lowerName = mItem.itemName.trim().toLowerCase();
 
             // Skip items we've already tried to buy this loop iteration.
             if (!loop.buyAttemptedItems.has(lowerName)) {
                 // Adjust the buy quantity based on remaining GE buy limit.
                 // If we've partially bought this item in the current 4-hour
                 // window, we can only buy up to (limit - totalBought).
-                const remaining = cache.getRemainingBuyLimit(merch.itemName, merch.limit);
-                const adjustedQty = Math.min(merch.quantityToPurchase, remaining);
+                const remaining = cache.getRemainingBuyLimit(mItem.itemName, mItem.limit);
+                const adjustedQty = Math.min(merch.quantity, remaining);
                 if (adjustedQty <= 0) {
                     // Shouldn't happen (threshold check above filters this),
                     // but guard against it anyway.
-                    debugLog(bot, `Auto: ${merch.itemName} has no remaining buy limit — skipping`);
+                    debugLog(bot, `Auto: ${mItem.itemName} has no remaining buy limit — skipping`);
                     loop.buyAttemptedItems.add(lowerName);
                     return true;
                 }
-                const adjustedTotal = adjustedQty * merch.purchasePrice;
+                const adjustedTotal = adjustedQty * mItem.purchasePrice;
 
                 // Record the buy offer in the cache.
-                cache.recordBuyOffer(merch);
+                cache.recordBuyOffer(mItem);
                 cache.save();
 
-                const qtyNote = adjustedQty < merch.quantityToPurchase ? ` (reduced from ${merch.quantityToPurchase} — buy limit remaining)` : '';
-                debugLog(bot, `Auto: buying ${adjustedQty}x ${merch.itemName} @ ${merch.purchasePrice}gp each (total ${adjustedTotal}gp) in slot ${emptyBuySlot + 1} — coins available: ${coinCount}${qtyNote}`);
-                bot.statusText = `Buying ${formatQty(adjustedQty)} ${merch.itemName} for ${formatGpShort(adjustedTotal)} (${merch.purchasePrice}ea)`;
+                const qtyNote = adjustedQty < merch.quantity ? ` (reduced from ${merch.quantity} — buy limit remaining)` : '';
+                debugLog(bot, `Auto: buying ${adjustedQty}x ${mItem.itemName} @ ${mItem.purchasePrice}gp each (total ${adjustedTotal}gp) in slot ${emptyBuySlot + 1} — coins available: ${coinCount}${qtyNote}`);
+                bot.statusText = `Buying ${formatQty(adjustedQty)} ${mItem.itemName} for ${formatGpShort(adjustedTotal)} (${mItem.purchasePrice}ea)`;
                 loop.activeBuyFlow = new BuyOfferFlow({
-                    itemName: merch.itemName,
+                    itemName: mItem.itemName,
                     quantity: adjustedQty,
-                    price: merch.purchasePrice,
+                    price: mItem.purchasePrice,
                     delayFn: createDelay,
                     debugLog: (msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); },
                 });
@@ -1704,28 +1737,30 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             }
         } else {
             // No affordable merchable item found — log a summary of why.
-            let occupied = 0, buyLimited = 0, frozen = 0, unaffordable = 0, unaffordablePartial = 0;
+            // Uses runtime evaluation to classify items.
+            let occupied = 0, buyLimited = 0, frozen = 0, unaffordable = 0, belowThreshold = 0;
             for (const item of allMerchItems) {
                 const lower = item.itemName.trim().toLowerCase();
                 if (occupiedNames.has(lower)) { occupied++; continue; }
                 if (buyLimitedNames.has(lower)) { buyLimited++; continue; }
                 if (frozenNames.has(lower)) { frozen++; continue; }
-                if (item.totalPurchasePrice > coinCount) {
+                // Evaluate at runtime to see why it was rejected.
+                const evalResult = evaluateItemAtRuntime(item, coinCount);
+                if (!evalResult) {
                     unaffordable++;
-                    // Check if a partial buy would meet the profit threshold.
-                    if (item.purchasePrice <= coinCount) {
-                        const reducedQty = Math.min(Math.floor(coinCount / item.purchasePrice), item.limit);
-                        if (reducedQty > 0 && reducedQty * item.profitMargin >= 15000) {
-                            unaffordablePartial++;
-                        }
-                    }
                     continue;
                 }
+                // Item is affordable but below profit/hr or turnover thresholds.
+                if (evalResult.runtimeProfitPerSlotHour < RUNTIME_PROFIT_PER_SLOT_HOUR_MINIMUM ||
+                    evalResult.runtimeTurnoverEtaMinutes > RUNTIME_MAX_TURNOVER_MINUTES) {
+                    belowThreshold++;
+                }
             }
-            debugLog(bot, `Auto: no merchable item to buy — ${occupied} occupied, ${buyLimited} buy-limited, ${frozen} frozen, ${unaffordable} unaffordable (${unaffordablePartial} eligible for partial but below threshold or filtered) — coins=${coinCount}`);
+            debugLog(bot, `Auto: no merchable item to buy — ${occupied} occupied, ${buyLimited} buy-limited, ${frozen} frozen, ${unaffordable} unaffordable, ${belowThreshold} below profit/hr or turnover threshold — coins=${coinCount}`);
         }
 
         loop.buyAttemptedItems.clear();
+        } // end else (buy slots not at max)
     } else {
         // All slots occupied. Check if any buy slot has a frozen item that
         // should be swapped out for a non-frozen merchable item. The frozen
@@ -1757,8 +1792,8 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                     swapCandidate = getFirstUnoccupiedMerchableItem(swapOccupiedNames, swapCoinCount, swapBuyLimitedNames, isMembersWorld(), swapFrozenNames, 'lowball');
                 }
                 if (swapCandidate) {
-                    debugLog(bot, `Auto: aborting frozen fallback buy ${slot.itemName} in slot ${i + 1} (${(slot.progress * 100).toFixed(0)}% progress) — replacing with non-frozen merchable item ${swapCandidate.itemName}`);
-                    bot.statusText = `Swapping frozen ${slot.itemName} for ${swapCandidate.itemName}`;
+                    debugLog(bot, `Auto: aborting frozen fallback buy ${slot.itemName} in slot ${i + 1} (${(slot.progress * 100).toFixed(0)}% progress) — replacing with non-frozen merchable item ${swapCandidate.item.itemName}`);
+                    bot.statusText = `Swapping frozen ${slot.itemName} for ${swapCandidate.item.itemName}`;
                     // Don't re-freeze — the item is already frozen.
                     loop.activeAbortFlow = new AbortOfferFlow({
                         slotIndex: i,

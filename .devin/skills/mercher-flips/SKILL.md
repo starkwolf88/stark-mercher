@@ -40,13 +40,13 @@ to decide which GE offers to place.
 | `MAX_RESULTS` | 100 (was 20) | Max items kept after sorting by `flipScore`. JSON size grows, but plugin still iterates the whole list. |
 | `GE_TAX_PERCENTAGE` | 2 | GE sale tax deducted from raw sell price when computing `salePriceExcludingTax`. |
 | `GE_TAX_EXEMPTION_THRESHOLD` | 50 | Items with a `rawSalePrice` below 50gp are exempt from GE sales tax — `saleTaxAmount` is set to 0 instead of `floor(price * 0.02)`. This matches the OSRS game rule and allows low-priced items (e.g. Fire rune at 4-5gp) to have a viable margin. |
-| `CASH_STACK_MILLIONS` | 10 (was 87) | Total GP available for flipping. User tunes this to the account's actual cash. |
-| `CASH_STACK` | `CASH_STACK_MILLIONS * 1e6` | Numeric cash stack. |
+| `CASH_STACK_MILLIONS` | 50 | **Pool-width dial.** Items costing more than `CASH_STACK` are filtered out. Set lower (e.g. 10) for fewer results, higher (e.g. 500) for more. The plugin evaluates each item at runtime based on the player's actual coins — this value only controls which items make it into the JSON, not the runtime decision. |
+| `CASH_STACK` | `CASH_STACK_MILLIONS * 1e6` | Numeric cash stack (simulation only — controls pool width via `purchasePrice > CASH_STACK` filter). |
 | `SALE_BUFFER_PERCENTAGE` | 0.01 | Extra 1% safety margin removed from sell price to protect against downward movement. |
-| `AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO` | 0.20 (was 0.25) | Target cash per GE slot if all slots were equal (≈ 5 slots). |
-| `AVERAGE_SLOT_CASH_STACK_ALLOCATION` | `CASH_STACK * ratio` | Base GP allocated per slot (e.g. 10m stack → 2m/slot). |
+| `AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO` | 0.20 (was 0.25) | Target cash per GE slot if all slots were equal (≈ 5 slots). Simulation only — runtime quantity is computed from actual coins. |
+| `AVERAGE_SLOT_CASH_STACK_ALLOCATION` | `CASH_STACK * ratio` | Base GP allocated per slot (simulation only). |
 | `MARKET_SHARE_ASSUMPTION_PERCENTAGE` | 35 | Used in ETA calculation: assume the bot captures 35% of the observed buy/sell volume. |
-| `MAX_TURNOVER_HOURS` | 2.5 | Reject items whose combined buy+sell ETA exceeds 150 minutes. |
+| `MAX_TURNOVER_HOURS` | 2.5 (removed as filter) | The turnover filter was removed from determine-flips.mjs — the plugin applies it at runtime based on the runtime ETA (computed from actual coins, not simulation allocation). |
 | `TWO_HOUR_VOLUME_BUFFER_PERCENTAGE` | 15 | Reduce 2h volume by 15% before using it for ETAs (safety margin). |
 | `PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD` | 20000 | `actualProfitPerSlotHour` must be ≥ 20k. |
 | `ROI_MINIMUM_PERCENTAGE_THRESHOLD` | 0.5 | `returnOnInvestmentPercentage` must be ≥ 0.5%. Lowered from 1% so high-volume thin-margin items (e.g. Steel cannonball, ~0.83% ROI with 11k limit and ~18min turnover) that pass the profit-per-slot-hour gate aren't rejected by a proxy metric. The PPSH threshold (20k) is the real profitability gate; ROI is a secondary spread-thickness guard. |
@@ -237,17 +237,14 @@ itemData.totalProfit = itemData.profitMargin * itemData.quantityToPurchase;
 ## Flip scoring
 
 ```js
-const turnoverPenalty = Math.exp(-Math.pow(item.turnoverEtaMinutes / 30, 2));
-item.flipScore = item.actualProfitPerSlotHour
-               * Math.log1p(item.returnOnInvestmentPercentage)
-               * (1 - Math.min(item.totalPurchasePrice / CASH_STACK, 1))
-               * turnoverPenalty;
+item.flipScore = item.maxProfitPerSlotHour * Math.log1p(item.returnOnInvestmentPercentage);
 ```
 
-- `actualProfitPerSlotHour` is the main driver.
-- `Math.log1p(ROI)` favours higher-ROI items but with diminishing returns.
-- `(1 - totalPurchasePrice / CASH_STACK)` penalises items that tie up a large share of the cash stack.
-- `turnoverPenalty` strongly penalises slow-turnover items (exponential of negative squared ETA/30).
+- `maxProfitPerSlotHour` (`min(3h volume, limit) * profitMargin`) is the primary driver — it's cash-stack-independent (intrinsic quality) and already accounts for volume (high-volume items move more units per hour).
+- `Math.log1p(ROI)` favours higher-ROI items with diminishing returns.
+- The old `(1 - totalPurchasePrice / CASH_STACK)` penalty was **removed** — it distorted rankings by making expensive items look better at higher cash stacks.
+- The old `turnoverPenalty` was **removed** — it used simulation-era `turnoverEtaMinutes` (which depends on allocation quantity), introducing a cash-stack dependency. `maxProfitPerSlotHour` already captures volume, making the penalty redundant.
+- The ranking is now identical regardless of `CASH_STACK_MILLIONS`; only the item pool width changes (via the `purchasePrice > CASH_STACK` filter).
 
 ## Price clamping (`clampPrice`)
 
@@ -283,18 +280,11 @@ Recent changes:
 
 ## Known issues and design concerns
 
-### 1. Expensive items consume the whole cash stack
+### 1. Expensive items and cash-stack awareness (RESOLVED)
 
-With `CASH_STACK = 10m` and `AVERAGE_SLOT_CASH_STACK_ALLOCATION = 2m`, the script
-still outputs items like:
+Previously, `CASH_STACK` determined which items were included and how they were ranked. Items costing more than the cash stack were filtered out, and the `flipScore` penalised items that consumed a large fraction of the stack. This meant the same item had different rankings at different cash stacks.
 
-- Tome of fire (empty): 6 × 1.65m = 9.94m
-- Uncharged toxic trident: 3 × 3.18m = 9.53m
-- Sunfire fanatic chausse: 2 × 3.77m = 7.54m
-
-Root cause: `calculateSlotCashAllocation` can scale up to `CASH_STACK` and the
-50% slow-item cap in `calculateQuantityToPurchase` is dead code because
-`turnoverEtaMinutes` is computed later.
+**Fix**: `determine-flips.mjs` now runs at `CASH_STACK_MILLIONS = 50` to produce the widest item pool. The `flipScore` is cash-stack-independent (based on `maxProfitPerSlotHour * log1p(ROI) * turnoverPenalty`). The plugin evaluates each item at runtime via `evaluateItemAtRuntime(item, coins)` — computing the actual quantity the player can afford, the runtime ETA, and the runtime profit/hr. The simulation-era `quantityToPurchase`, `totalPurchasePrice`, `actualProfitPerSlotHour`, and `turnoverEtaMinutes` fields in the JSON are kept for diagnostic reference but are NOT used for runtime decisions.
 
 ### 2. `calculateSlotCashAllocation` double-counts volume
 
@@ -432,20 +422,30 @@ and `lowballBasePrice` fields are used by the buy scan to prioritise instant-fil
 
 ### Lowball buy-scan tiering
 
-The auto-loop buy scan uses a 4-tier priority order to ensure GE slots fill with
+The auto-loop buy scan uses a 5-tier priority order to ensure GE slots fill with
 instant-buy items before slower lowball offers are attempted:
 
 1. **Non-lowball, non-frozen** — `getFirstUnoccupiedMerchableItem(..., 'non-lowball')`
 2. **Non-lowball, frozen fallback** — `getFrozenFallbackItem(..., 'non-lowball')`
 3. **Lowball, non-frozen** — `getFirstUnoccupiedMerchableItem(..., 'lowball')`
 4. **Lowball, frozen fallback** — `getFrozenFallbackItem(..., 'lowball')`
+5. **Partial fallback** — lower profit/hr threshold (5k vs 20k) and longer max turnover (240min vs 150min)
+
+**Max buy slots**: P2P reserves 3 of 8 slots for sales (max 5 buy slots), F2P uses
+all 3 slots for buys. The buy scan is skipped when at max buy slots.
+
+**Profit-per-coin ranking**: Within each tier, items are ranked by
+`runtimeProfitPerSlotHour / runtimeTotalCost` (profit-per-coin-per-hour) instead of
+just `runtimeProfitPerSlotHour`. This favours items that use coins efficiently across
+multiple slots — 3x 5m items (50k/hr each = 150k/hr total) are preferred over 1x 14m
+item (100k/hr) when the player has 15m and multiple empty slots. The absolute profit/hr
+filter (≥ 20k) ensures cheap low-quality items aren't picked.
 
 Lowball items (`lowballPercent > 0`) buy below market price and fill slower; their
 ETA is adjusted by a `1.5x lowball%` volume factor heuristic, but the real fill rate
 depends on the price distribution below the lowballed price, making profit-per-hour
 less reliable than non-lowball items. The partial-quantity fallback and frozen
-swap-out follow the same non-lowball-first tiering. Within each tier, items are
-attempted in `flipScore` (profit-per-hour) order.
+swap-out follow the same non-lowball-first tiering.
 
 Changes to `determine-flips.mjs` affect the plugin only after `npm run build`
 re-bundles the JSON.
