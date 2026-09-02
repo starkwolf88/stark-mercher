@@ -321,13 +321,14 @@ volume estimate is generous.
 - **Primary goal**: maximum **profit per hour**, not maximum ROI per flip or
   maximum number of flips.
 - **Cash stack target**: `AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO` (currently
-  0.20) is the *base* per-slot target. With a 10m stack the base allocation is
-  2m per slot.
+  0.125) is the *base* per-slot target. With a 10m stack the base allocation is
+  1.25m per slot.
 - **Scaling is allowed** for items that are both **very profitable AND have high
   turnover**. An 11k Chaos rune flip for 1 gp profit that turns over in 5 minutes
   and a 1m item that turns over 100k profit in 30 minutes can both be correct.
-- **Slot target**: ~5 slots actively flipping, with ~3 slots used for selling
-  items at any given time (8 total GE slots, members).
+- **Slot target**: ~8 slots actively flipping (all GE slots used for buys).
+  When a sell is needed, the sell scan dynamically frees a slot by aborting
+  the oldest 0-progress buy offer (no loss — nothing was bought).
 - **Turnover-aware caps** (confirmed):
   - `turnoverEtaMinutes < 30` → max 80% of `CASH_STACK`
   - `30 <= turnoverEtaMinutes < 90` → max 50% of `CASH_STACK`
