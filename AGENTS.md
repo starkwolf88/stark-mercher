@@ -196,7 +196,7 @@ When `accountRoster` is empty or has a single name, `isRotationEnabled()` return
 
 ## Login retry timeout
 
-`tryStageAndSubmitLogin()` tracks `bot.loginFirstAttemptAtMs`. If 5 minutes elapse without login, the bot terminates. A 10-attempt `submitCredentials` limit is a faster failure path. `loginIndex === 10` (or legacy `2`) means staged; `loginIndex === 9` covers both "game update in progress" and "you were signed out" — the snapshot doesn't expose message text, so we can't distinguish them. Index 9 uses exponential backoff (5s → 10s → 20s → 40s → 60s cap) with credential re-staging on each retry. If it's "signed out", the first fast retry succeeds. If it's a game update (which can last 30+ min), we back off to avoid hammering the login server.
+`tryStageAndSubmitLogin()` tracks `bot.loginFirstAttemptAtMs`. If 5 minutes elapse without login, the bot terminates. A 10-attempt `submitCredentials` limit is a faster failure path. `loginIndex === 10` (or legacy `2`) means staged; `loginIndex === 9` covers both "game update in progress" and "you were signed out" — the snapshot doesn't expose message text, so we can't distinguish them. Index 9 uses exponential backoff (5s → 10s → 20s → 40s → 60s cap) with credential re-staging on each retry. If it's "signed out", the first fast retry succeeds. If it's a game update (which can last 30+ min), we back off to avoid hammering the login server. When a staged profile is first detected, the bot **re-stages** with `bot.currentPlayerName` before submitting — this ensures the staged profile matches the intended account after multi-account rotation (the OSRS client may still have the previous account's profile staged).
 
 ## Post-login settle delay
 

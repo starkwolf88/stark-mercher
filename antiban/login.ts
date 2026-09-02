@@ -224,8 +224,17 @@ function tryStageAndSubmitLogin(bot: StarkMercher): boolean {
         return false;
     }
 
-    // First detection of staged profile — wait before submitting
+    // First detection of staged profile — re-stage with the current account
+    // name to ensure the staged profile matches bot.currentPlayerName. After
+    // account rotation, the OSRS client may still have the PREVIOUS account's
+    // profile staged (loginIndex=10). Without re-staging, submitCredentials()
+    // would log in as the previous account, not the newly selected one.
+    // Re-staging the same account (no rotation) is harmless.
     if (isStaged && bot.loginSubmitAttemptTimes.length === 0 && bot.loginStageDetectedAtMs <= 0) {
+        if (characterName) {
+            titan.state.login.stageCredentials(characterName);
+            debugLog(bot, 'Re-staged profile credentials for %s (loginIndex=%d)', characterName, snap.loginIndex);
+        }
         bot.loginStageDetectedAtMs = now;
         const waitTicks = sampleInt(LOGIN_SUBMIT_DELAY_TICKS_MIN, LOGIN_SUBMIT_DELAY_TICKS_MAX);
         bot.loginStageNextAttemptAt = now + (waitTicks * 600);
