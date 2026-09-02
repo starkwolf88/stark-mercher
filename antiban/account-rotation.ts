@@ -212,15 +212,17 @@ function getUKOffsetMinutes(d: Date): number {
  *
  * Selection is time-based, not order-based:
  *   1. Gather all non-sleeping accounts.
- *   2. Filter to eligible accounts (break has lapsed or no break state).
- *   3. Among eligible accounts, pick the one whose break ends soonest
- *      (i.e. the smallest breakEndMs). This ensures the account that has
- *      been waiting the longest gets priority.
- *   4. If multiple accounts are eligible simultaneously (their breakEndMs
- *      values have all lapsed to <= now), pick the one with the oldest
- *      lastLoginAtMs (longest since last login). Accounts that have never
- *      logged in (lastLoginAtMs = 0) get highest priority. This prevents
- *      starvation of accounts that are always later in the roster.
+ *   2. Filter to eligible accounts (breakEndMs <= now, or no break state).
+ *   3. Among eligible accounts, pick the one with the oldest lastLoginAtMs
+ *      (longest since last login). Accounts that have never logged in
+ *      (lastLoginAtMs = 0) get highest priority.
+ *
+ * The "soonest break end" criterion is handled by the caller: the 10-second
+ * periodic poll and getSoonestBreakEndMs() ensure the bot checks for
+ * eligibility at the right time. When the poll fires and multiple accounts
+ * are eligible (their breaks ended within the same poll interval), the
+ * lastLoginAtMs tiebreaker decides — this prevents starvation of accounts
+ * whose breaks consistently end a few seconds after another account's.
  *
  * Returns null if no account is eligible (all sleeping or all on break).
  */
@@ -236,7 +238,6 @@ export function selectNextAccount(bot: StarkMercher): string | null {
 
     const now = Date.now();
     let bestName: string | null = null;
-    let bestBreakEndMs = Infinity;
     let bestLastLoginAtMs = Infinity;
 
     for (const name of roster) {
@@ -252,27 +253,17 @@ export function selectNextAccount(bot: StarkMercher): string | null {
         // Skip if break hasn't lapsed
         if (breakEndMs > now) continue;
 
-        // This account is eligible. Pick it if:
-        //   - Its break ended sooner than the current best (it's been
-        //     waiting longer), OR
-        //   - It tied on breakEndMs (both lapsed to now) but has an older
-        //     lastLoginAtMs (longest since last login — prevents starvation).
-        const isBetter =
-            bestName === null ||
-            breakEndMs < bestBreakEndMs ||
-            (breakEndMs === bestBreakEndMs && lastLoginAtMs < bestLastLoginAtMs);
-
-        if (isBetter) {
+        // This account is eligible. Pick it if it has an older lastLoginAtMs
+        // (longest since last login — prevents starvation).
+        if (bestName === null || lastLoginAtMs < bestLastLoginAtMs) {
             bestName = name;
-            bestBreakEndMs = breakEndMs;
             bestLastLoginAtMs = lastLoginAtMs;
         }
     }
 
     if (bestName) {
-        titan.logf('[Stark Mercher] Rotation: selected account %s (break ended %s, last login %s)',
+        titan.logf('[Stark Mercher] Rotation: selected account %s (last login %s)',
             bestName,
-            bestBreakEndMs > 0 ? new Date(bestBreakEndMs).toISOString() : 'never broke',
             bestLastLoginAtMs > 0 ? new Date(bestLastLoginAtMs).toISOString() : 'never');
         return bestName;
     }

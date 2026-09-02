@@ -175,8 +175,8 @@ The bot supports rotating through a roster of accounts. Each account runs the fu
    - Skip any account currently in its nightly sleep window (checked via its SessionProfile).
    - For each remaining account, compute `breakEndMs = lastLogoutAtMs + minBreakDurationMs` (0 if no break state → eligible now).
    - Skip accounts whose `breakEndMs > now` (minimum break hasn't lapsed).
-   - Among eligible accounts, pick the one whose `breakEndMs` is smallest (its break ended soonest — it has been waiting the longest).
-   - **Tiebreaker**: if multiple accounts are eligible simultaneously (their `breakEndMs` values have all lapsed to `<= now`), pick the one with the oldest `lastLoginAtMs` (longest since last login). Accounts that have never logged in (`lastLoginAtMs = 0`) get highest priority. This prevents starvation of accounts that would always lose under order-based selection.
+   - Among eligible accounts, pick the one with the oldest `lastLoginAtMs` (longest since last login). Accounts that have never logged in (`lastLoginAtMs = 0`) get highest priority. This prevents starvation — if multiple accounts' breaks end within the same 10-second poll interval, the one that hasn't been logged in for the longest gets priority rather than the one that happens to be first in the roster.
+   - The "soonest break end" timing is handled by the 10-second periodic poll and `getSoonestBreakEndMs()` — the bot checks for eligibility at the right time, and when multiple accounts are eligible, the `lastLoginAtMs` tiebreaker decides.
 6. The selected account's credentials are staged and the bot logs in. On successful login, the account's break state is updated: `lastLogoutAtMs = 0`, `minBreakDurationMs = 0`, `lastLoginAtMs = now` (preserving the entry for the tiebreaker rather than clearing it).
 7. The new account runs the full auto-merch loop, and the cycle repeats.
 
