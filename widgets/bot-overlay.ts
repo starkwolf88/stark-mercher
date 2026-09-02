@@ -20,6 +20,37 @@ import { formatUKTime } from '../antiban/session.js';
 import { isRotationEnabled, getSoonestBreakEndMs, getNextAccountName } from '../antiban/account-rotation.js';
 import { isMerchableDataValid } from '../data/merchable-items.js';
 
+// --- Overlay cache ----------------------------------------------------------
+// The overlay renders at 60fps. Calling isMerchableDataValid() (iterates 100+
+// items), getSoonestBreakEndMs() / getNextAccountName() (JSON.parse per
+// account), and isRotationEnabled() (reads a setting) every frame causes
+// severe lag. Cache the results and refresh every 2 seconds. The countdown
+// timer still updates every frame — it's just subtraction on the cached
+// soonestBreakEndMs.
+const OVERLAY_CACHE_TTL_MS = 2000;
+let overlayCacheTime = 0;
+let cachedDataValid = true;
+let cachedDataValidReason = '';
+let cachedRotationEnabled = false;
+let cachedSoonestBreakEndMs = Infinity;
+let cachedNextAccount: string | null = null;
+
+function refreshOverlayCache(bot: StarkMercher): void {
+    const dataCheck = isMerchableDataValid();
+    cachedDataValid = dataCheck.valid;
+    cachedDataValidReason = dataCheck.reason;
+    cachedRotationEnabled = isRotationEnabled(bot);
+    cachedSoonestBreakEndMs = getSoonestBreakEndMs(bot);
+    cachedNextAccount = getNextAccountName(bot);
+    overlayCacheTime = Date.now();
+}
+
+function ensureOverlayCache(bot: StarkMercher): void {
+    if (Date.now() - overlayCacheTime >= OVERLAY_CACHE_TTL_MS) {
+        refreshOverlayCache(bot);
+    }
+}
+
 // --- Layout constants ------------------------------------------------------
 
 const PANEL_X = 0;
@@ -105,18 +136,16 @@ const getStatusText = (bot: StarkMercher): string => {
         // Data validity safeguard — if merchable data is invalid (too few
         // items or stale), show that instead of the normal countdown so
         // the user sees the problem at a glance.
-        const dataCheck = isMerchableDataValid();
-        if (!dataCheck.valid) {
+        if (!cachedDataValid) {
             return `Data Invalid`;
         }
         // When multi-account rotation is enabled, show the soonest break-end
         // across all accounts — this is the actual wait until the next
         // account becomes eligible, which may be sooner than the current
         // account's own break end.
-        if (isRotationEnabled(bot)) {
-            const soonestEnd = getSoonestBreakEndMs(bot);
-            if (soonestEnd !== Infinity && soonestEnd > Date.now()) {
-                const remainingMs = Math.max(0, soonestEnd - Date.now());
+        if (cachedRotationEnabled) {
+            if (cachedSoonestBreakEndMs !== Infinity && cachedSoonestBreakEndMs > Date.now()) {
+                const remainingMs = Math.max(0, cachedSoonestBreakEndMs - Date.now());
                 return `Logged Out (${fmtCountdownMs(remainingMs)})`;
             }
             // At least one account is eligible now (soonestEnd <= now) or
@@ -157,6 +186,8 @@ interface OverlayLine {
 }
 
 export const renderBotOverlay = (bot: StarkMercher): void => {
+    // Refresh the overlay cache (expensive lookups) if stale.
+    ensureOverlayCache(bot);
     const status = getStatusText(bot);
     // Read cached values instead of calling titan.utils.inventory.count(995)
     // and getDailyProfit() every frame. Per-frame native queries exhaust the
@@ -234,16 +265,15 @@ export const renderBotOverlay = (bot: StarkMercher): void => {
     // Next Account — shown when multi-account rotation is enabled and logged out.
     // Shows which account will log in next, based on the time-based selection
     // (oldest lastLoginAtMs among eligible, or soonest break end if none eligible).
-    if (isRotationEnabled(bot) && isLoggedOut) {
-        const nextAcct = getNextAccountName(bot);
-        if (nextAcct) {
+    // Uses cached values from ensureOverlayCache() to avoid per-frame JSON.parse.
+    if (cachedRotationEnabled && isLoggedOut) {
+        if (cachedNextAccount) {
             // Check if this account is eligible now or still waiting
-            const soonestEnd = getSoonestBreakEndMs(bot);
-            const isEligibleNow = soonestEnd <= Date.now();
+            const isEligibleNow = cachedSoonestBreakEndMs <= Date.now();
             lines.push({
                 text: 'Next Account:',
                 key: 'Next Account:',
-                value: nextAcct,
+                value: cachedNextAccount,
                 valueColor: isEligibleNow ? GREEN_COLOR : ORANGE_COLOR,
             });
         } else {
