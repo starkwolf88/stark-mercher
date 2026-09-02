@@ -43,7 +43,7 @@ to decide which GE offers to place.
 | `CASH_STACK_MILLIONS` | 50 | **Pool-width dial.** Items costing more than `CASH_STACK` are filtered out. Set lower (e.g. 10) for fewer results, higher (e.g. 500) for more. The plugin evaluates each item at runtime based on the player's actual coins — this value only controls which items make it into the JSON, not the runtime decision. |
 | `CASH_STACK` | `CASH_STACK_MILLIONS * 1e6` | Numeric cash stack (simulation only — controls pool width via `purchasePrice > CASH_STACK` filter). |
 | `SALE_BUFFER_PERCENTAGE` | 0.01 | Extra 1% safety margin removed from sell price to protect against downward movement. |
-| `AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO` | 0.20 (was 0.25) | Target cash per GE slot if all slots were equal (≈ 5 slots). Simulation only — runtime quantity is computed from actual coins. |
+| `AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO` | 0.125 | Target cash per GE slot if all slots were equal (≈ 8 slots). Simulation only — runtime quantity is computed from actual coins. |
 | `AVERAGE_SLOT_CASH_STACK_ALLOCATION` | `CASH_STACK * ratio` | Base GP allocated per slot (simulation only). |
 | `MARKET_SHARE_ASSUMPTION_PERCENTAGE` | 35 | Used in ETA calculation: assume the bot captures 35% of the observed buy/sell volume. |
 | `MAX_TURNOVER_HOURS` | 2.5 (removed as filter) | The turnover filter was removed from determine-flips.mjs — the plugin applies it at runtime based on the runtime ETA (computed from actual coins, not simulation allocation). |
