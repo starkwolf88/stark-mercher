@@ -282,6 +282,64 @@ export const getMerchableItemById = (itemId: number): MerchableItem | null => {
     return items.find(i => i.itemId === itemId) ?? null;
 };
 
+// --- Data validity safeguards -----------------------------------------------
+// Two safeguards prevent the bot from merching with bad data:
+//   1. Count safeguard: merchableItems.json must have >= 30 items. A sudden
+//      drop below 30 indicates the Wiki API returned bad data or
+//      determine-flips.mjs failed mid-run.
+//   2. Freshness safeguard: the newest dataFetchedAt across all items must
+//      be within the last 10 minutes. determine-flips.mjs runs every 3 min,
+//      so data older than 10 min means the script stopped running or the
+//      Wiki API is down.
+// Both checks run dynamically (not cached) so hot reloads pick up new JSON
+// automatically — the bot resumes as soon as a rebuild brings valid data.
+
+/** Minimum number of items required in merchableItems.json to merch safely. */
+const MIN_MERCHABLE_ITEMS = 30;
+/** Maximum age of merchable data (in ms) before it's considered stale. */
+const MAX_DATA_AGE_MS = 10 * 60 * 1000; // 10 minutes
+
+export interface MerchableDataValidity {
+    valid: boolean;
+    reason: string;
+}
+
+/**
+ * Check if the merchable items data is valid for merching.
+ * Returns { valid: true, reason: '' } if both the count and freshness
+ * safeguards pass, otherwise { valid: false, reason: '<error message>' }.
+ *
+ * Called dynamically (not cached) so hot reloads pick up new JSON.
+ */
+export const isMerchableDataValid = (): MerchableDataValidity => {
+    const items = ensureLoaded();
+    const count = items.length;
+    if (count < MIN_MERCHABLE_ITEMS) {
+        return {
+            valid: false,
+            reason: `only ${count} items in merchableItems.json (need >= ${MIN_MERCHABLE_ITEMS})`,
+        };
+    }
+    // Check freshness — use the newest dataFetchedAt across all items.
+    let newestDataFetchedAt = 0;
+    for (const item of items) {
+        if (item.dataFetchedAt > newestDataFetchedAt) {
+            newestDataFetchedAt = item.dataFetchedAt;
+        }
+    }
+    if (newestDataFetchedAt > 0) {
+        const ageMs = Date.now() - newestDataFetchedAt;
+        if (ageMs > MAX_DATA_AGE_MS) {
+            const ageMin = Math.round(ageMs / 60000);
+            return {
+                valid: false,
+                reason: `data is ${ageMin} min old (stale > ${MAX_DATA_AGE_MS / 60000} min)`,
+            };
+        }
+    }
+    return { valid: true, reason: '' };
+};
+
 /**
  * Result of a buy-scan lookup. Includes the runtime evaluation so the caller
  * knows the actual quantity to buy, total cost, and runtime profit/hr.

@@ -33,6 +33,7 @@ import { loadOfferCache } from '../general/state-persist.js';
 import { getMerchHistory } from '../data/merch-history.js';
 import { getAbortHistory } from '../data/abort-history.js';
 import { isRotationEnabled, selectNextAccount, recordAccountLogout, recordAccountLogin, loadRotationIndex } from './account-rotation.js';
+import { isMerchableDataValid } from '../data/merchable-items.js';
 
 /** Dumps cache, merch history, and buy-freeze state to the log. Called
  *  automatically after each logout so the user can review state without
@@ -434,6 +435,11 @@ function humanLog(bot: StarkMercher, msg: string, ...args: unknown[]): void {
  * name (same-account relogin — the original behavior).
  */
 function selectNextAccountForLogin(bot: StarkMercher): string | null {
+    // Data validity safeguard — don't log any account in if merchable data
+    // is invalid (too few items or stale). The periodic poll and the
+    // break-end "no eligible account" path handle the error logging.
+    const dataCheck = isMerchableDataValid();
+    if (!dataCheck.valid) return null;
     if (!isRotationEnabled(bot)) {
         // Single-account mode — log back into the same account
         return bot.currentPlayerName || bot.lastActiveAccountSetting.value.trim() || null;
@@ -459,6 +465,11 @@ function tryImmediateRotation(bot: StarkMercher): boolean {
     // Only rotate immediately if the current account just logged out for
     // a break (not an unexpected disconnect — those retry the same account).
     if (bot.breakPhase !== 'logged_out') return false;
+    // Data validity safeguard — don't log any account in if merchable data
+    // is invalid (too few items or stale). The periodic poll handles the
+    // error logging; here we just block the rotation.
+    const dataCheck = isMerchableDataValid();
+    if (!dataCheck.valid) return false;
     const nextAccount = selectNextAccount(bot);
     if (!nextAccount) return false;
     // Only skip the break wait if we're switching to a DIFFERENT account.
@@ -777,7 +788,13 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
                         humanLog(bot, 'Break ended (%s), logging back in', bot.breakType);
                     }
                 } else {
-                    humanLog(bot, 'Break ended (%s) but no eligible account found — waiting', bot.breakType);
+                    // Check if the reason is invalid merchable data
+                    const dataCheck = isMerchableDataValid();
+                    if (!dataCheck.valid) {
+                        humanLog(bot, 'Break ended (%s) but merchable data invalid: %s — waiting', bot.breakType, dataCheck.reason);
+                    } else {
+                        humanLog(bot, 'Break ended (%s) but no eligible account found — waiting', bot.breakType);
+                    }
                     // Don't transition to logging_in yet; stay logged_out
                     // and retry on the next tick. Push breakTargetEndMs
                     // forward by 30 seconds to avoid spamming the log.
@@ -1043,19 +1060,29 @@ export function wallClockStep(bot: StarkMercher): void {
         }
 
         // While waiting for the current account's break to end, periodically
-        // check if a DIFFERENT account has become eligible (its break elapsed
-        // or it woke up). If so, rotate immediately instead of wasting time
-        // waiting for the current account's longer break. Throttled to every
-        // 10 seconds to avoid spamming selectNextAccount on every main-loop
-        // tick. tryImmediateRotation only rotates to a different account —
-        // if the same account is selected (no other eligible), it returns
-        // false and we continue waiting for the current break.
-        if (bot.breakPhase === 'logged_out' && now < bot.breakTargetEndMs && isRotationEnabled(bot)) {
+        // (every 10 seconds) do two things:
+        //   1. Check merchable data validity. If invalid (too few items or
+        //      stale), report the error in the log and skip login. On hot
+        //      reload with valid data, the bot resumes automatically.
+        //   2. If rotation is enabled, check if a DIFFERENT account has
+        //      become eligible (its break elapsed or it woke up). If so,
+        //      rotate immediately instead of wasting time waiting for the
+        //      current account's longer break.
+        if (bot.breakPhase === 'logged_out' && now < bot.breakTargetEndMs) {
             if (now - bot.lastIdleRotationCheckMs >= 10000) {
                 bot.lastIdleRotationCheckMs = now;
-                if (tryImmediateRotation(bot)) {
-                    humanLog(bot, 'Rotation: another account became eligible during break wait — rotating immediately');
+                // Data validity safeguard — report and skip if invalid
+                const dataCheck = isMerchableDataValid();
+                if (!dataCheck.valid) {
+                    humanLog(bot, 'Merchable data invalid: %s — skipping login (will retry on hot reload)', dataCheck.reason);
                     return;
+                }
+                // Multi-account rotation: check if another account is eligible
+                if (isRotationEnabled(bot)) {
+                    if (tryImmediateRotation(bot)) {
+                        humanLog(bot, 'Rotation: another account became eligible during break wait — rotating immediately');
+                        return;
+                    }
                 }
             }
         }
@@ -1082,7 +1109,14 @@ export function wallClockStep(bot: StarkMercher): void {
                 resetLoginState(bot);
                 saveBreakState(bot);
             } else {
-                // No eligible account — wait and retry
+                // No eligible account or invalid data — wait and retry.
+                // Report the reason if data is invalid.
+                const dataCheck = isMerchableDataValid();
+                if (!dataCheck.valid) {
+                    humanLog(bot, 'Break ended (%s) but merchable data invalid: %s — waiting', bot.breakType, dataCheck.reason);
+                } else {
+                    humanLog(bot, 'Break ended (%s) but no eligible account found — waiting', bot.breakType);
+                }
                 if (bot.breakTargetEndMs <= now) {
                     bot.breakTargetEndMs = now + 30000;
                     saveBreakState(bot);
