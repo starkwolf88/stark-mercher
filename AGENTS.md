@@ -36,7 +36,7 @@ The auto-loop previously called `titan.utils.inventory.find()` and `titan.utils.
 - `widgets/bot-overlay.ts` — HUD overlay panel. `renderBotOverlay` draws Status, Inventory Coins, and Daily Profit. Registered via `this.overlay({ layer: 'AboveWidgets' })` in `stark-mercher.ts`.
 - `antiban/humanised-delay.ts` — `DelayProfile`, `generateDelayProfile`, `setDelayProfileForAccount`, `createDelay`; per-account deterministic humanised delay function inspired by mixology's anti-ban layers (jitter, hesitation, outlier, jitter amplification).
 - `antiban/hopper.ts` — `hopStep`, `completeHop`, `onChatMessage`. World hop state machine adapted from mixology. Picks a random safe members world at a profile-scheduled interval (18–45 min). Pauses auto-loop during hop and for a short resume delay after.
-- `antiban/session.ts` — break/sleep state machine + hop safe-boundary functions. `breakStep`, `wallClockStep`, `resetBreakState`, `initSessionProfile`, `markNightlyBreakFinished`, `formatUKTime`, `getSafeBoundaryReason`, `isAtSafeBoundary`, `shouldPauseForHopBoundary`, `resetHop`, `forceHop`, `resetHopState`. Integrates multi-character rotation: on break end, calls `selectNextAccount()` to pick the next eligible account from the roster.
+- `antiban/session.ts` — break/sleep state machine + hop safe-boundary functions. `breakStep`, `wallClockStep`, `resetBreakState`, `initSessionProfile`, `markNightlyBreakFinished`, `formatUKTime`, `getSafeBoundaryReason`, `isAtSafeBoundary`, `shouldPauseForHopBoundary`, `resetHop`, `forceHop`, `resetHopState`. Integrates multi-character rotation: on logout, `tryImmediateRotation()` checks if a different account is eligible immediately; on break end, calls `selectNextAccount()` to pick the next eligible account from the roster.
 - `antiban/account-rotation.ts` — multi-character roster management. `getRoster`, `isRotationEnabled`, `selectNextAccount`, `recordAccountLogout`, `recordAccountLogin`, `loadRotationIndex`, `saveRotationIndex`, `isAccountSleeping`, per-account break state cache (`getAccountBreakState`/`saveAccountBreakState`/`clearAccountBreakState`). When the roster has 2+ names, the bot rotates between accounts: each runs the full auto-merch loop until idle, logs out, and the next eligible account (awake + break lapsed) logs in. When the roster is empty or a single name, the bot behaves as a single-account bot.
 - `input/typing.ts` — `humanType`, `isTyping`, `cancelTyping`, `setTypingProfile`, `setTypingProfileForAccount`; humanised keyboard typing with per-character delays. `isTyping()` also returns true while a typing-mistake correction sequence is active, and advances the tick-driven mistake state machine once per game tick via `tickMistakeSequence()`.
 - `input/typing-profile.ts` — `TypingProfile` (`baselineMs`, `jitterMs`), deterministic per-account profile generation via djb2 hash + mulberry32 PRNG.
@@ -169,12 +169,13 @@ The bot supports rotating through a roster of accounts. Each account runs the fu
 
 1. Account A runs the full auto-merch loop → goes idle → takes an ETA-based short break (or nightly sleep) → logs out.
 2. On logout, the account's break state is recorded: `lastLogoutAtMs = now`, `minBreakDurationMs = breakDuration` (the ETA-based duration for short breaks, or the full sleep duration for nightly sleeps).
-3. When the break ends, `selectNextAccount()` iterates the roster starting from `rotationIndex`:
+3. **Immediate rotation check**: right after the logout completes, `tryImmediateRotation()` calls `selectNextAccount()` to check if a *different* account is eligible right now. If so, the bot skips the break wait and logs in the next account immediately. If no other account is eligible (all sleeping or on break), the bot waits for the break timer.
+4. When the break timer expires (and no immediate rotation happened), `selectNextAccount()` iterates the roster starting from `rotationIndex`:
    - Is the account outside its nightly sleep window (checked via its SessionProfile)? → skip if sleeping
    - Has the account's minimum break lapsed (`now >= lastLogoutAtMs + minBreakDurationMs`)? → skip if not
    - If both checks pass → select this account, advance `rotationIndex` past it
-4. The selected account's credentials are staged and the bot logs in. On successful login, the account's break state is cleared.
-5. The new account runs the full auto-merch loop, and the cycle repeats.
+5. The selected account's credentials are staged and the bot logs in. On successful login, the account's break state is cleared.
+6. The new account runs the full auto-merch loop, and the cycle repeats.
 
 ### Per-account data (already isolated by account name)
 
