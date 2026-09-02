@@ -175,7 +175,7 @@ Key behaviours:
 2. `Math.sqrt(1 + capitalEfficiency)` gives a small boost to high-ROI items.
 3. `maxProfitPerSlotHour` already equals `min(3h hourly volume, limit) * profitMargin`.
 4. `weightedProfit` then multiplies `maxProfitPerSlotHour` by `threeHourAverageHourlyVolume` **again**, so volume is double-counted.
-5. The ratio `weightedProfit / averageProfitPerSlotHour` lets highly profitable items receive more than the base 20% slot allocation.
+5. The ratio `weightedProfit / averageProfitPerSlotHour` lets highly profitable items receive more than the base 12.5% slot allocation.
 6. The final value is capped at `CASH_STACK` (100% of the stack). There is no other upper bound.
 
 Result: a single high-profit item can be allocated the entire cash stack, because the cap is `CASH_STACK` rather than, for example, `AVERAGE_SLOT_CASH_STACK_ALLOCATION * someMaxMultiplier`.
