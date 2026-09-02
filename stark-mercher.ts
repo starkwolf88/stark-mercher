@@ -245,17 +245,20 @@ export class StarkMercher extends titan.Plugin {
         hidden: true,
     });
 
-    // --- Merch history setting (visible for manual backup) ---
+    // --- Hidden merch history setting ---
     // Stores per-account merch history (profits and losses) as JSON.
     // Each entry records item, qty, profit/loss, date, buy price, avg sold
     // price, and revision count for a completed merch cycle.
     // Same persistence limitation as offerCacheSetting — hot reload only.
-    // Visible so you can manually copy/paste the JSON across client restarts.
+    // Hidden because the Titan settings UI truncates string fields at 4095
+    // chars, and merch history exceeds that at ~60 entries — the UI field
+    // can't display or edit the full value, so manual backup via the
+    // settings panel doesn't work for this setting.
     merchHistorySetting: titan.Setting<string> = this.stringSetting({
         key: 'merchHistory',
-        name: 'Merch history (manual backup)',
+        name: 'Merch history (hidden)',
         default: '{}',
-        hidden: false,
+        hidden: true,
     });
 
     // --- Buy-freeze setting (visible for manual backup) ---
