@@ -75,6 +75,7 @@ export const resetInFlightActionState = (bot: StarkMercher): void => {
     bot.loopIdleSinceTick = -1;
     bot.shortBreakDelayTicks = -1;
     bot.nextActionEtaMin = -1;
+    bot.checkedAtHalfEta = false;
     // Reset action throttle
     bot.currentAction = null;
     bot.actionStartTime = 0;
