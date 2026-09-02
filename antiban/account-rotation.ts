@@ -298,6 +298,52 @@ export function getSoonestBreakEndMs(bot: StarkMercher): number {
 }
 
 /**
+ * Returns the name of the account that will log in next, for overlay display.
+ *
+ * If any account is eligible now (break lapsed), returns the one with the
+ * oldest lastLoginAtMs (same as selectNextAccount). If none are eligible,
+ * returns the one with the soonest breakEndMs (the next to become eligible).
+ * Returns null if the roster is empty or all accounts are sleeping.
+ */
+export function getNextAccountName(bot: StarkMercher): string | null {
+    const roster = getRoster(bot);
+    if (roster.length === 0) return null;
+    if (roster.length === 1) return roster[0];
+
+    const now = Date.now();
+    let eligibleBest: string | null = null;
+    let eligibleBestLastLoginAtMs = Infinity;
+    let waitingBest: string | null = null;
+    let waitingBestBreakEndMs = Infinity;
+
+    for (const name of roster) {
+        if (isAccountSleeping(bot, name)) continue;
+        const breakState = getAccountBreakState(bot, name);
+        const breakEndMs = breakState
+            ? breakState.lastLogoutAtMs + breakState.minBreakDurationMs
+            : 0;
+        const lastLoginAtMs = breakState?.lastLoginAtMs ?? 0;
+
+        if (breakEndMs <= now) {
+            // Eligible — pick oldest lastLoginAtMs
+            if (eligibleBest === null || lastLoginAtMs < eligibleBestLastLoginAtMs) {
+                eligibleBest = name;
+                eligibleBestLastLoginAtMs = lastLoginAtMs;
+            }
+        } else {
+            // Not yet eligible — track soonest break end
+            if (waitingBest === null || breakEndMs < waitingBestBreakEndMs) {
+                waitingBest = name;
+                waitingBestBreakEndMs = breakEndMs;
+            }
+        }
+    }
+
+    // Prefer eligible accounts; fall back to the soonest break end
+    return eligibleBest ?? waitingBest;
+}
+
+/**
  * Check if an account is eligible for login:
  *   1. Not sleeping (outside nightly sleep window)
  *   2. Break state has lapsed (or no break state exists)

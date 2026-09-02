@@ -748,6 +748,7 @@ export class StarkMercher extends titan.Plugin {
             this.loopIdleSinceTick = -1;
             this.shortBreakDelayTicks = -1;
             this.nextActionEtaMin = -1;
+            this.checkedAtHalfEta = false;
         }
 
         // --- Startup audit ---

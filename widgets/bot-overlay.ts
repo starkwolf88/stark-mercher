@@ -17,7 +17,7 @@
 
 import type { StarkMercher } from '../stark-mercher.js';
 import { formatUKTime } from '../antiban/session.js';
-import { isRotationEnabled, getSoonestBreakEndMs } from '../antiban/account-rotation.js';
+import { isRotationEnabled, getSoonestBreakEndMs, getNextAccountName } from '../antiban/account-rotation.js';
 import { isMerchableDataValid } from '../data/merchable-items.js';
 
 // --- Layout constants ------------------------------------------------------
@@ -229,6 +229,26 @@ export const renderBotOverlay = (bot: StarkMercher): void => {
         }
     } else {
         lines.push({ text: 'Session (Day):', key: 'Session (Day):', value: '-', valueColor: GREY_COLOR });
+    }
+
+    // Next Account — shown when multi-account rotation is enabled and logged out.
+    // Shows which account will log in next, based on the time-based selection
+    // (oldest lastLoginAtMs among eligible, or soonest break end if none eligible).
+    if (isRotationEnabled(bot) && isLoggedOut) {
+        const nextAcct = getNextAccountName(bot);
+        if (nextAcct) {
+            // Check if this account is eligible now or still waiting
+            const soonestEnd = getSoonestBreakEndMs(bot);
+            const isEligibleNow = soonestEnd <= Date.now();
+            lines.push({
+                text: 'Next Account:',
+                key: 'Next Account:',
+                value: nextAcct,
+                valueColor: isEligibleNow ? GREEN_COLOR : ORANGE_COLOR,
+            });
+        } else {
+            lines.push({ text: 'Next Account:', key: 'Next Account:', value: '-', valueColor: GREY_COLOR });
+        }
     }
 
     // Next Hop
