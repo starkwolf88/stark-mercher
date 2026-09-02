@@ -432,8 +432,10 @@ instant-buy items before slower lowball offers are attempted:
 4. **Lowball, frozen fallback** — `getFrozenFallbackItem(..., 'lowball')`
 5. **Partial fallback** — lower profit/hr threshold (5k vs 20k) and longer max turnover (240min vs 150min)
 
-**Max buy slots**: P2P reserves 3 of 8 slots for sales (max 5 buy slots), F2P uses
-all 3 slots for buys. The buy scan is skipped when at max buy slots.
+**All 8 slots for buys**: All GE slots are available for buy offers — no slots
+are reserved for sales. When a sell is needed but all slots are occupied, the sell
+scan aborts the oldest buy offer with 0% progress (nothing bought — no loss) to
+free a slot. This maximizes buying throughput while keeping items moving.
 
 **Profit-per-coin ranking**: Within each tier, items are ranked by
 `runtimeProfitPerSlotHour / runtimeTotalCost` (profit-per-coin-per-hour) instead of
