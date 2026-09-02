@@ -104,6 +104,13 @@ export class StarkMercher extends titan.Plugin {
      *  bot logs back in when there's something to do, instead of sampling
      *  a random 2-5 min duration. -1 = not computed (fall back to random). */
     nextActionEtaMin = -1;
+    /** Set to true when a short break starts, cleared when any GE action
+     *  happens (collect/sell/buy/abort). When true, the next short break
+     *  uses 90% of the remaining ETA instead of 50%, since we already
+     *  checked at 50% and found nothing ready. This prevents rapid
+     *  login/nothing-to-do/logout cycling when all slots are occupied
+     *  with slow-filling offers. */
+    checkedAtHalfEta = false;
     // Login state
     currentPlayerName = '';
     sessionProfile: SessionProfile | null = null;

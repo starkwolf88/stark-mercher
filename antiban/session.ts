@@ -256,13 +256,23 @@ function sampleShortBreakDuration(bot: StarkMercher): number {
 // When the auto-loop goes idle with all slots occupied, it computes the
 // minimum remaining time until the next action on any slot (earlier of
 // completion or stale-abort threshold) and stores it in bot.nextActionEtaMin.
-// This function converts that hint into a break duration. We target 50% of
-// the ETA so the bot can check if anything bought/sold quicker than expected,
-// with ±15% jitter so the return isn't precisely predictable. A randomized
-// 1–2 min floor prevents anti-ban-unfriendly very short breaks; the 10 min
-// ceiling ensures we return promptly if items buy quicker than expected.
-// Falls back to sampleShortBreakDuration() when no ETA data is available.
-const ETA_BREAK_RATIO = 0.5; // return at 50% of ETA
+// This function converts that hint into a break duration.
+//
+// Two-tier strategy to prevent rapid login/nothing-to-do/logout cycling:
+//   1. FIRST break (checkedAtHalfEta = false): target 50% of the ETA so the
+//      bot can check if anything bought/sold quicker than expected.
+//   2. SECOND+ break (checkedAtHalfEta = true): target 90% of the remaining
+//      ETA, since we already checked at 50% and found nothing ready. 90%
+//      aligns with the buy multi-qty abort threshold (90% of ETA + <50%
+//      progress), so the bot logs back in right when aborts start triggering.
+//
+// Both tiers use ±15% jitter so the return isn't precisely predictable.
+// A randomized 1–2 min floor prevents anti-ban-unfriendly very short breaks;
+// the 10 min ceiling ensures we return promptly if items buy quicker than
+// expected. Falls back to sampleShortBreakDuration() when no ETA data is
+// available.
+const ETA_BREAK_RATIO_FIRST = 0.5;  // first check: 50% of ETA
+const ETA_BREAK_RATIO_SECOND = 0.9; // second+ check: 90% of remaining ETA
 const ETA_BREAK_CEILING_MIN = 10;
 const ETA_BREAK_JITTER = 0.15; // ±15%
 
@@ -272,10 +282,11 @@ function sampleEtaBasedBreakDuration(bot: StarkMercher): number {
         return sampleShortBreakDuration(bot);
     }
 
-    // Target 50% of the ETA so we can check for early completions.
-    // Apply ±15% jitter so we don't return at a precisely predictable time.
+    // Use 90% of remaining ETA if we already checked at 50% and found
+    // nothing ready. Otherwise use 50% for the first check.
+    const ratio = bot.checkedAtHalfEta ? ETA_BREAK_RATIO_SECOND : ETA_BREAK_RATIO_FIRST;
     const jitterMultiplier = 1 + (Math.random() * 2 - 1) * ETA_BREAK_JITTER;
-    let durationMin = etaMin * ETA_BREAK_RATIO * jitterMultiplier;
+    let durationMin = etaMin * ratio * jitterMultiplier;
 
     // Randomized 1–2 min floor prevents anti-ban-unfriendly very short breaks.
     const floorMin = sampleInt(1, 2);
@@ -990,6 +1001,7 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
         if (elapsed < bot.shortBreakDelayTicks) {
             return false;
         }
+        const wasHalfEtaCheck = !bot.checkedAtHalfEta;
         const duration = sampleEtaBasedBreakDuration(bot);
         bot.breakPhase = 'logging_out';
         bot.breakType = 'short';
@@ -999,8 +1011,14 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
         bot.loopIdleSinceTick = -1;
         bot.shortBreakDelayTicks = -1;
         bot.nextActionEtaMin = -1;
+        // Mark that we've taken a break. If this was the first (50%) check,
+        // the next break will use 90% of the remaining ETA, preventing rapid
+        // cycling when all slots are occupied with slow-filling offers.
+        bot.checkedAtHalfEta = true;
         resetLogoutState(bot);
-        humanLog(bot, 'Short break starting — %d min logout', Math.round(duration / MS_PER_MINUTE));
+        humanLog(bot, 'Short break starting — %d min logout (%s check)',
+            Math.round(duration / MS_PER_MINUTE),
+            wasHalfEtaCheck ? '50% ETA' : '90% ETA');
         // Record per-account break state for multi-character rotation.
         // The duration is the ETA-based minimum break for this account.
         if (isRotationEnabled(bot) && bot.currentPlayerName) {
