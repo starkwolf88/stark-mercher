@@ -482,9 +482,12 @@ export class BuyOfferFlow {
             this._skipPriceEntry = true;
         } else if (qtyOk && !priceOk) {
             // Qty already matches but price doesn't — skip qty entry, go
-            // straight to price entry (step 12).
+            // straight to price entry. Set step=11 so advance() brings us
+            // to step 12 (clickPriceEnterStep) — the actual "Enter price"
+            // click. Setting step=12 here would advance to 13
+            // (waitForPricePrompt) which skips the click entirely.
             this.log(`Step 6: qty=${currentQty} matches target, price=${currentPrice ?? 'unknown'}gp ≠ ${this.price}gp — will set price only`);
-            this.step = 12; // skip to price entry
+            this.step = 11; // advance() -> 12 = clickPriceEnterStep
             this.waitTicks = 0;
             this.reattempts = 0;
             this.computeDelay(1, 35, 5);
