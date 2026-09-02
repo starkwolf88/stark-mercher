@@ -56,6 +56,7 @@ import {
     getOfferSlotState,
 } from './widgets.js';
 import { isTyping } from '../input/typing.js';
+import { cancelTypingMistakeSequence } from '../input/typing-mistakes.js';
 
 export interface SellOfferOptions {
     /** Slot number 1-8, or undefined for first available empty slot. */
@@ -144,6 +145,9 @@ export class SellOfferFlow {
     // --- Helpers ---
 
     private fail(reason: string): void {
+        // Cancel any stuck typing-mistake sequence so it doesn't poison
+        // the next typing operation.
+        cancelTypingMistakeSequence();
         this.status = 'failed';
         this.error = reason;
     }
@@ -172,6 +176,8 @@ export class SellOfferFlow {
                 this.fail(`Timed out at step ${this.step} after ${MAX_REATTEMPTS} re-attempts`);
             } else {
                 this.log(`Step ${this.step}: state not reached, re-attempt ${this.reattempts}/${MAX_REATTEMPTS}`);
+                // Cancel any stuck typing-mistake sequence before retrying.
+                cancelTypingMistakeSequence();
                 this.waitTicks = 0;
                 this.typingStarted = false;
             }
@@ -215,7 +221,7 @@ export class SellOfferFlow {
             return false;
         }
         this.log(`Found ${item.quantity}x ${this._itemName} in inventory (slot ${item.slot})`);
-        this.computeDelay(1, 35, 5);
+        this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
@@ -226,7 +232,7 @@ export class SellOfferFlow {
         if (!clickSellSlot(this.slotIndex)) {
             return this.waitTick();
         }
-        this.computeDelay(2, 35, 5);
+        this.computeDelay(2, 30, 4);
         this.advance();
         return true;
     }
@@ -239,7 +245,7 @@ export class SellOfferFlow {
             return this.waitTick();
         }
         this.log('Offer config screen open');
-        this.computeDelay(1, 35, 5);
+        this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
@@ -271,7 +277,7 @@ export class SellOfferFlow {
         if (!ok) {
             return this.waitTick();
         }
-        this.computeDelay(2, 35, 5);
+        this.computeDelay(2, 30, 4);
         this.advance();
         return true;
     }
@@ -298,7 +304,7 @@ export class SellOfferFlow {
             return false;
         }
         this.log(`Item validated: "${loadedName}"`);
-        this.computeDelay(1, 35, 5);
+        this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
@@ -315,12 +321,12 @@ export class SellOfferFlow {
             this.waitTicks = 0;
             this.reattempts = 0;
             // Still set a delay before the next action (validation).
-            this.computeDelay(1, 35, 5);
+            this.computeDelay(1, 30, 4);
             this.advance();
             return true;
         }
         this.log(`Step 5: Current price ${currentPrice ?? 'unknown'}gp ≠ target ${this.price}gp — will set price`);
-        this.computeDelay(1, 35, 5);
+        this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
@@ -331,7 +337,7 @@ export class SellOfferFlow {
         if (!clickPriceEnter()) {
             return this.waitTick();
         }
-        this.computeDelay(2, 35, 5);
+        this.computeDelay(2, 30, 4);
         this.advance();
         return true;
     }
@@ -341,7 +347,7 @@ export class SellOfferFlow {
         if (!isPricePromptShown()) {
             return this.waitTick();
         }
-        this.computeDelay(1, 35, 5);
+        this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
@@ -354,10 +360,10 @@ export class SellOfferFlow {
                 return this.waitTick();
             }
             this.typingStarted = true;
-            this.computeDelay(2, 35, 5);
+            this.computeDelay(2, 30, 4);
             return true;
         }
-        this.computeDelay(1, 35, 5);
+        this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
@@ -367,7 +373,7 @@ export class SellOfferFlow {
         if (isTyping()) {
             return this.waitTick();
         }
-        this.computeDelay(1, 35, 5);
+        this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
@@ -378,7 +384,7 @@ export class SellOfferFlow {
         if (!pressEnter()) {
             return this.waitTick();
         }
-        this.computeDelay(1, 35, 5);
+        this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
@@ -411,7 +417,7 @@ export class SellOfferFlow {
         }
 
         this.log(`Offer validated: ${this._itemName} @ ${this.price}gp each`);
-        this.computeDelay(1, 35, 5);
+        this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
@@ -422,7 +428,7 @@ export class SellOfferFlow {
         if (!clickConfirm()) {
             return this.waitTick();
         }
-        this.computeDelay(2, 35, 5);
+        this.computeDelay(2, 30, 4);
         this.advance();
         return true;
     }

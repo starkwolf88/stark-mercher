@@ -1,0 +1,14 @@
+{
+  "Cyber4Gras": {
+    "reactionBias": 0.183,
+    "jitterTicks": 1,
+    "hesitationMultiplier": 2.91,
+    "outlierChance": 0.0595,
+    "outlierMultiplier": 1.72,
+    "outlierNestedChance": 0.248,
+    "outlierNestedMultiplier": 1.49,
+    "jitterAmplifyChance": 0.0068,
+    "jitterAmplifyMinTicks": 10,
+    "jitterAmplifyMaxTicks": 28
+  }
+}

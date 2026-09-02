@@ -153,3 +153,68 @@ export const getFirstUnoccupiedMerchableItem = (
     }
     return null;
 };
+
+/**
+ * Result of a partial-quantity buy lookup. The item is affordable at a
+ * reduced quantity (fewer units than quantityToPurchase) because the
+ * full totalPurchasePrice exceeds availableCoins but at least 1 unit
+ * can be bought. The reduced quantity is clamped to the GE buy limit.
+ */
+export interface PartialBuyResult {
+    item: MerchableItem;
+    /** Reduced quantity to buy (<= item.quantityToPurchase, <= item.limit). */
+    quantity: number;
+    /** Total cost of the reduced quantity (quantity * purchasePrice). */
+    totalCost: number;
+}
+
+/**
+ * Fallback lookup for partial-quantity buying. When no item can be afforded
+ * at its full quantityToPurchase, this scans for items where at least 1 unit
+ * is affordable AND the expected profit from the reduced quantity meets a
+ * minimum threshold. This keeps GE slots productive instead of sitting idle
+ * when most of the cash stack is tied up in other offers.
+ *
+ * The reduced quantity is: min(floor(availableCoins / purchasePrice), limit).
+ * Profit check: reducedQty * profitMargin >= minProfitGp.
+ *
+ * @param minProfitGp - Minimum total profit (reducedQty * profitMargin) for
+ *   the partial buy to be worthwhile. Default 15000.
+ */
+export const getFirstPartialBuyItem = (
+    occupiedItemNames: Set<string>,
+    availableCoins: number,
+    buyLimitedItemNames: Set<string> = new Set(),
+    isMembersWorld: boolean = true,
+    frozenItemNames: Set<string> = new Set(),
+    minProfitGp: number = 15000,
+): PartialBuyResult | null => {
+    const items = ensureLoaded();
+    for (const item of items) {
+        const lower = item.itemName.trim().toLowerCase();
+        if (occupiedItemNames.has(lower)) continue;
+        if (buyLimitedItemNames.has(lower)) continue;
+        if (frozenItemNames.has(lower)) continue;
+        if (!isMembersWorld && item.members) continue;
+        // Can't afford even 1 unit — skip.
+        if (item.purchasePrice > availableCoins) continue;
+        // Full quantity is affordable — getFirstUnoccupiedMerchableItem
+        // would have returned it already, but check anyway.
+        if (item.totalPurchasePrice <= availableCoins) continue;
+        // Compute reduced quantity.
+        const reducedQty = Math.min(
+            Math.floor(availableCoins / item.purchasePrice),
+            item.limit,
+        );
+        if (reducedQty <= 0) continue;
+        // Profit threshold check.
+        const reducedProfit = reducedQty * item.profitMargin;
+        if (reducedProfit < minProfitGp) continue;
+        return {
+            item,
+            quantity: reducedQty,
+            totalCost: reducedQty * item.purchasePrice,
+        };
+    }
+    return null;
+};

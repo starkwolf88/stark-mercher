@@ -44,19 +44,25 @@ import {
 import { clickCollectToInventory } from './actions.js';
 import { getNetSellPrice, getGeTax } from './constants.js';
 import { openGe, nearGrandExchange, walkToGe } from './clerk.js';
-import { getMerchableItems, getMerchableItem, getFirstUnoccupiedMerchableItem, isMerchable, type MerchableItem } from '../data/merchable-items.js';
+import { getMerchableItems, getMerchableItem, getFirstUnoccupiedMerchableItem, getFirstPartialBuyItem, type MerchableItem, type PartialBuyResult } from '../data/merchable-items.js';
 import { getPriceHistoryEntry } from '../data/price-history.js';
 import { OfferCacheManager } from '../data/offer-cache.js';
 import { addDailyProfit } from '../data/daily-profit.js';
 import { recordMerchCycle, type MerchHistoryEntry } from '../data/merch-history.js';
-import { recordAbort } from '../data/abort-history.js';
+import { recordAbort, type AbortCategory } from '../data/abort-history.js';
 
 // --- Stale offer thresholds ------------------------------------------------
 // Sell: dynamic % of ETA passed with <25% sold → abort (scaled by profit margin)
-// Buy (0 bought): 100% of ETA passed with 0 bought → abort
-// Buy (multi-qty): 75% of ETA passed with <50% bought → abort
+// Buy (0 bought): 125% of ETA passed with 0 bought → abort
+// Buy (multi-qty): 90% of ETA passed with <50% bought → abort
 // If the item is no longer in merchableItems.json, abort immediately
 // (the price target is stale).
+//
+// The buy thresholds are generous because the merchable item pool can be
+// small (20-30 items at low-activity times). Aborting too early wastes
+// partial fills and triggers buy freezes that shrink the pool further.
+// Giving buys extra time beyond ETA avoids aborting offers that are still
+// slowly filling, especially when volume estimates are uncertain.
 //
 // The sell ETA abort ratio scales with profit margin so that thin-margin
 // items get more time to sell (a 1gp cut on a 2gp margin is 50% of profit),
@@ -76,8 +82,8 @@ const computeSellEtaAbortRatio = (profit: number): number => {
     const ratio = 0.95 - Math.log10(profit) * 0.075;
     return Math.max(0.50, Math.min(0.95, ratio));
 };
-const BUY_ETA_ABORT_RATIO_ZERO = 1.0;    // 100% of buy ETA (0 bought)
-const BUY_ETA_ABORT_RATIO_MULTI = 0.75;  // 75% of buy ETA (<50% bought)
+const BUY_ETA_ABORT_RATIO_ZERO = 1.25;   // 125% of buy ETA (0 bought)
+const BUY_ETA_ABORT_RATIO_MULTI = 0.90;  // 90% of buy ETA (<50% bought)
 const BUY_PROGRESS_ABORT_THRESHOLD = 0.50; // <50% bought
 const BUY_ETA_ABORT_RATIO_STALLED = 1.0; // 100% of buy ETA (stalled near completion)
 const BUY_PROGRESS_STALLED_THRESHOLD = 0.50; // >=50% bought but not completing
@@ -100,9 +106,10 @@ const FAST_SELL_PRICE_MULTIPLIER = 0.5;  // 50% of sell price
 // --- Buy freeze-out --------------------------------------------------------
 // When a buy offer is aborted (stale — not buying at the offered price), we
 // temporarily freeze that item so we don't immediately re-list it at the
-// same price. The freeze duration is long enough for market conditions to
-// shift but short enough to not miss opportunities.
-const BUY_FREEZE_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+// same price. The freeze is short (5 minutes) because the merchable item
+// pool can be small at low-activity times — a long freeze would shrink the
+// available items too much and leave GE slots idle.
+const BUY_FREEZE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 
 // --- Consecutive failure tracking -------------------------------------------
 // Major "stuck" states (GE won't open, sub-screen won't close, collect button
@@ -110,6 +117,21 @@ const BUY_FREEZE_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 // Recoverable failures (price mismatch, quantity validation, search not found)
 // do NOT use this system — they press Esc and retry the loop.
 const MAX_CONSECUTIVE_FAILURES = 3;
+
+/** Minimum real-time cooldown between GE-open click dispatches. The SDK can
+ *  fire a burst of ticks immediately after login (the tick counter advances
+ *  several ticks in milliseconds), causing the tick-based action delay to
+ *  elapse instantly and the loop to re-enter and dispatch a second GE-open
+ *  click before the first one has taken effect. This wall-clock cooldown
+ *  prevents that — see `lastGeOpenDispatchMs` on `AutoLoopState`. */
+const GE_OPEN_WALL_CLOCK_COOLDOWN_MS = 3000;
+
+/** Minimum real-time cooldown between collect-to-inventory click dispatches.
+ *  Same rationale as GE_OPEN_WALL_CLOCK_COOLDOWN_MS — tick bursts after login
+ *  can cause the tick-based delay to elapse instantly, leading to a duplicate
+ *  collect click that the game responds to with "You have nothing to collect."
+ *  and a Cancel opcode. */
+const COLLECT_WALL_CLOCK_COOLDOWN_MS = 3000;
 
 /** Increments the failure counter for a given key. Returns the new count. */
 const recordFailure = (loop: AutoLoopState, key: string): number => {
@@ -196,6 +218,80 @@ const saveBuyFreeze = (bot: StarkMercher, accountName: string, freezeMap: Map<st
     }
 };
 
+// --- Frozen fallback helpers ----------------------------------------------
+// When all non-frozen merchable items are exhausted and the bot would
+// otherwise leave a GE slot empty, we fall back to a frozen item. Among
+// frozen items, we prefer the one whose freeze expires soonest — it was
+// frozen the longest ago, so market conditions have had the most time to
+// change since the abort, making it the most likely to actually fill now.
+
+/** Returns the frozen merchable item with the soonest-expiring freeze that
+ *  passes all the standard buy-scan checks (not occupied, affordable, not
+ *  buy-limited, members-appropriate). Returns null if no frozen item is
+ *  eligible. */
+const getFrozenFallbackItem = (
+    buyFreezeUntil: Map<string, number>,
+    occupiedNames: Set<string>,
+    coinCount: number,
+    buyLimitedNames: Set<string>,
+    membersWorld: boolean,
+): MerchableItem | null => {
+    // Sort frozen item names by ascending freeze expiry (soonest first).
+    const sorted = [...buyFreezeUntil.entries()]
+        .sort((a, b) => a[1] - b[1]);
+    for (const [name] of sorted) {
+        const item = getMerchableItem(name);
+        if (!item) continue;
+        const lower = item.itemName.trim().toLowerCase();
+        if (occupiedNames.has(lower)) continue;
+        if (buyLimitedNames.has(lower)) continue;
+        if (item.totalPurchasePrice > coinCount) continue;
+        if (!membersWorld && item.members) continue;
+        return item;
+    }
+    return null;
+};
+
+/** Same as getFrozenFallbackItem but for partial-quantity buys (when we
+ *  can't afford the full quantityToPurchase). Returns the frozen item with
+ *  the soonest-expiring freeze that qualifies for a partial buy, or null. */
+const getFrozenFallbackPartial = (
+    buyFreezeUntil: Map<string, number>,
+    occupiedNames: Set<string>,
+    coinCount: number,
+    buyLimitedNames: Set<string>,
+    membersWorld: boolean,
+    minProfitGp: number = 15000,
+): PartialBuyResult | null => {
+    const sorted = [...buyFreezeUntil.entries()]
+        .sort((a, b) => a[1] - b[1]);
+    for (const [name] of sorted) {
+        const item = getMerchableItem(name);
+        if (!item) continue;
+        const lower = item.itemName.trim().toLowerCase();
+        if (occupiedNames.has(lower)) continue;
+        if (buyLimitedNames.has(lower)) continue;
+        if (!membersWorld && item.members) continue;
+        if (item.purchasePrice > coinCount) continue;
+        // Full quantity is affordable — getFirstUnoccupiedMerchableItem
+        // would have returned it already, but check anyway.
+        if (item.totalPurchasePrice <= coinCount) continue;
+        const reducedQty = Math.min(
+            Math.floor(coinCount / item.purchasePrice),
+            item.limit,
+        );
+        if (reducedQty <= 0) continue;
+        const reducedProfit = reducedQty * item.profitMargin;
+        if (reducedProfit < minProfitGp) continue;
+        return {
+            item,
+            quantity: reducedQty,
+            totalCost: reducedQty * item.purchasePrice,
+        };
+    }
+    return null;
+};
+
 // --- Auto loop state machine ----------------------------------------------
 
 export type AutoLoopPhase =
@@ -261,6 +357,9 @@ export interface AutoLoopState {
         progress: number;
         /** Stale reason string (or 'frozen swap-out' for swap aborts). */
         reason: string;
+        /** Abort category: 'eta' (ETA-based stale), 'swap' (frozen swap-out),
+         *  'config' (item removed from list — legacy). */
+        category: AbortCategory;
         /** Original cached ETA in minutes. */
         etaMin: number;
         /** Requested offer quantity (from the GE slot). */
@@ -280,6 +379,19 @@ export interface AutoLoopState {
      *  an error log. Counters reset to 0 on success. Keys: 'geOpen',
      *  'geSubScreen', 'collect'. */
     failureCounters: Record<string, number>;
+    /** Wall-clock timestamp of the last GE-open click dispatch. Used to
+     *  enforce a minimum real-time cooldown (GE_OPEN_WALL_CLOCK_COOLDOWN_MS)
+     *  between GE-open clicks, independent of the tick-based action delay.
+     *  This prevents double-clicking the booth/clerk when the SDK fires a
+     *  burst of ticks immediately after login (the tick counter can advance
+     *  several ticks in milliseconds, causing the tick-based delay to elapse
+     *  instantly). */
+    lastGeOpenDispatchMs: number;
+    /** Wall-clock timestamp of the last collect-to-inventory click dispatch.
+     *  Same purpose as lastGeOpenDispatchMs but for the collect action —
+     *  prevents double-clicking collect when a tick burst causes the
+     *  tick-based delay to elapse instantly. */
+    lastCollectDispatchMs: number;
 }
 
 export const createAutoLoopState = (): AutoLoopState => ({
@@ -300,6 +412,8 @@ export const createAutoLoopState = (): AutoLoopState => ({
     abortSlotInfo: null,
     lastCleanupMs: 0,
     failureCounters: {},
+    lastGeOpenDispatchMs: 0,
+    lastCollectDispatchMs: 0,
 });
 
 // --- Helper: initialise profiles ------------------------------------------
@@ -428,12 +542,12 @@ const isBuyOfferStale = (slot: OfferSlotState, cache: OfferCacheManager): string
     const elapsedMs = now - entry.offerPlacedAt;
     const elapsedMin = elapsedMs / 60000;
 
-    // If the item is no longer in merchableItems.json, abort only if the
-    // offer has made zero progress. If it's partially filled, let it
-    // complete so we can sell what we got.
-    if (!isMerchable(slot.itemName) && slot.progress <= 0) {
-        return `no longer in merchableItems.json (buy price was ${entry.buyPrice}gp)`;
-    }
+    // Items removed from merchableItems.json are NOT immediately aborted.
+    // They may still be merchable — the list is volatile during development
+    // and an item removed and re-added shouldn't cause abort churn. Instead,
+    // let the ETA-based checks below handle them: if the offer doesn't fill
+    // within the ETA thresholds, it will be aborted as stale. If it does
+    // fill, the sell scan will sell it regardless of merchable status.
 
     // Use live merchable data for ETA if available; fall back to the ETA
     // cached at buy time if the item has been removed from merchableItems.json.
@@ -441,13 +555,13 @@ const isBuyOfferStale = (slot: OfferSlotState, cache: OfferCacheManager): string
     const eta = merch ? merch.purchaseEtaMinutes : (entry.purchaseEtaMinutes ?? 0);
     if (eta <= 0) return null; // no ETA data at all — can't determine staleness
 
-    // Buy (0 bought): 100% of ETA passed with 0 bought → abort
+    // Buy (0 bought): 125% of ETA passed with 0 bought → abort
     const etaThresholdZero = eta * BUY_ETA_ABORT_RATIO_ZERO;
     if (slot.progress <= 0 && elapsedMin >= etaThresholdZero) {
         return `ETA exceeded (0 bought): ${elapsedMin.toFixed(1)}min elapsed >= ${etaThresholdZero.toFixed(1)}min (${(BUY_ETA_ABORT_RATIO_ZERO * 100).toFixed(0)}% of ${eta.toFixed(1)}min ETA), progress 0% — buy price ${entry.buyPrice}gp`;
     }
 
-    // Buy (multi-qty): 75% of ETA passed with <50% bought → abort
+    // Buy (multi-qty): 90% of ETA passed with <50% bought → abort
     const etaThresholdMulti = eta * BUY_ETA_ABORT_RATIO_MULTI;
     if (slot.itemQuantity > 1 && slot.progress < BUY_PROGRESS_ABORT_THRESHOLD && elapsedMin >= etaThresholdMulti) {
         return `ETA exceeded (partial): ${elapsedMin.toFixed(1)}min elapsed >= ${etaThresholdMulti.toFixed(1)}min (${(BUY_ETA_ABORT_RATIO_MULTI * 100).toFixed(0)}% of ${eta.toFixed(1)}min ETA), progress ${(slot.progress * 100).toFixed(1)}% < ${(BUY_PROGRESS_ABORT_THRESHOLD * 100).toFixed(0)}% — buy price ${entry.buyPrice}gp`;
@@ -490,8 +604,8 @@ const computeNextActionEtaMin = (slots: OfferSlotState[], cache: OfferCacheManag
             const merch = getMerchableItem(slot.itemName);
             eta = merch ? merch.purchaseEtaMinutes : (entry.purchaseEtaMinutes ?? 0);
             if (eta <= 0) continue;
-            // 0% progress: stale at 100% of ETA (same as completion)
-            // <50% progress: stale at 75% of ETA (earlier than completion)
+            // 0% progress: stale at 125% of ETA (later than completion)
+            // <50% progress: stale at 90% of ETA (earlier than completion)
             // >=50% progress: stalled check at 100% of ETA (same as completion)
             if (slot.progress < BUY_PROGRESS_ABORT_THRESHOLD && slot.itemQuantity > 1) {
                 abortRatio = BUY_ETA_ABORT_RATIO_MULTI;
@@ -611,7 +725,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         loop.activeBuyFlow = null;
         loop.phase = 'idle';
         bot.statusText = '';
-        const delay = createDelay(1, 40, 12);
+        const delay = createDelay(1, 35, 8);
         setAction(bot, 'auto_idle', delay);
         debugLog(bot, `Auto: action=auto_idle delay=${delay}t (buy flow ended)`);
         return true;
@@ -639,7 +753,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         loop.activeSellFlow = null;
         loop.phase = 'idle';
         bot.statusText = '';
-        const delay = createDelay(1, 40, 12);
+        const delay = createDelay(1, 35, 8);
         setAction(bot, 'auto_idle', delay);
         debugLog(bot, `Auto: action=auto_idle delay=${delay}t (sell flow ended)`);
         return true;
@@ -711,12 +825,13 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                     requestedQty: info.requestedQty,
                     filledQty,
                     reason: info.reason,
+                    category: info.category,
                     elapsedMin: Math.round(elapsedMin * 10) / 10,
                     etaMin: info.etaMin,
                     price: info.price,
                     date: new Date().toISOString(),
                 });
-                debugLog(bot, `Auto: abort history recorded — ${info.type} ${info.itemName}, requested=${info.requestedQty}, filled=${filledQty}, elapsed=${(elapsedMin).toFixed(1)}min, eta=${info.etaMin}min, reason="${info.reason}"`);
+                debugLog(bot, `Auto: abort history recorded — [${info.category}] ${info.type} ${info.itemName}, requested=${info.requestedQty}, filled=${filledQty}, elapsed=${(elapsedMin).toFixed(1)}min, eta=${info.etaMin}min, reason="${info.reason}"`);
             }
         } else if (flow.status === 'failed') {
             titan.logf('[Stark Mercher] Auto: abort failed: %s', flow.error);
@@ -725,7 +840,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         loop.abortSlotInfo = null;
         loop.phase = 'idle';
         bot.statusText = '';
-        const delay = createDelay(1, 40, 12);
+        const delay = createDelay(1, 35, 8);
         setAction(bot, 'auto_idle', delay);
         debugLog(bot, `Auto: action=auto_idle delay=${delay}t (abort flow ended)`);
         return true;
@@ -748,13 +863,29 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         // player has time to walk to the booth and the interface has time
         // to open. Without this, the loop re-clicks every 1-4 ticks,
         // sending the player running around the GE area.
+        //
+        // Wall-clock cooldown: the SDK can fire a burst of ticks immediately
+        // after login (the tick counter advances several ticks in
+        // milliseconds), causing the tick-based action delay to elapse
+        // instantly. This cooldown prevents a second GE-open click from
+        // being dispatched before the first one has had time to take effect.
+        const geOpenCooldownRemaining = GE_OPEN_WALL_CLOCK_COOLDOWN_MS - (Date.now() - loop.lastGeOpenDispatchMs);
+        if (geOpenCooldownRemaining > 0) {
+            debugLog(bot, `Auto: GE not open, near GE — waiting ${(geOpenCooldownRemaining / 1000).toFixed(1)}s wall-clock cooldown before re-clicking`);
+            bot.statusText = 'Opening Grand Exchange';
+            const delay = createDelay(3, 8, 6);
+            setAction(bot, 'auto_open_ge', delay);
+            debugLog(bot, `Auto: action=auto_open_ge delay=${delay}t (wall-clock cooldown)`);
+            return true;
+        }
         debugLog(bot, 'Auto: GE not open, near GE — opening via clerk/booth');
         bot.statusText = 'Opening Grand Exchange';
         if (openGe()) {
+            loop.lastGeOpenDispatchMs = Date.now();
             const failures = recordFailure(loop, 'geOpen');
             debugLog(bot, `Auto: GE open click dispatched (attempt ${failures}/${MAX_CONSECUTIVE_FAILURES})`);
             if (checkFailureTerminate(bot, loop, 'geOpen', 'Opening Grand Exchange')) return true;
-            const delay = createDelay(8, 15, 3);
+            const delay = createDelay(6, 15, 3);
             setAction(bot, 'auto_open_ge', delay);
             debugLog(bot, `Auto: action=auto_open_ge delay=${delay}t (waiting for GE to open)`);
         } else {
@@ -995,11 +1126,26 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         // Completed/aborted slot detected — click collect to inventory.
         // Profit for completed sells is recorded by the sweep above (for
         // 100% completed) or at re-list time in Step 5 (for partial aborts).
+        //
+        // Wall-clock cooldown: same rationale as the GE-open cooldown — tick
+        // bursts after login can cause the tick-based delay to elapse
+        // instantly, leading to a duplicate collect click that the game
+        // responds to with "You have nothing to collect." and a Cancel opcode.
+        const collectCooldownRemaining = COLLECT_WALL_CLOCK_COOLDOWN_MS - (Date.now() - loop.lastCollectDispatchMs);
+        if (collectCooldownRemaining > 0) {
+            debugLog(bot, `Auto: completed/aborted offer detected — waiting ${(collectCooldownRemaining / 1000).toFixed(1)}s wall-clock cooldown before re-collecting`);
+            bot.statusText = 'Collecting from G.E';
+            const delay = createDelay(3, 8, 6);
+            setAction(bot, 'auto_collect', delay);
+            debugLog(bot, `Auto: action=auto_collect delay=${delay}t (wall-clock cooldown)`);
+            return true;
+        }
         const failures = recordFailure(loop, 'collect');
         debugLog(bot, `Auto: completed/aborted offer detected — collecting to inventory (attempt ${failures}/${MAX_CONSECUTIVE_FAILURES})`);
         if (checkFailureTerminate(bot, loop, 'collect', 'Collecting completed/aborted offer')) return true;
         bot.statusText = 'Collecting from G.E';
         if (clickCollectToInventory()) {
+            loop.lastCollectDispatchMs = Date.now();
             const delay = createDelay(2, 40, 8);
             setAction(bot, 'auto_collect', delay);
             debugLog(bot, `Auto: action=auto_collect delay=${delay}t`);
@@ -1029,12 +1175,17 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             debugLog(bot, `Auto: aborting stale offer in slot ${i + 1} (${slot.type} ${slot.itemName} — ${reason})`);
             bot.statusText = `Aborting stale offer for ${slot.itemName ?? 'unknown'} in slot ${i + 1}`;
             // If this is a buy offer, freeze the item so we don't immediately
-            // re-list it at the same price. The freeze lasts 15 minutes —
+            // re-list it at the same price. The freeze lasts 5 minutes —
             // long enough for market conditions to shift.
-            // Skip the freeze if the item is already frozen (e.g. a previous
-            // abort attempt failed and we're retrying — don't extend the
-            // freeze timer by the duration of the failed attempt).
-            if (slot.type === 'buy' && slot.itemName) {
+            // Skip the freeze if:
+            //   - the item is already frozen (e.g. a previous abort attempt
+            //     failed and we're retrying — don't extend the freeze timer)
+            //   - the abort is config-driven (item removed from
+            //     merchableItems.json) — the item wasn't stale, just removed
+            //     from the list, so re-buying it immediately is fine if it's
+            //     added back.
+            const isConfigAborrt = reason.startsWith('no longer in merchableItems.json');
+            if (slot.type === 'buy' && slot.itemName && !isConfigAborrt) {
                 const freezeKey = slot.itemName.trim().toLowerCase();
                 const existingFreeze = loop.buyFreezeUntil.get(freezeKey);
                 if (existingFreeze && existingFreeze > Date.now()) {
@@ -1071,6 +1222,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                     itemName: slot.itemName,
                     progress: slot.progress,
                     reason,
+                    category: 'eta' as AbortCategory,
                     etaMin,
                     requestedQty: slot.itemQuantity,
                     price,
@@ -1326,10 +1478,41 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         // items. An empty slot earns 0gp — a frozen item might buy now if the
         // price issue that caused the freeze has resolved. This only triggers
         // when there are genuinely no other merchable items available.
+        //
+        // Among frozen items, prefer the one frozen the longest ago (soonest-
+        // expiring freeze). Market conditions have had the most time to change
+        // since that abort, making it the most likely to actually fill now.
+        // An item frozen 2 minutes ago (3 min remaining) should not be picked
+        // over an item frozen 4 minutes ago (1 min remaining).
         if (!merch && frozenNames.size > 0) {
-            merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld());
+            merch = getFrozenFallbackItem(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld());
             if (merch) {
-                debugLog(bot, `Auto: using frozen item ${merch.itemName} as fallback — no other merchable items available (empty slot is worse than a frozen item)`);
+                const freezeMs = loop.buyFreezeUntil.get(merch.itemName.trim().toLowerCase()) ?? 0;
+                const remainingMs = freezeMs - Date.now();
+                debugLog(bot, `Auto: using frozen item ${merch.itemName} as fallback — no other merchable items available (empty slot is worse than a frozen item, freeze expires in ${Math.max(0, Math.round(remainingMs / 60000))} min)`);
+            }
+        }
+
+        // Partial-quantity fallback: if no item is affordable at its full
+        // quantityToPurchase, look for an item where we can at least buy a
+        // reduced quantity with the available coins. The reduced quantity
+        // is floor(coins / purchasePrice) capped at the GE limit, and the
+        // expected profit (reducedQty * profitMargin) must be >= 15k gp.
+        // This keeps empty slots productive when most of the cash stack is
+        // tied up in other offers.
+        let partial: PartialBuyResult | null = null;
+        if (!merch) {
+            partial = getFirstPartialBuyItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames);
+            if (partial) {
+                debugLog(bot, `Auto: partial-quantity buy — ${partial.item.itemName} full qty ${partial.item.quantityToPurchase} needs ${partial.item.totalPurchasePrice}gp, have ${coinCount}gp — buying ${partial.quantity} instead (profit ${partial.quantity * partial.item.profitMargin}gp)`);
+            } else if (frozenNames.size > 0) {
+                // Try partial with frozen items allowed too, preferring the
+                // soonest-expiring freeze (same rationale as the full-qty
+                // fallback above).
+                partial = getFrozenFallbackPartial(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld());
+                if (partial) {
+                    debugLog(bot, `Auto: partial-quantity buy (frozen fallback) — ${partial.item.itemName} buying ${partial.quantity} (profit ${partial.quantity * partial.item.profitMargin}gp)`);
+                }
             }
         }
 
@@ -1370,18 +1553,61 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 loop.buyAttemptedItems.clear();
                 return true;
             }
+        } else if (partial) {
+            const pItem = partial.item;
+            const lowerName = pItem.itemName.trim().toLowerCase();
+
+            if (!loop.buyAttemptedItems.has(lowerName)) {
+                // Adjust the partial quantity based on remaining buy limit.
+                const remaining = cache.getRemainingBuyLimit(pItem.itemName, pItem.limit);
+                const adjustedQty = Math.min(partial.quantity, remaining);
+                if (adjustedQty <= 0) {
+                    debugLog(bot, `Auto: ${pItem.itemName} has no remaining buy limit — skipping partial buy`);
+                    loop.buyAttemptedItems.add(lowerName);
+                    return true;
+                }
+                const adjustedTotal = adjustedQty * pItem.purchasePrice;
+
+                // Record the buy offer in the cache. We pass the item as-is
+                // (cache uses itemName/limit/sellPrice); the reduced quantity
+                // is handled by the BuyOfferFlow below.
+                cache.recordBuyOffer(pItem);
+                cache.save();
+
+                debugLog(bot, `Auto: buying ${adjustedQty}x ${pItem.itemName} @ ${pItem.purchasePrice}gp each (total ${adjustedTotal}gp) in slot ${emptyBuySlot + 1} — coins available: ${coinCount} (partial — full qty ${pItem.quantityToPurchase} needs ${pItem.totalPurchasePrice}gp)`);
+                bot.statusText = `Buying ${formatQty(adjustedQty)} ${pItem.itemName} for ${formatGpShort(adjustedTotal)} (${pItem.purchasePrice}ea, partial)`;
+                loop.activeBuyFlow = new BuyOfferFlow({
+                    itemName: pItem.itemName,
+                    quantity: adjustedQty,
+                    price: pItem.purchasePrice,
+                    delayFn: createDelay,
+                    debugLog: (msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); },
+                });
+                loop.phase = 'buying';
+                loop.buyAttemptedItems.clear();
+                return true;
+            }
         } else {
-            // No affordable merchable item found — log the reason.
-            let skipReason = 'none found';
+            // No affordable merchable item found — log a summary of why.
+            let occupied = 0, buyLimited = 0, frozen = 0, unaffordable = 0, unaffordablePartial = 0;
             for (const item of allMerchItems) {
                 const lower = item.itemName.trim().toLowerCase();
-                if (occupiedNames.has(lower)) { skipReason = `first item (${item.itemName}) already occupied`; continue; }
-                if (buyLimitedNames.has(lower)) { skipReason = `first item (${item.itemName}) buy-limited`; continue; }
-                if (frozenNames.has(lower)) { skipReason = `first item (${item.itemName}) buy-frozen`; continue; }
-                if (item.totalPurchasePrice > coinCount) { skipReason = `cannot afford ${item.itemName} (need ${item.totalPurchasePrice}gp, have ${coinCount}gp)`; }
-                break;
+                if (occupiedNames.has(lower)) { occupied++; continue; }
+                if (buyLimitedNames.has(lower)) { buyLimited++; continue; }
+                if (frozenNames.has(lower)) { frozen++; continue; }
+                if (item.totalPurchasePrice > coinCount) {
+                    unaffordable++;
+                    // Check if a partial buy would meet the profit threshold.
+                    if (item.purchasePrice <= coinCount) {
+                        const reducedQty = Math.min(Math.floor(coinCount / item.purchasePrice), item.limit);
+                        if (reducedQty > 0 && reducedQty * item.profitMargin >= 15000) {
+                            unaffordablePartial++;
+                        }
+                    }
+                    continue;
+                }
             }
-            debugLog(bot, `Auto: no merchable item to buy — reason: ${skipReason}`);
+            debugLog(bot, `Auto: no merchable item to buy — ${occupied} occupied, ${buyLimited} buy-limited, ${frozen} frozen, ${unaffordable} unaffordable (${unaffordablePartial} eligible for partial but below threshold or filtered) — coins=${coinCount}`);
         }
 
         loop.buyAttemptedItems.clear();
@@ -1426,6 +1652,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                         itemName: slot.itemName,
                         progress: slot.progress,
                         reason: 'frozen swap-out',
+                        category: 'swap' as AbortCategory,
                         etaMin: swapMerch ? swapMerch.purchaseEtaMinutes : (swapAbortEntry?.purchaseEtaMinutes ?? 0),
                         requestedQty: slot.itemQuantity,
                         price: swapAbortEntry?.buyPrice ?? 0,
@@ -1487,4 +1714,6 @@ export const resetAutoLoop = (bot: StarkMercher): void => {
     // time), the last-active-account fallback is used.
     loop.buyFreezeUntil = loadBuyFreeze(bot, resolveFreezeAccountName(bot));
     loop.failureCounters = {};
+    loop.lastGeOpenDispatchMs = 0;
+    loop.lastCollectDispatchMs = 0;
 };

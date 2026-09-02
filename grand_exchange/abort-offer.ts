@@ -157,7 +157,7 @@ export class AbortOfferFlow {
         }
         const state = getOfferSlotState(this.slotIndex);
         this.log(`Slot ${this.slotIndex + 1}: ${state.type} ${state.itemName ?? 'unknown'} (qty ${state.itemQuantity})`);
-        this.computeDelay(1, 35, 5);
+        this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
@@ -168,7 +168,7 @@ export class AbortOfferFlow {
         if (!clickOfferSlot(this.slotIndex)) {
             return this.waitTick();
         }
-        this.computeDelay(2, 35, 5);
+        this.computeDelay(2, 30, 4);
         this.advance();
         return true;
     }
@@ -179,7 +179,7 @@ export class AbortOfferFlow {
             return this.waitTick();
         }
         this.log('Detail screen open');
-        this.computeDelay(1, 35, 5);
+        this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
@@ -190,7 +190,7 @@ export class AbortOfferFlow {
         if (!clickAbortOffer()) {
             return this.waitTick();
         }
-        this.computeDelay(2, 35, 5);
+        this.computeDelay(2, 30, 4);
         this.advance();
         return true;
     }
@@ -203,7 +203,7 @@ export class AbortOfferFlow {
         const aborted = isOfferAborted();
         if (aborted === true) {
             this.log('Abort confirmed — status text changed');
-            this.computeDelay(1, 35, 5);
+            this.computeDelay(1, 30, 4);
             this.advance();
             return true;
         }
@@ -215,7 +215,7 @@ export class AbortOfferFlow {
             this.step = 6;
             this.waitTicks = 0;
             this.reattempts = 0;
-            this.computeDelay(2, 35, 5);
+            this.computeDelay(2, 30, 4);
             this.advance();
             return true;
         }
@@ -228,7 +228,7 @@ export class AbortOfferFlow {
         if (!clickBack()) {
             return this.waitTick();
         }
-        this.computeDelay(2, 35, 5);
+        this.computeDelay(2, 30, 4);
         this.advance();
         return true;
     }
@@ -239,7 +239,7 @@ export class AbortOfferFlow {
             return this.waitTick();
         }
         this.log('Main GE screen visible');
-        this.computeDelay(1, 35, 5);
+        this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
@@ -250,7 +250,7 @@ export class AbortOfferFlow {
         if (!clickCollectToInventory()) {
             return this.waitTick();
         }
-        this.computeDelay(2, 35, 5);
+        this.computeDelay(2, 30, 4);
         this.advance();
         return true;
     }
@@ -271,7 +271,7 @@ export class AbortOfferFlow {
         this.log(`Slot ${this.slotIndex + 1} is now empty — abort flow complete`);
         // Add a final delay so the next tick has a grace period for the
         // game state to fully settle before the main loop checks state.
-        this.computeDelay(1, 35, 5);
+        this.computeDelay(1, 30, 4);
         this.advance();
         return false;
     }

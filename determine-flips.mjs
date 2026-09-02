@@ -500,6 +500,16 @@ const validateSalePrice = (itemData) => {
 
 const clampPrices = (itemData) => {
     itemData.purchasePrice = clampPrice(itemData.purchasePrice, itemData.twoHourAverageHourlyPurchasePrice);
+    // Clamp rawSalePrice too — calculateSalePrice() is called AFTER
+    // clampPrices() in the second pass and recomputes salePrice from
+    // rawSalePrice, so an unclamped rawSalePrice (e.g. a low-volume 5m
+    // avgHighPrice spike that bypassed the 5m-vs-1h spike filter) would
+    // overwrite the clamped salePrice with the spiked value. This was the
+    // root cause of the Rune platebody 48,190gp sell price (market ~38,400).
+    itemData.rawSalePrice = clampPrice(itemData.rawSalePrice, itemData.twoHourAverageHourlySalePrice);
+    // Clamp lowballBasePrice so applyLowball() (also called after
+    // clampPrices) doesn't bypass the clamp via the stored base price.
+    itemData.lowballBasePrice = clampPrice(itemData.lowballBasePrice ?? itemData.purchasePrice, itemData.twoHourAverageHourlyPurchasePrice);
     itemData.salePrice = clampPrice(itemData.salePrice, itemData.twoHourAverageHourlySalePrice);
 };
 
@@ -861,7 +871,7 @@ const calculateEtas = (itemData) => {
 };
 
 const PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD = 20000 // Minimum profit per hour an item could make before being filtered
-const ROI_MINIMUM_PERCENTAGE_THRESHOLD = 1; // Minimum R.O.I %
+const ROI_MINIMUM_PERCENTAGE_THRESHOLD = 0.5; // Minimum R.O.I % — lowered from 1% so high-volume thin-margin items (e.g. Steel cannonball) that pass the profit-per-slot-hour gate aren't rejected by a proxy metric
 const calculateProfitability = (itemData) => {
     if (!itemData.turnoverEtaMinutes || itemData.turnoverEtaMinutes <= 0) {
         actualProfitPerSlotHourFiltered++;
@@ -1176,13 +1186,14 @@ async function getMerchableItems() {
     const yellow = `\x1b[33m`;
     const magenta = `\x1b[35m`;
     const cyan = `\x1b[36m`;
+    const white = `\x1b[37m`;
 
     console.log('-------------------------------------------------------------------------------------------------------------------------------------------------------------');
     for (const itemData of merchableItems.slice(0, MAX_RESULTS)) {
         // console.log(JSON.stringify(itemData))
         console.log(
-            `${magenta}[${itemData.itemName.toUpperCase()}]${normal} | ` +
-            // `${magenta}[${itemData.itemName.toUpperCase()}]${normal} ${yellow}[${itemData.itemId}]${normal} | ${bold}LIMIT:${normal} ${green}[${itemData.limit}]${normal} | ` +
+            `${white}[${itemData.itemName.toUpperCase()}]${normal} | ` +
+            // `${white}[${itemData.itemName.toUpperCase()}]${normal} ${yellow}[${itemData.itemId}]${normal} | ${bold}LIMIT:${normal} ${green}[${itemData.limit}]${normal} | ` +
             `${bold}BUY:${normal} ${cyan}${itemData.quantityToPurchase}${normal} ${green}[${itemData.purchasePrice.toLocaleString()}gp]${normal} ${yellow}(${(itemData.totalPurchasePrice).toLocaleString()}gp)${normal} | ` +
             `${bold}SELL:${normal} ${green}[${itemData.salePrice.toLocaleString()}gp]${normal} | ` +
             `${bold}PROFIT:${normal} ${green}[${itemData.profitMargin.toLocaleString()}gp]${normal} | ` +

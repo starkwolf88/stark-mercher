@@ -10,10 +10,15 @@
 //   setDelayProfileForAccount('accountName');  // once at startup
 //   const ticks = createDelay(1, 50);          // 1 tick base, 50% humanise
 //
-// The profile is deterministic from the account name (same djb2/mulberry32
-// pattern as typing-profile.ts), so the same account always gets the same
-// behavioural skew.
+// Profiles are loaded from humanisation-profiles.json (bundled at build time).
+// If the account name is listed there, its hardcoded profile is used. Otherwise
+// a profile is generated deterministically from the account name (same
+// djb2/mulberry32 pattern as typing-profile.ts), so the same account always
+// gets the same behavioural skew.
 // ============================================================================
+
+// Import hardcoded profiles — esbuild bundles the JSON at build time.
+import hardcodedProfiles from '../humanisation-profiles.json';
 
 // --- Profile ---------------------------------------------------------------
 export interface DelayProfile {
@@ -115,6 +120,13 @@ export const setDelayProfile = (profile: DelayProfile): void => {
 };
 
 export const setDelayProfileForAccount = (accountName: string): DelayProfile => {
+    // Check hardcoded profiles first — these are manually curated per account.
+    const hardcoded = (hardcodedProfiles as Record<string, DelayProfile>)[accountName];
+    if (hardcoded) {
+        activeProfile = hardcoded;
+        return hardcoded;
+    }
+    // Fall back to deterministic generation from the account name.
     const profile = generateDelayProfile(accountName);
     activeProfile = profile;
     return profile;

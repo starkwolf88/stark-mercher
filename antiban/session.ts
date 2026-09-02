@@ -107,8 +107,9 @@ const dumpStateOnLogout = (bot: StarkMercher): void => {
     } else {
         titan.logf('[Stark Mercher] Abort history for %s (%d entries):', accountName, aborts.aborts.length);
         for (const a of aborts.aborts) {
-            titan.logf('[Stark Mercher]   %s: %s req=%d filled=%d, elapsed=%.1fmin eta=%.1fmin, price=%d, reason="%s", date=%s',
-                a.item, a.type, a.requestedQty, a.filledQty, a.elapsedMin, a.etaMin, a.price, a.reason, a.date);
+            const cat = a.category ?? 'unknown';
+            titan.logf('[Stark Mercher]   [%s] %s: %s req=%d filled=%d, elapsed=%s eta=%s, price=%d, reason="%s", date=%s',
+                cat, a.item, a.type, a.requestedQty, a.filledQty, a.elapsedMin.toFixed(1) + 'min', a.etaMin.toFixed(1) + 'min', a.price, a.reason, a.date);
         }
         titan.logf('[Stark Mercher] Abort history dump complete.');
     }
@@ -232,10 +233,13 @@ function sampleShortBreakDuration(bot: StarkMercher): number {
 // When the auto-loop goes idle with all slots occupied, it computes the
 // minimum remaining time until the next action on any slot (earlier of
 // completion or stale-abort threshold) and stores it in bot.nextActionEtaMin.
-// This function converts that hint into a break duration, clamped to
-// 2–10 min with ±15% jitter so the return isn't precisely at the ETA.
+// This function converts that hint into a break duration. We target 50% of
+// the ETA so the bot can check if anything bought/sold quicker than expected,
+// with ±15% jitter so the return isn't precisely predictable. A randomized
+// 1–2 min floor prevents anti-ban-unfriendly very short breaks; the 10 min
+// ceiling ensures we return promptly if items buy quicker than expected.
 // Falls back to sampleShortBreakDuration() when no ETA data is available.
-const ETA_BREAK_FLOOR_MIN = 2;
+const ETA_BREAK_RATIO = 0.5; // return at 50% of ETA
 const ETA_BREAK_CEILING_MIN = 10;
 const ETA_BREAK_JITTER = 0.15; // ±15%
 
@@ -245,13 +249,14 @@ function sampleEtaBasedBreakDuration(bot: StarkMercher): number {
         return sampleShortBreakDuration(bot);
     }
 
-    // Apply ±15% jitter so we don't return at the exact ETA second.
+    // Target 50% of the ETA so we can check for early completions.
+    // Apply ±15% jitter so we don't return at a precisely predictable time.
     const jitterMultiplier = 1 + (Math.random() * 2 - 1) * ETA_BREAK_JITTER;
-    let durationMin = etaMin * jitterMultiplier;
+    let durationMin = etaMin * ETA_BREAK_RATIO * jitterMultiplier;
 
-    // Clamp to 2–10 min. The floor prevents anti-ban-unfriendly short breaks;
-    // the ceiling ensures we return promptly if items buy quicker than expected.
-    durationMin = Math.max(ETA_BREAK_FLOOR_MIN, Math.min(ETA_BREAK_CEILING_MIN, durationMin));
+    // Randomized 1–2 min floor prevents anti-ban-unfriendly very short breaks.
+    const floorMin = sampleInt(1, 2);
+    durationMin = Math.max(floorMin, Math.min(ETA_BREAK_CEILING_MIN, durationMin));
 
     return Math.round(durationMin) * MS_PER_MINUTE;
 }

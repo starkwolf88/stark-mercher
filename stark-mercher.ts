@@ -1,13 +1,9 @@
 /// <reference path="./titan-plugin-sdk.d.ts" />
 import { debug } from './general/debug.js';
 import { onEnable, terminate } from './general/lifecycle.js';
-import { setAction, shouldWait } from './general/timing.js';
+import { shouldWait } from './general/timing.js';
 import { sanityCheckState } from './general/state.js';
-import { BuyOfferFlow, AbortOfferFlow, SellOfferFlow } from './grand_exchange/index.js';
-import { getOfferSlotStateWithProgress, offerSlotCount, auditGeState } from './grand_exchange/widgets.js';
-import { setDelayProfileForAccount, createDelay, getActiveDelayProfile } from './antiban/humanised-delay.js';
-import { setClickJitterProfile, generateClickJitterProfile, setClickJitterDebugLog } from './antiban/click-jitter.js';
-import { setTypingMistakeProfileForAccount, setTypingMistakeDebugLog } from './input/typing-mistakes.js';
+import { auditGeState } from './grand_exchange/widgets.js';
 import { autoLoopTick, createAutoLoopState, resetAutoLoop, type AutoLoopState } from './grand_exchange/auto-loop.js';
 import { breakStep, wallClockStep, resetBreakState, saveBreakState, initSessionProfile, markNightlyBreakFinished, resetHop, forceHop, shouldPauseForHopBoundary } from './antiban/session.js';
 import { resetLoginState, loginStep } from './antiban/login.js';
@@ -45,29 +41,6 @@ export class StarkMercher extends titan.Plugin {
     currentAction: string | null = null;
     lastAction: string | null = null;
     lastActionTime = 0;
-
-    // --- One-shot buy-offer test ---
-    // Click "Run Buy Test" in the config UI to start a single buy offer
-    // using the configured test item/qty/price. The bot idles by default;
-    // the button sets buyTestRequested, the flow starts on the next tick,
-    // and the bot returns to idle when the flow finishes.
-    buyOfferTest: BuyOfferFlow | null = null;
-    buyTestRequested = false;
-
-    // --- One-shot abort-offer test ---
-    // Click "Run Abort Test" to abort the offer in the configured slot.
-    // The bot idles by default; the button sets abortTestRequested, the
-    // flow starts on the next tick, and the bot returns to idle when done.
-    abortOfferTest: AbortOfferFlow | null = null;
-    abortTestRequested = false;
-
-    // --- One-shot sell-offer test ---
-    // Click "Run Sell Test" to place a sell offer using the configured
-    // test item/qty/price. The bot idles by default; the button sets
-    // sellTestRequested, the flow starts on the next tick, and the bot
-    // returns to idle when done.
-    sellOfferTest: SellOfferFlow | null = null;
-    sellTestRequested = false;
 
     // --- Startup audit ---
     // On script start (onEnable), we audit the GE state to determine if
@@ -187,27 +160,26 @@ export class StarkMercher extends titan.Plugin {
     // plugin_settings.json, and plugin-side .value writes are not marked
     // dirty for disk persistence. On client restart, the cache is empty
     // and must be reconstructed from live GE state (reverse reconciliation
-    // in auto-loop.ts Step 2b). This setting is visible so you can
-    // manually copy the JSON out before closing the client and paste it
-    // back in after restarting to preserve offer metadata across restarts.
+    // in auto-loop.ts Step 2b). Hidden because the Titan settings UI truncates
+    // string fields at 4095 chars and manual backup via the settings panel is
+    // unreliable for larger caches.
     offerCacheSetting: titan.Setting<string> = this.stringSetting({
         key: 'offerCache',
-        name: 'Offer cache (manual backup)',
+        name: 'Offer cache (hidden)',
         default: '{}',
-        hidden: false,
+        hidden: true,
     });
 
-    // --- Daily profit setting (visible for manual backup) ---
+    // --- Daily profit setting (hidden) ---
     // Stores per-account daily profit as JSON. Keyed by account name.
     // Each entry has { dayStartedAt, profit }. Day rollover is handled by
     // comparing dayStartedAt to the current day's midnight on read/write.
     // Same persistence limitation as offerCacheSetting — hot reload only.
-    // Visible so you can manually copy/paste the JSON across client restarts.
     dailyProfitSetting: titan.Setting<string> = this.stringSetting({
         key: 'dailyProfit',
-        name: 'Daily profit (manual backup)',
+        name: 'Daily profit (hidden)',
         default: '{}',
-        hidden: false,
+        hidden: true,
     });
 
     // --- Hidden hop state setting ---
@@ -262,33 +234,32 @@ export class StarkMercher extends titan.Plugin {
         hidden: true,
     });
 
-    // --- Buy-freeze setting (visible for manual backup) ---
+    // --- Buy-freeze setting (hidden) ---
     // Stores per-account buy-freeze state as JSON. Keyed by account name,
     // each value is a map of lowercase item name -> freeze-until timestamp
     // (ms). Survives hot reloads so a buy freeze applied after aborting a
     // stale buy offer is not lost on plugin toggle.
     // Same persistence limitation as offerCacheSetting — hot reload only.
-    // Visible so you can manually copy/paste the JSON across client restarts.
     buyFreezeSetting: titan.Setting<string> = this.stringSetting({
         key: 'buyFreeze',
-        name: 'Buy freeze (manual backup)',
+        name: 'Buy freeze (hidden)',
         default: '{}',
-        hidden: false,
+        hidden: true,
     });
 
-    // --- Abort history setting (visible for manual backup) ---
+    // --- Abort history setting (hidden) ---
     // Stores per-account abort history as JSON. Each entry records an
     // aborted buy or sell offer: item, type, requested/filled qty, reason,
-    // elapsed minutes, original ETA, price, and timestamp. This is the key
-    // diagnostic for low overnight profit — aborted 0-fill buys represent
-    // wasted time and slot occupancy that merch history doesn't capture.
+    // category ('eta', 'swap', or 'config'), elapsed minutes, original ETA,
+    // price, and timestamp. This is the key diagnostic for low overnight
+    // profit — aborted 0-fill buys represent wasted time and slot occupancy
+    // that merch history doesn't capture.
     // Same persistence limitation as offerCacheSetting — hot reload only.
-    // Visible so you can manually copy/paste the JSON across client restarts.
     abortHistorySetting: titan.Setting<string> = this.stringSetting({
         key: 'abortHistory',
-        name: 'Abort history (manual backup)',
+        name: 'Abort history (hidden)',
         default: '{}',
-        hidden: false,
+        hidden: true,
     });
 
     // --- Overlay HUD registration ---
@@ -322,76 +293,22 @@ export class StarkMercher extends titan.Plugin {
         },
     });
 
-    // --- Auto / Manual mode toggle ---
-    // 0 = Manual Test (idle, respond to test buttons only)
-    // 1 = Auto Merch (run the automated merching loop)
+    // --- Paused / Auto Merch mode toggle ---
+    // 0 = Paused (no script logic runs at all — no login, breaks, hops, or
+    //   merching. The overlay still renders so the user can switch modes.)
+    // 1 = Auto Merch (run the full automated merching loop: login, breaks,
+    //   hops, GE actions.)
+    // Persists across hot reloads. New clients default to Paused so the bot
+    // doesn't start merching until the user explicitly switches to Auto Merch.
     autoMode: titan.Setting<number> = this.comboSetting({
         key: 'autoMode',
         name: 'Mode',
         default: 0,
         choices: [
-            { value: 0, label: 'Manual Test' },
+            { value: 0, label: 'Paused' },
             { value: 1, label: 'Auto Merch' },
         ],
     });
-
-    runBuyTest: titan.Setting<void> = this.buttonSetting({
-        key: 'runBuyTest',
-        name: 'Run Buy Test',
-        position: -1,
-        onClick: () => {
-            if (this.buyOfferTest) {
-                titan.log('[Stark Mercher] Buy test already in progress.');
-                return;
-            }
-            this.buyTestRequested = true;
-            titan.log('[Stark Mercher] Buy test requested — starting next tick.');
-        },
-    });
-
-    // --- Abort test button ---
-    // Click to abort the offer in the configured slot (1-8).
-    runAbortTest: titan.Setting<void> = this.buttonSetting({
-        key: 'runAbortTest',
-        name: 'Run Abort Test',
-        position: -1,
-        onClick: () => {
-            if (this.abortOfferTest) {
-                titan.log('[Stark Mercher] Abort test already in progress.');
-                return;
-            }
-            this.abortTestRequested = true;
-            titan.log('[Stark Mercher] Abort test requested — starting next tick.');
-        },
-    });
-
-    // --- Abort slot setting ---
-    // Which slot (1-8) to abort.
-    abortSlot: titan.Setting<string> = this.stringSetting({
-        key: 'abortSlot',
-        name: 'Abort slot (1-8)',
-        default: '1',
-    });
-
-    // --- Sell test button ---
-    // Click to place a sell offer using the configured test item/qty/price.
-    runSellTest: titan.Setting<void> = this.buttonSetting({
-        key: 'runSellTest',
-        name: 'Run Sell Test',
-        position: -1,
-        onClick: () => {
-            if (this.sellOfferTest) {
-                titan.log('[Stark Mercher] Sell test already in progress.');
-                return;
-            }
-            this.sellTestRequested = true;
-            titan.log('[Stark Mercher] Sell test requested — starting next tick.');
-        },
-    });
-
-    // --- Sell test parameters ---
-    // Reuses the same item name, quantity, and price settings as the buy test.
-    // The item must be in the inventory for the sell flow to work.
 
     // --- Log cache data button ---
     // Click to dump the current account's offer cache to the log. Useful for
@@ -485,8 +402,9 @@ export class StarkMercher extends titan.Plugin {
             } else {
                 titan.logf('[Stark Mercher] Abort history for %s (%d entries):', accountName, aborts.aborts.length);
                 for (const a of aborts.aborts) {
-                    titan.logf('[Stark Mercher]   %s: %s req=%d filled=%d, elapsed=%.1fmin eta=%.1fmin, price=%d, reason="%s", date=%s',
-                        a.item, a.type, a.requestedQty, a.filledQty, a.elapsedMin, a.etaMin, a.price, a.reason, a.date);
+                    const cat = a.category ?? 'unknown';
+                    titan.logf('[Stark Mercher]   [%s] %s: %s req=%d filled=%d, elapsed=%s eta=%s, price=%d, reason="%s", date=%s',
+                        cat, a.item, a.type, a.requestedQty, a.filledQty, a.elapsedMin.toFixed(1) + 'min', a.etaMin.toFixed(1) + 'min', a.price, a.reason, a.date);
                 }
                 titan.logf('[Stark Mercher] Abort history dump complete.');
             }
@@ -546,23 +464,6 @@ export class StarkMercher extends titan.Plugin {
         },
     });
 
-    // --- Configurable test parameters ---
-    testItemName: titan.Setting<string> = this.stringSetting({
-        key: 'testItemName',
-        name: 'Test item name',
-        default: 'Air rune',
-    });
-    testItemQty: titan.Setting<string> = this.stringSetting({
-        key: 'testItemQty',
-        name: 'Test quantity',
-        default: '2',
-    });
-    testItemPrice: titan.Setting<string> = this.stringSetting({
-        key: 'testItemPrice',
-        name: 'Test price (each)',
-        default: '5',
-    });
-
     // --- Debug logging toggle ---
     logDebug: titan.Setting<boolean> = this.boolSetting({
         key: 'logDebug',
@@ -619,68 +520,12 @@ export class StarkMercher extends titan.Plugin {
         onClick: () => { forceHop(this); },
     });
 
-    // --- Slot check buttons (1-8) ---
-    // Each button logs the full state of that GE offer slot.
-    checkSlot1: titan.Setting<void> = this.buttonSetting({
-        key: 'checkSlot1', name: 'Check Slot 1', position: -1,
-        onClick: () => this.logSlotState(0),
-    });
-    checkSlot2: titan.Setting<void> = this.buttonSetting({
-        key: 'checkSlot2', name: 'Check Slot 2', position: -1,
-        onClick: () => this.logSlotState(1),
-    });
-    checkSlot3: titan.Setting<void> = this.buttonSetting({
-        key: 'checkSlot3', name: 'Check Slot 3', position: -1,
-        onClick: () => this.logSlotState(2),
-    });
-    checkSlot4: titan.Setting<void> = this.buttonSetting({
-        key: 'checkSlot4', name: 'Check Slot 4', position: -1,
-        onClick: () => this.logSlotState(3),
-    });
-    checkSlot5: titan.Setting<void> = this.buttonSetting({
-        key: 'checkSlot5', name: 'Check Slot 5', position: -1,
-        onClick: () => this.logSlotState(4),
-    });
-    checkSlot6: titan.Setting<void> = this.buttonSetting({
-        key: 'checkSlot6', name: 'Check Slot 6', position: -1,
-        onClick: () => this.logSlotState(5),
-    });
-    checkSlot7: titan.Setting<void> = this.buttonSetting({
-        key: 'checkSlot7', name: 'Check Slot 7', position: -1,
-        onClick: () => this.logSlotState(6),
-    });
-    checkSlot8: titan.Setting<void> = this.buttonSetting({
-        key: 'checkSlot8', name: 'Check Slot 8', position: -1,
-        onClick: () => this.logSlotState(7),
-    });
-
-    logSlotState(index: number) {
-        const max = offerSlotCount();
-        if (index >= max) {
-            titan.logf('[Stark Mercher] Slot %d: not available on this world (max %d slots)', index + 1, max);
-            return;
-        }
-        const s = getOfferSlotStateWithProgress(index);
-        if (s.type === 'empty') {
-            titan.logf('[Stark Mercher] Slot %d: Empty', index + 1);
-            return;
-        }
-        titan.logf('[Stark Mercher] Slot %d: %s | %s | qty %d | %s | %s | %d%%',
-            index + 1,
-            s.type,
-            s.itemName ?? 'unknown item',
-            s.itemQuantity,
-            s.priceText ?? 'no price',
-            s.status,
-            Math.round(s.progress * 100),
-        );
-    }
-
     // runStartupAudit()
-    // Called on the first tick after enable (or after a tick-reset). Audits
-    // the GE state to determine if a buy-offer flow was in progress. If the
-    // audit finds a recoverable state and the user has test parameters set,
-    // it resumes the flow from the correct step.
+    // Called on the first tick after enable (or after a tick-reset), but only
+    // when in Auto Merch mode (Paused mode returns before the audit runs).
+    // Audits the GE state and logs active slots for visibility. If a GE
+    // sub-screen (offer config / search / price prompt) is open, the auto-loop
+    // will close it with Escape on the next tick.
     runStartupAudit() {
         const audit = auditGeState();
         titan.logf('[Stark Mercher] Startup audit: screen=%s, geOpen=%s, slots=%s',
@@ -691,7 +536,7 @@ export class StarkMercher extends titan.Plugin {
             return;
         }
 
-        // Check if any slot has an active buy offer — log it for visibility.
+        // Check if any slot has an active offer — log it for visibility.
         for (let i = 0; i < audit.slots.length; i++) {
             const s = audit.slots[i];
             if (s.type === 'buy' || s.type === 'sell') {
@@ -700,55 +545,18 @@ export class StarkMercher extends titan.Plugin {
             }
         }
 
-        // If we're on the offer config screen or search/price prompt, try to
-        // resume a buy-offer flow using the configured test parameters.
-        // In Auto Merch mode, the item being bought came from merchableItems.json,
-        // not the test settings — resuming with test parameters would place the
-        // wrong offer. Instead, skip the resume and let the auto-loop close the
-        // sub-screen with Escape on the next tick.
+        // If a GE sub-screen is open (offer config / search / price prompt),
+        // the auto-loop will close it with Escape on the next tick. No flow
+        // resume is attempted — the auto-loop reconciles from cache state.
         if (audit.screen === 'offer_config' || audit.screen === 'search_prompt' || audit.screen === 'price_prompt') {
-            if (this.autoMode.value === 1) {
-                titan.log('[Stark Mercher] Startup audit: GE sub-screen open in Auto Merch mode — skipping resume (auto-loop will close it)');
-                return;
-            }
-            const itemName = this.testItemName.value.trim();
-            const quantity = parseInt(this.testItemQty.value, 10);
-            const price = parseInt(this.testItemPrice.value, 10);
-            if (!itemName || !Number.isFinite(quantity) || quantity < 1 || !Number.isFinite(price) || price < 1) {
-                titan.log('[Stark Mercher] Startup audit: GE config screen open but test parameters invalid — idling');
-                return;
-            }
-            titan.logf('[Stark Mercher] Startup audit: resuming buy-offer flow for %ix %s @ %igp', quantity, itemName, price);
-            // Generate delay/jitter profiles for humanised timing.
-            const playerName = titan.state.client.localPlayer?.name;
-            if (playerName) {
-                setDelayProfileForAccount(playerName);
-                setTypingMistakeProfileForAccount(playerName);
-            }
-            const delayProfile = getActiveDelayProfile();
-            if (delayProfile) setClickJitterProfile(generateClickJitterProfile(delayProfile));
-            setClickJitterDebugLog((msg: string) => { if (this.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
-            setTypingMistakeDebugLog((msg: string) => { if (this.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
-            const flow = new BuyOfferFlow({
-                itemName, quantity, price,
-                delayFn: createDelay,
-                debugLog: (msg: string) => { if (this.logDebug.value) titan.logf('[Stark Mercher] %s', msg); },
-            });
-            flow.resumeFromState(audit);
-            if (flow.status === 'in_progress') {
-                this.buyOfferTest = flow;
-            } else if (flow.status === 'done') {
-                titan.log('[Stark Mercher] Startup audit: offer already placed — nothing to resume');
-            } else if (flow.status === 'failed') {
-                titan.logf('[Stark Mercher] Startup audit: resume failed — %s', flow.error);
-            }
+            titan.log('[Stark Mercher] Startup audit: GE sub-screen open — auto-loop will close it');
         }
     }
 
     onEnable() {
         onEnable(this);
         this.isHudActive = true;
-        this.statusText = 'Idle';
+        this.statusText = this.autoMode.value === 0 ? 'Paused' : 'Idle';
     }
     onDisable() {
         this.isHudActive = false;
@@ -758,6 +566,20 @@ export class StarkMercher extends titan.Plugin {
         }
     }
     onSettingChanged(key: string) {
+        // When Mode is switched, update the status text and re-run the startup
+        // audit on the next tick so the auto-loop reconciles from current GE
+        // state (the audit is skipped while Paused, so switching to Auto Merch
+        // needs it to run).
+        if (key === 'autoMode') {
+            if (this.autoMode.value === 0) {
+                this.statusText = 'Paused';
+                titan.log('[Stark Mercher] Mode switched to Paused — all script logic stopped.');
+            } else {
+                this.statusText = 'Idle';
+                this.startupAuditDone = false;
+                titan.log('[Stark Mercher] Mode switched to Auto Merch — resuming on next tick.');
+            }
+        }
         // When Do Not Sleep is toggled ON, clear any pre-sampled nightly break
         // planning so the next break is sampled as a short break, not a
         // nightly break with a stale duration. The breakStep() and logged-out
@@ -774,6 +596,10 @@ export class StarkMercher extends titan.Plugin {
     }
     onGameTick = (tick: number) => {
         if (this.terminated) return;
+        // Paused mode: no script logic runs at all. The overlay still renders
+        // (it's a separate render callback) so the user can see the status and
+        // switch to Auto Merch.
+        if (this.autoMode.value === 0) return;
         // Duplicate-tick guard: the SDK can fire onGameTick more than once
         // per tick in some edge cases.
         if (this.lastActionTick === tick) return;
@@ -802,6 +628,11 @@ export class StarkMercher extends titan.Plugin {
             this.autoLoop.buyAttemptedItems.clear();
             this.autoLoop.cacheReconciled = false;
             this.autoLoop.needsPostLoginCleanup = true;
+            // Reset the GE-open wall-clock cooldown so the first GE-open
+            // click after a tick reset goes through immediately.
+            this.autoLoop.lastGeOpenDispatchMs = 0;
+            // Reset the collect wall-clock cooldown for the same reason.
+            this.autoLoop.lastCollectDispatchMs = 0;
             // Clear idle-for-break flags — the auto-loop's idle state from
             // before the disconnect is no longer valid.
             this.loopIdleForBreak = false;
@@ -819,8 +650,8 @@ export class StarkMercher extends titan.Plugin {
             this.runStartupAudit();
         }
 
-        // Always tick so the buy-test button works without toggling isRunning.
-        // When idle (no request, no active flow) tickLogic just returns.
+        // Run the auto-merch tick logic. (Only reached in Auto Merch mode —
+        // Paused mode returns at the top of onGameTick.)
         try {
             gameTick(this, tick);
         } catch (e) {
@@ -830,9 +661,11 @@ export class StarkMercher extends titan.Plugin {
     };
 
     // onMainLoop fires even on login/title screens — this is where we
-    // dispatch login/logout while the player is logged out.
+    // dispatch login/logout while the player is logged out. Skipped entirely
+    // in Paused mode (no login, no break timer, no logout).
     onMainLoop = () => {
         if (this.terminated) return;
+        if (this.autoMode.value === 0) return;
         try {
             wallClockStep(this);
         } catch (e) {
@@ -840,9 +673,11 @@ export class StarkMercher extends titan.Plugin {
         }
     };
 
-    // onGameStateChanged — detect unexpected logouts, nightly wake, and hop completion
+    // onGameStateChanged — detect unexpected logouts, nightly wake, and hop completion.
+    // Skipped in Paused mode — no logout detection, no nightly wake, no hop completion.
     onGameStateChanged = (event: titan.GameStateChangedEvent) => {
         if (this.terminated) return;
+        if (this.autoMode.value === 0) return;
         // Detect unexpected logout (not a bot-initiated break)
         if (event.newState !== titan.LoginGameState.LoggedIn &&
             event.newState !== titan.LoginGameState.HoppingWorld &&
@@ -866,9 +701,11 @@ export class StarkMercher extends titan.Plugin {
         }
     };
 
-    // onChatMessage — listen for world switcher rejection messages
+    // onChatMessage — listen for world switcher rejection messages.
+    // Skipped in Paused mode.
     onChatMessage = (event: titan.ChatMessageEvent) => {
         if (this.terminated) return;
+        if (this.autoMode.value === 0) return;
         onHopChatMessage(this, event);
     };
 }
@@ -938,186 +775,9 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
     // Throttle: block dispatch while the previous action's delay is pending.
     if (shouldWait(bot)) return;
 
-    // --- One-shot buy-offer test (button-triggered) ---
-    // Idle by default. When "Run Buy Test" is clicked, buyTestRequested is
-    // set and the flow starts on the next ready tick. When the flow finishes
-    // the bot returns to idle — click the button again to run another.
-    if (bot.buyOfferTest) {
-        const flow = bot.buyOfferTest;
-        if (flow.status === 'in_progress') {
-            bot.statusText = `Buy test: ${flow.itemName} - x${flow.quantity} - ${flow.price}gp each`;
-            if (flow.tick()) {
-                setAction(bot, 'buy_offer', flow.lastDelay); // humanised delay from the flow
-            }
-            return;
-        }
-        if (flow.status === 'done') {
-            titan.log('[Stark Mercher] Buy-offer test complete — back to idle.');
-        } else if (flow.status === 'failed') {
-            titan.logf('[Stark Mercher] Buy-offer test failed: %s', flow.error);
-        }
-        bot.buyOfferTest = null;
-        bot.statusText = 'Idle';
-        return;
-    }
-
-    // --- One-shot abort-offer test (button-triggered) ---
-    // Click "Run Abort Test" to abort the offer in the configured slot.
-    // The flow handles: click into slot → abort → wait → back → collect.
-    if (bot.abortOfferTest) {
-        const abortFlow = bot.abortOfferTest;
-        if (abortFlow.status === 'in_progress') {
-            bot.statusText = `Abort test: slot ${abortFlow.slotIndex + 1}`;
-            if (abortFlow.tick()) {
-                setAction(bot, 'abort_offer', abortFlow.lastDelay);
-            }
-            return;
-        }
-        if (abortFlow.status === 'done') {
-            titan.log('[Stark Mercher] Abort-offer test complete — back to idle.');
-        } else if (abortFlow.status === 'failed') {
-            titan.logf('[Stark Mercher] Abort-offer test failed: %s', abortFlow.error);
-        }
-        bot.abortOfferTest = null;
-        bot.statusText = 'Idle';
-        return;
-    }
-
-    // --- One-shot sell-offer test (button-triggered) ---
-    // Click "Run Sell Test" to place a sell offer using the configured
-    // test item/qty/price. The item must be in the inventory.
-    if (bot.sellOfferTest) {
-        const sellFlow = bot.sellOfferTest;
-        if (sellFlow.status === 'in_progress') {
-            bot.statusText = `Sell test: ${sellFlow.itemName} - x${sellFlow.quantity} - ${sellFlow.price}gp each`;
-            if (sellFlow.tick()) {
-                setAction(bot, 'sell_offer', sellFlow.lastDelay);
-            }
-            return;
-        }
-        if (sellFlow.status === 'done') {
-            titan.log('[Stark Mercher] Sell-offer test complete — back to idle.');
-        } else if (sellFlow.status === 'failed') {
-            titan.logf('[Stark Mercher] Sell-offer test failed: %s', sellFlow.error);
-        }
-        bot.sellOfferTest = null;
-        bot.statusText = 'Idle';
-        return;
-    }
-
-    // --- Start new flows if requested ---
-    // Only one flow can be active at a time. Check all request flags.
-
-    if (bot.buyTestRequested) {
-        bot.buyTestRequested = false;
-        const itemName = bot.testItemName.value.trim();
-        const quantity = parseInt(bot.testItemQty.value, 10);
-        const price = parseInt(bot.testItemPrice.value, 10);
-        if (!itemName) {
-            titan.log('[Stark Mercher] Test item name is empty — set it in the config UI first.');
-            return;
-        }
-        if (!Number.isFinite(quantity) || quantity < 1) {
-            titan.logf('[Stark Mercher] Test quantity invalid ("%s") — must be a positive integer.', bot.testItemQty.value);
-            return;
-        }
-        if (!Number.isFinite(price) || price < 1) {
-            titan.logf('[Stark Mercher] Test price invalid ("%s") — must be a positive integer.', bot.testItemPrice.value);
-            return;
-        }
-        // Generate the per-account delay profile from the player name so
-        // humanised delays are deterministic per account.
-        const playerName = titan.state.client.localPlayer?.name;
-        if (playerName) {
-            setDelayProfileForAccount(playerName);
-            setTypingMistakeProfileForAccount(playerName);
-        }
-        // Generate the click-jitter profile from the delay profile so click
-        // timing is also deterministic per account.
-        const delayProfile = getActiveDelayProfile();
-        if (delayProfile) setClickJitterProfile(generateClickJitterProfile(delayProfile));
-        // Route click-jitter debug logs through the same UI toggle.
-        setClickJitterDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
-        setTypingMistakeDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
-        bot.buyOfferTest = new BuyOfferFlow({
-            itemName, quantity, price,
-            delayFn: createDelay,
-            debugLog: (msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); },
-        });
-        titan.logf('[Stark Mercher] Starting buy-offer test: %ix %s @ %igp', quantity, itemName, price);
-        return;
-    }
-
-    if (bot.abortTestRequested) {
-        bot.abortTestRequested = false;
-        const slotNum = parseInt(bot.abortSlot.value, 10);
-        if (!Number.isFinite(slotNum) || slotNum < 1 || slotNum > 8) {
-            titan.logf('[Stark Mercher] Abort slot invalid ("%s") — must be 1-8.', bot.abortSlot.value);
-            return;
-        }
-        // Generate the per-account delay profile from the player name so
-        // humanised delays are deterministic per account.
-        const playerName = titan.state.client.localPlayer?.name;
-        if (playerName) {
-            setDelayProfileForAccount(playerName);
-            setTypingMistakeProfileForAccount(playerName);
-        }
-        const delayProfile = getActiveDelayProfile();
-        if (delayProfile) setClickJitterProfile(generateClickJitterProfile(delayProfile));
-        setClickJitterDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
-        setTypingMistakeDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
-        bot.abortOfferTest = new AbortOfferFlow({
-            slotIndex: slotNum - 1, // 1-based UI to 0-based index
-            delayFn: createDelay,
-            debugLog: (msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); },
-        });
-        titan.logf('[Stark Mercher] Starting abort-offer test on slot %d', slotNum);
-        return;
-    }
-
-    if (bot.sellTestRequested) {
-        bot.sellTestRequested = false;
-        const itemName = bot.testItemName.value.trim();
-        const quantity = parseInt(bot.testItemQty.value, 10);
-        const price = parseInt(bot.testItemPrice.value, 10);
-        if (!itemName) {
-            titan.log('[Stark Mercher] Sell item name is empty — set it in the config UI first.');
-            return;
-        }
-        if (!Number.isFinite(quantity) || quantity < 1) {
-            titan.logf('[Stark Mercher] Sell quantity invalid ("%s") — must be a positive integer.', bot.testItemQty.value);
-            return;
-        }
-        if (!Number.isFinite(price) || price < 1) {
-            titan.logf('[Stark Mercher] Sell price invalid ("%s") — must be a positive integer.', bot.testItemPrice.value);
-            return;
-        }
-        const playerName = titan.state.client.localPlayer?.name;
-        if (playerName) {
-            setDelayProfileForAccount(playerName);
-            setTypingMistakeProfileForAccount(playerName);
-        }
-        const delayProfile = getActiveDelayProfile();
-        if (delayProfile) setClickJitterProfile(generateClickJitterProfile(delayProfile));
-        setClickJitterDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
-        setTypingMistakeDebugLog((msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); });
-        bot.sellOfferTest = new SellOfferFlow({
-            itemName, quantity, price,
-            delayFn: createDelay,
-            debugLog: (msg: string) => { if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg); },
-        });
-        titan.logf('[Stark Mercher] Starting sell-offer test: %ix %s @ %igp', quantity, itemName, price);
-        return;
-    }
-
     // --- Auto-merch loop ---
-    // When autoMode is enabled (Auto Merch) and no manual test is active,
-    // run the automated merching loop. The loop handles: GE-open check,
-    // collect, stale offers, selling, and buying.
-    if (bot.autoMode.value === 1) {
-        autoLoopTick(bot, tick);
-        return;
-    }
-
-    // Idle — no active flows and no requests.
+    // Run the automated merching loop. The loop handles: GE-open check,
+    // collect, stale offers, selling, and buying. (Pausing is handled by the
+    // early return at the top of onGameTick, so we only get here in Auto Merch.)
+    autoLoopTick(bot, tick);
 };

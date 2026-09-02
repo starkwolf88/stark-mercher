@@ -138,6 +138,45 @@ const chanceForKind = (kind: TypingKind): number => {
 // Game ticks are ~600ms. createDelay returns tick counts.
 const TICK_MS = 600;
 
+// --- Safety watchdog -------------------------------------------------------
+// The mistake sequence uses setTimeout for the realisation delay and the
+// post-backspace gap. If the Titan runtime fails to fire a setTimeout
+// callback (observed in production: the 1800ms realisation delay never
+// fired, leaving mistakeSequenceActive=true permanently and causing the
+// buy flow to time out at step 4), this watchdog force-clears the
+// sequence after MAX_MISTAKE_DURATION_MS so isTyping() can return false
+// and the flow can recover via its normal re-attempt/fail path.
+const MAX_MISTAKE_DURATION_MS = 8000;
+let mistakeWatchdog: ReturnType<typeof setTimeout> | null = null;
+
+const clearMistakeWatchdog = (): void => {
+    if (mistakeWatchdog !== null) {
+        clearTimeout(mistakeWatchdog);
+        mistakeWatchdog = null;
+    }
+};
+
+const startMistakeWatchdog = (): void => {
+    clearMistakeWatchdog();
+    mistakeWatchdog = setTimeout(() => {
+        mistakeWatchdog = null;
+        // The sequence hasn't completed within the safety window. Force-clear
+        // the active flag so isTyping() can return false. Also set the cancel
+        // flag so any pending setTimeout chain bails out at its next check.
+        mistakeCancelled = true;
+        setMistakeSequenceActive(false);
+        debugLog(`Typing mistake: safety watchdog fired after ${MAX_MISTAKE_DURATION_MS}ms — sequence stuck, force-clearing`);
+    }, MAX_MISTAKE_DURATION_MS);
+};
+
+/** Clear the watchdog and deactivate the sequence flag. Called at every
+ *  sequence completion / abort point so the watchdog never outlives the
+ *  sequence. Safe to call when no watchdog is pending (no-op). */
+const deactivateMistakeSequence = (): void => {
+    clearMistakeWatchdog();
+    setMistakeSequenceActive(false);
+};
+
 // --- typeStringWithMistake() ------------------------------------------------
 // Wraps humanType() with an occasional wrong-character + backspace correction.
 // Returns true if typing was started (either plain or with-mistake).
@@ -179,6 +218,7 @@ export const typeStringWithMistake = (
     // part2's start). The flow's waitForTyping step polls isTyping() and must
     // not advance until the entire sequence is done.
     setMistakeSequenceActive(true);
+    startMistakeWatchdog();
     debugLog(`Typing mistake: typed '${wrongChar}' after '${part1}' (${kind}), correcting shortly`);
 
     // Phase 1: type part1 + wrongChar via humanType.
@@ -189,7 +229,7 @@ export const typeStringWithMistake = (
             if (!completed1 || mistakeCancelled) {
                 // Part1 was cancelled (e.g. user closed the prompt) or the
                 // sequence was cancelled externally. Abort.
-                setMistakeSequenceActive(false);
+                deactivateMistakeSequence();
                 if (onDone) onDone(false);
                 return;
             }
@@ -202,7 +242,7 @@ export const typeStringWithMistake = (
 
             setTimeout(() => {
                 if (mistakeCancelled) {
-                    setMistakeSequenceActive(false);
+                    deactivateMistakeSequence();
                     if (onDone) onDone(false);
                     return;
                 }
@@ -212,7 +252,7 @@ export const typeStringWithMistake = (
                 } catch (e) {
                     // If backspace fails, abort the sequence — the validation
                     // step will catch any wrong text and Escape out.
-                    setMistakeSequenceActive(false);
+                    deactivateMistakeSequence();
                     if (onDone) onDone(false);
                     return;
                 }
@@ -221,19 +261,19 @@ export const typeStringWithMistake = (
                 // Phase 4: 1-tick gap after backspace before resuming typing.
                 setTimeout(() => {
                     if (mistakeCancelled) {
-                        setMistakeSequenceActive(false);
+                        deactivateMistakeSequence();
                         if (onDone) onDone(false);
                         return;
                     }
                     // Phase 5: type the remaining part2 via humanType.
                     const started = humanType(part2, opts, (completed2) => {
-                        setMistakeSequenceActive(false);
+                        deactivateMistakeSequence();
                         if (onDone) onDone(completed2);
                     });
                     if (!started) {
                         // humanType couldn't start (e.g. another typing in
                         // progress). Clear the flag and let the caller retry.
-                        setMistakeSequenceActive(false);
+                        deactivateMistakeSequence();
                         if (onDone) onDone(false);
                     }
                 }, TICK_MS);
@@ -246,7 +286,7 @@ export const typeStringWithMistake = (
     if (!started) {
         // humanType couldn't start the first phase — clear the flag so
         // isTyping() doesn't hang. The caller will retry on the next tick.
-        setMistakeSequenceActive(false);
+        deactivateMistakeSequence();
     }
     return started;
 };
@@ -258,5 +298,5 @@ let mistakeCancelled = false;
 
 export const cancelTypingMistakeSequence = (): void => {
     mistakeCancelled = true;
-    setMistakeSequenceActive(false);
+    deactivateMistakeSequence();
 };

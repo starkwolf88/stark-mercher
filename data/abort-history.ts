@@ -28,6 +28,8 @@ import type { StarkMercher } from '../stark-mercher.js';
 
 // --- Types ------------------------------------------------------------------
 
+export type AbortCategory = 'eta' | 'swap' | 'config';
+
 export interface AbortHistoryEntry {
     /** Item name. */
     item: string;
@@ -39,6 +41,10 @@ export interface AbortHistoryEntry {
     filledQty: number;
     /** Abort reason string (stale reason, 'frozen swap-out', etc.). */
     reason: string;
+    /** Abort category: 'eta' (ETA-based stale), 'swap' (frozen swap-out),
+     *  'config' (item removed from merchableItems.json — no longer used but
+     *  kept for legacy entries). */
+    category: AbortCategory;
     /** Minutes the offer was active before the abort was triggered. */
     elapsedMin: number;
     /** Original cached ETA in minutes (for comparing actual vs expected). */

@@ -35,12 +35,6 @@ const resetState = (bot: StarkMercher) => {
     bot.actionDelay = 0;
     bot.lastAction = null;
     bot.lastActionTime = 0;
-    bot.buyOfferTest = null;
-    bot.buyTestRequested = false;
-    bot.abortOfferTest = null;
-    bot.abortTestRequested = false;
-    bot.sellOfferTest = null;
-    bot.sellTestRequested = false;
     bot.startupAuditDone = false;
     // Reset the auto-merch loop state (flows, cache handle, attempted-item sets).
     // The persisted offer cache is NOT cleared here — it survives hot reloads.

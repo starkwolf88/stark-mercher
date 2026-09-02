@@ -49,7 +49,7 @@ to decide which GE offers to place.
 | `MAX_TURNOVER_HOURS` | 2.5 | Reject items whose combined buy+sell ETA exceeds 150 minutes. |
 | `TWO_HOUR_VOLUME_BUFFER_PERCENTAGE` | 15 | Reduce 2h volume by 15% before using it for ETAs (safety margin). |
 | `PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD` | 20000 | `actualProfitPerSlotHour` must be ≥ 20k. |
-| `ROI_MINIMUM_PERCENTAGE_THRESHOLD` | 1 | `returnOnInvestmentPercentage` must be ≥ 1%. |
+| `ROI_MINIMUM_PERCENTAGE_THRESHOLD` | 0.5 | `returnOnInvestmentPercentage` must be ≥ 0.5%. Lowered from 1% so high-volume thin-margin items (e.g. Steel cannonball, ~0.83% ROI with 11k limit and ~18min turnover) that pass the profit-per-slot-hour gate aren't rejected by a proxy metric. The PPSH threshold (20k) is the real profitability gate; ROI is a secondary spread-thickness guard. |
 | `ONE_HOUR_SALE_SPIKE_*` | scale 0.5, min 10%, max 20% | Margin-aware 1h vs 7d sustained sale spike threshold. `maxSpikePct = clamp(marginPct * 0.5, 10, 20)`. Filters items whose 1h average is significantly above the 7d baseline (sustained uptrend, not transient spike). High-margin items keep the 20% cap. |
 | `THREE_HOUR_SALE_SPIKE_*` | scale 0.4, min 8%, max 15% | Margin-aware 3h vs 7d sustained sale spike threshold. Slightly tighter than 1h because a 3h sustained spike is more concerning. |
 | `FIVE_MINUTE_VS_ONE_HOUR_*_PRICE_CHANGE_*` | scale 0.4, min 2%, max 5%/10% | Margin-aware 5m vs 1h transient spike **clamp**. Instead of filtering the item, this CLAMPS the 5m price down toward the 1h average when the 5m price spikes above it by more than the threshold. This neutralises transient 5m spikes (like the Diamond's 2.3% spike) without removing the item from the pool. Downward drops are left as-is (beneficial). |
@@ -255,8 +255,20 @@ item.flipScore = item.actualProfitPerSlotHour
 return Math.round(Math.min(price, average * 1.05, average + 50000));
 ```
 
-Purchase and sale prices are capped at the 2h average plus the smaller of 5% or 50k.
-This prevents outliers from distorting profit calculations.
+`clampPrices()` clamps **four** fields against their 2h averages:
+`purchasePrice`, `rawSalePrice`, `lowballBasePrice`, and `salePrice`.
+Clamping `rawSalePrice` (not just `salePrice`) is critical because
+`calculateSalePrice()` is called **after** `clampPrices()` in the second
+pass and recomputes `salePrice = floor(rawSalePrice - saleBufferAmount)`.
+An unclamped `rawSalePrice` — e.g. a low-volume 5m avgHighPrice spike
+that bypassed the 5m-vs-1h spike filter (volume ratio < 5%) — would
+overwrite the clamped `salePrice` with the spiked value. This was the
+root cause of the Rune platebody 48,190gp sell price (market ~38,400):
+a single anomalous 5m trade set `rawSalePrice` to ~48,677, the spike
+clamp was skipped due to low relative volume, and `calculateSalePrice`
+then produced a 48,190gp sell target that would never fill. Clamping
+`lowballBasePrice` similarly prevents `applyLowball()` (also called
+after `clampPrices`) from bypassing the clamp via the stored base price.
 
 ## Staleness handling
 
