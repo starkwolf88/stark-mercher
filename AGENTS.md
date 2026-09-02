@@ -292,7 +292,21 @@ When the cache is lost after a client restart, active GE offers survive on the s
 
 ### `merchableItems.json` loading
 
-The JSON is imported at the top of `data/merchable-items.ts` and inlined by esbuild at build time. The Titan SDK has no runtime file-system API, so the data is only refreshed when the plugin is rebuilt (which Titan hot-reloads). The external `determine-flips.mjs` process updates the file every few minutes; a rebuild + hot-reload picks up the new data.
+The JSON is imported at the top of `data/merchable-items.ts` and inlined by esbuild at build time. The Titan SDK has no runtime file-system API, so the data is only refreshed when the plugin is rebuilt (which Titan hot-reloads). The external `determine-flips.mjs` process updates the file every 3 minutes; a rebuild + hot-reload picks up the new data.
+
+### Data validity safeguards
+
+`isMerchableDataValid()` in `data/merchable-items.ts` checks two safeguards before any account is logged in for merching:
+
+1. **Count safeguard**: `merchableItems.json` must have ≥ 30 items. A sudden drop below 30 indicates the Wiki API returned bad data or `determine-flips.mjs` failed mid-run (e.g. partial write, network error).
+2. **Freshness safeguard**: The newest `dataFetchedAt` across all items must be within the last 10 minutes. Since `determine-flips.mjs` runs every 3 min, data older than 10 min means the script stopped running or the Wiki API is down.
+
+Both checks run dynamically (not cached) so hot reloads pick up new JSON automatically — the bot resumes as soon as a rebuild brings valid data. When data is invalid:
+- `tryImmediateRotation()` and `selectNextAccountForLogin()` return null (no account logs in).
+- The 10-second periodic poll in `wallClockStep` reports the error in the log every 10 seconds.
+- The break-end "no eligible account" path reports the specific reason (invalid data vs. no eligible account).
+- The overlay status shows `Data Invalid` instead of the normal countdown.
+- Single-account mode is also blocked — the safeguard applies regardless of rotation.
 
 ### Auto-merch loop order
 
