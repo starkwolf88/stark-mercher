@@ -17,6 +17,7 @@
 
 import type { StarkMercher } from '../stark-mercher.js';
 import { formatUKTime } from '../antiban/session.js';
+import { isRotationEnabled, getSoonestBreakEndMs } from '../antiban/account-rotation.js';
 
 // --- Layout constants ------------------------------------------------------
 
@@ -100,6 +101,21 @@ const getStatusText = (bot: StarkMercher): string => {
     if (bot.hopResumeAtMs > 0 && Date.now() < bot.hopResumeAtMs) return 'Resuming';
     if (bot.breakPhase === 'logging_out') return 'Logging out...';
     if (bot.breakPhase === 'logged_out') {
+        // When multi-account rotation is enabled, show the soonest break-end
+        // across all accounts — this is the actual wait until the next
+        // account becomes eligible, which may be sooner than the current
+        // account's own break end.
+        if (isRotationEnabled(bot)) {
+            const soonestEnd = getSoonestBreakEndMs(bot);
+            if (soonestEnd !== Infinity && soonestEnd > Date.now()) {
+                const remainingMs = Math.max(0, soonestEnd - Date.now());
+                return `Logged Out (${fmtCountdownMs(remainingMs)})`;
+            }
+            // At least one account is eligible now (soonestEnd <= now) or
+            // has no break state (soonestEnd = 0). The rotation poll will
+            // pick it up within 10 seconds.
+            return 'Logged Out';
+        }
         if (bot.breakTargetEndMs > 0) {
             const remainingMs = Math.max(0, bot.breakTargetEndMs - Date.now());
             return `Logged Out (${fmtCountdownMs(remainingMs)})`;

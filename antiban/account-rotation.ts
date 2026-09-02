@@ -10,12 +10,16 @@
 //   1. It is outside its nightly sleep window (checked via its SessionProfile)
 //   2. Its minimum break duration has lapsed since it last logged out
 //
-// Per-account break state (lastLogoutAtMs + minBreakDurationMs) is cached in
-// a hidden JSON setting keyed by account name. This lets the bot know "has
-// this account's minimum break lapsed?" when the rotation reaches it.
+// Per-account break state (lastLogoutAtMs + minBreakDurationMs +
+// lastLoginAtMs) is cached in a hidden JSON setting keyed by account name.
+// This lets the bot know "has this account's minimum break lapsed?" and
+// "how long has it been since this account last logged in?".
 //
-// The rotation index is persisted so it survives hot reloads. Each time we
-// select an account, the index advances past it (modulo roster length).
+// Selection is time-based, not order-based: among all eligible accounts,
+// the one whose break ends soonest is selected. If multiple accounts are
+// eligible simultaneously (their break ends have all lapsed to now), the
+// one that hasn't logged in for the longest (oldest lastLoginAtMs) wins —
+// this prevents starvation of accounts that are always later in the roster.
 //
 // When the roster is empty or has a single name, the bot behaves exactly as
 // it does today — no rotation, same account relogin.
@@ -33,6 +37,12 @@ export interface AccountBreakState {
     /** Minimum break duration in ms — the account won't be logged back in
      *  until this much time has elapsed since lastLogoutAtMs. */
     minBreakDurationMs: number;
+    /** When this account last successfully logged in (wall-clock ms).
+     *  Used as a tiebreaker when multiple accounts are eligible
+     *  simultaneously — the one with the oldest lastLoginAtMs (longest
+     *  since last login) is selected to prevent starvation. 0 = never
+     *  logged in (highest priority). */
+    lastLoginAtMs: number;
 }
 
 // --- Roster parsing ---------------------------------------------------------
@@ -73,7 +83,13 @@ export function getAccountBreakState(bot: StarkMercher, accountName: string): Ac
                 if (saved && typeof saved === 'object' &&
                     typeof saved.lastLogoutAtMs === 'number' &&
                     typeof saved.minBreakDurationMs === 'number') {
-                    return saved as AccountBreakState;
+                    // lastLoginAtMs is optional for backward compat with
+                    // state saved before this field existed.
+                    return {
+                        lastLogoutAtMs: saved.lastLogoutAtMs,
+                        minBreakDurationMs: saved.minBreakDurationMs,
+                        lastLoginAtMs: typeof saved.lastLoginAtMs === 'number' ? saved.lastLoginAtMs : 0,
+                    };
                 }
             }
         }
@@ -193,14 +209,20 @@ function getUKOffsetMinutes(d: Date): number {
 
 /**
  * Select the next eligible account from the roster.
- * Starting from the current rotationIndex, iterates through the roster
- * (wrapping around) and returns the first account that:
- *   1. Is not currently sleeping (outside its nightly sleep window)
- *   2. Has no break state, OR its minimum break has lapsed
+ *
+ * Selection is time-based, not order-based:
+ *   1. Gather all non-sleeping accounts.
+ *   2. Filter to eligible accounts (break has lapsed or no break state).
+ *   3. Among eligible accounts, pick the one whose break ends soonest
+ *      (i.e. the smallest breakEndMs). This ensures the account that has
+ *      been waiting the longest gets priority.
+ *   4. If multiple accounts are eligible simultaneously (their breakEndMs
+ *      values have all lapsed to <= now), pick the one with the oldest
+ *      lastLoginAtMs (longest since last login). Accounts that have never
+ *      logged in (lastLoginAtMs = 0) get highest priority. This prevents
+ *      starvation of accounts that are always later in the roster.
  *
  * Returns null if no account is eligible (all sleeping or all on break).
- * The rotationIndex is advanced to the selected account's position + 1
- * (so the next call starts after the one we just selected).
  */
 export function selectNextAccount(bot: StarkMercher): string | null {
     const roster = getRoster(bot);
@@ -213,23 +235,75 @@ export function selectNextAccount(bot: StarkMercher): string | null {
     }
 
     const now = Date.now();
-    const startIndex = bot.rotationIndex % roster.length;
+    let bestName: string | null = null;
+    let bestBreakEndMs = Infinity;
+    let bestLastLoginAtMs = Infinity;
 
-    for (let i = 0; i < roster.length; i++) {
-        const idx = (startIndex + i) % roster.length;
-        const name = roster[idx];
+    for (const name of roster) {
+        // Skip sleeping accounts
+        if (isAccountSleeping(bot, name)) continue;
 
-        if (isAccountEligible(bot, name)) {
-            // Advance rotation index past this account
-            bot.rotationIndex = (idx + 1) % roster.length;
-            saveRotationIndex(bot, bot.rotationIndex);
-            titan.logf('[Stark Mercher] Rotation: selected account %s (index %d)', name, idx);
-            return name;
+        const breakState = getAccountBreakState(bot, name);
+        const breakEndMs = breakState
+            ? breakState.lastLogoutAtMs + breakState.minBreakDurationMs
+            : 0; // no break state → eligible now (breakEndMs = 0)
+        const lastLoginAtMs = breakState?.lastLoginAtMs ?? 0;
+
+        // Skip if break hasn't lapsed
+        if (breakEndMs > now) continue;
+
+        // This account is eligible. Pick it if:
+        //   - Its break ended sooner than the current best (it's been
+        //     waiting longer), OR
+        //   - It tied on breakEndMs (both lapsed to now) but has an older
+        //     lastLoginAtMs (longest since last login — prevents starvation).
+        const isBetter =
+            bestName === null ||
+            breakEndMs < bestBreakEndMs ||
+            (breakEndMs === bestBreakEndMs && lastLoginAtMs < bestLastLoginAtMs);
+
+        if (isBetter) {
+            bestName = name;
+            bestBreakEndMs = breakEndMs;
+            bestLastLoginAtMs = lastLoginAtMs;
         }
+    }
+
+    if (bestName) {
+        titan.logf('[Stark Mercher] Rotation: selected account %s (break ended %s, last login %s)',
+            bestName,
+            bestBreakEndMs > 0 ? new Date(bestBreakEndMs).toISOString() : 'never broke',
+            bestLastLoginAtMs > 0 ? new Date(bestLastLoginAtMs).toISOString() : 'never');
+        return bestName;
     }
 
     titan.logf('[Stark Mercher] Rotation: no eligible accounts found (all sleeping or on break)');
     return null;
+}
+
+/**
+ * Compute the soonest break-end time across all non-sleeping roster accounts.
+ * Returns the minimum breakEndMs (lastLogoutAtMs + minBreakDurationMs) among
+ * all non-sleeping accounts. Accounts with no break state contribute 0
+ * (eligible now). Returns Infinity if the roster is empty or all accounts
+ * are sleeping.
+ *
+ * Used by the overlay to show the actual wait time until the next account
+ * becomes eligible, rather than the current account's break end.
+ */
+export function getSoonestBreakEndMs(bot: StarkMercher): number {
+    const roster = getRoster(bot);
+    if (roster.length === 0) return Infinity;
+    let soonest = Infinity;
+    for (const name of roster) {
+        if (isAccountSleeping(bot, name)) continue;
+        const breakState = getAccountBreakState(bot, name);
+        const breakEndMs = breakState
+            ? breakState.lastLogoutAtMs + breakState.minBreakDurationMs
+            : 0;
+        if (breakEndMs < soonest) soonest = breakEndMs;
+    }
+    return soonest;
 }
 
 /**
@@ -257,6 +331,9 @@ function isAccountEligible(bot: StarkMercher, accountName: string): boolean {
 }
 
 // --- Rotation index persistence ---------------------------------------------
+// The rotation index is no longer used for selection (selection is now
+// time-based), but the setting is kept for backward compatibility and
+// potential future use.
 
 export function loadRotationIndex(bot: StarkMercher): number {
     try {
@@ -280,12 +357,16 @@ export function saveRotationIndex(bot: StarkMercher, index: number): void {
 /**
  * Record break state for an account when it logs out.
  * Called from the break system when a short or nightly break starts.
+ * Preserves lastLoginAtMs from any existing state so the tiebreaker
+ * still works across multiple logout/login cycles.
  */
 export function recordAccountLogout(bot: StarkMercher, accountName: string, breakDurationMs: number): void {
     if (!accountName) return;
+    const existing = getAccountBreakState(bot, accountName);
     const state: AccountBreakState = {
         lastLogoutAtMs: Date.now(),
         minBreakDurationMs: breakDurationMs,
+        lastLoginAtMs: existing?.lastLoginAtMs ?? 0,
     };
     saveAccountBreakState(bot, accountName, state);
     titan.logf('[Stark Mercher] Rotation: recorded logout for %s (min break %d min)',
@@ -293,9 +374,17 @@ export function recordAccountLogout(bot: StarkMercher, accountName: string, brea
 }
 
 /**
- * Clear break state for an account when it successfully logs in.
+ * Record a successful login for an account. Instead of clearing the break
+ * state entirely, we keep the entry but reset the break fields and update
+ * lastLoginAtMs to now. This preserves the login timestamp for the
+ * tiebreaker in future selection calls.
  */
 export function recordAccountLogin(bot: StarkMercher, accountName: string): void {
     if (!accountName) return;
-    clearAccountBreakState(bot, accountName);
+    const state: AccountBreakState = {
+        lastLogoutAtMs: 0,
+        minBreakDurationMs: 0,
+        lastLoginAtMs: Date.now(),
+    };
+    saveAccountBreakState(bot, accountName, state);
 }
