@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 const debug = false;
 const MAX_RESULTS = 100; // Maximum number of merchable items to output after sorting by profitability
 const GE_TAX_PERCENTAGE = 2; // Grand Exchange sale tax percentage deducted from sell price
-const CASH_STACK_MILLIONS = 10; // Total flipping cash in millions for readability
+const CASH_STACK_MILLIONS = 20; // Total flipping cash in millions for readability
 const CASH_STACK = CASH_STACK_MILLIONS * 1000000; // Total GP available for flipping
 const SALE_BUFFER_PERCENTAGE = 0.01; // Extra safety margin removed from sell price to protect against price movement
 const AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO = 0.20; // Percentage of total cash assumed to be used per GE slot (~5 slots)

@@ -12,7 +12,7 @@
 // ============================================================================
 
 import { generateTypingProfile, getTypingRange, type TypingProfile } from './typing-profile.js';
-import { cancelTypingMistakeSequence } from './typing-mistakes.js';
+import { cancelTypingMistakeSequence, tickMistakeSequence } from './typing-mistakes.js';
 
 // Active typing profile. Set via setTypingProfile() when the account is
 // known, or generated on first use from the account name.
@@ -85,9 +85,17 @@ export const humanType = (
 
 // isTyping()
 // Returns true while a humanType operation is in progress OR a typing-mistake
-// correction sequence is mid-gap (between part1 completion and part2 start,
-// when the SDK's isTyping() is false but we're not done yet).
-export const isTyping = (): boolean => mistakeSequenceActive || titan.keyboard.isTyping();
+// correction sequence is active (including the realisation/backspace gaps
+// between part1 completion and part2 start, when the SDK's isTyping() is false
+// but we're not done yet). Also advances the tick-driven mistake state
+// machine once per game tick — the GE flow's waitForTyping step polls this
+// every tick, which drives the gap countdowns.
+export const isTyping = (): boolean => {
+    // Advance the mistake state machine (no-op if no sequence is active;
+    // deduped internally to once per game tick).
+    tickMistakeSequence();
+    return mistakeSequenceActive || titan.keyboard.isTyping();
+};
 
 // cancelTyping()
 // Cancel any in-progress humanType operation and any pending mistake

@@ -44,10 +44,10 @@ import {
 import { clickCollectToInventory } from './actions.js';
 import { getNetSellPrice, getGeTax } from './constants.js';
 import { openGe, nearGrandExchange, walkToGe } from './clerk.js';
-import { getMerchableItems, getMerchableItem, getFirstUnoccupiedMerchableItem, getFirstPartialBuyItem, type MerchableItem, type PartialBuyResult } from '../data/merchable-items.js';
+import { getMerchableItems, getMerchableItem, getFirstUnoccupiedMerchableItem, getFirstPartialBuyItem, isLowballItem, type MerchableItem, type PartialBuyResult, type LowballTier } from '../data/merchable-items.js';
 import { getPriceHistoryEntry } from '../data/price-history.js';
 import { OfferCacheManager } from '../data/offer-cache.js';
-import { addDailyProfit } from '../data/daily-profit.js';
+import { addDailyProfit, getDailyProfit } from '../data/daily-profit.js';
 import { recordMerchCycle, type MerchHistoryEntry } from '../data/merch-history.js';
 import { recordAbort, type AbortCategory } from '../data/abort-history.js';
 
@@ -158,32 +158,57 @@ const checkFailureTerminate = (bot: StarkMercher, loop: AutoLoopState, key: stri
 };
 
 // --- Buy-freeze persistence -------------------------------------------------
-// The buy-freeze map is persisted in a hidden JSON setting (keyed by account
-// name) so it survives hot reloads and client restarts. Without persistence,
-// a reload during a freeze window would cause the bot to immediately re-buy
-// an item whose buy offer was just aborted as stale.
+// The buy-freeze map is persisted in a hidden JSON setting as a flat global
+// map of lowercase item name -> freeze-until timestamp (ms). Freezes are
+// global (not account-keyed) because they represent a market/item-level
+// signal — an item that isn't buying at the offered price on one account
+// is unlikely to buy at that price on another account either. With
+// multi-account rotation, an account-keyed freeze would let account B
+// immediately re-buy an item that account A just aborted as stale.
+//
+// Legacy format migration: the previous format was
+//   { accountName: { itemName: untilMs } }
+// On load, if the parsed object's values are objects (nested format), we
+// flatten all accounts into a single map, keeping the latest (max)
+// expiration per item, and re-save in the flat format. This is a one-way
+// migration — once flattened, the setting is always saved flat.
 
-/** Resolves the current account name for freeze persistence. */
-const resolveFreezeAccountName = (bot: StarkMercher): string => {
-    return bot.currentPlayerName
-        || titan.state.client.localPlayer?.name
-        || bot.lastActiveAccountSetting.value.trim()
-        || 'unknown';
-};
-
-/** Loads the buy-freeze map for an account from the hidden setting.
+/** Loads the global buy-freeze map from the hidden setting.
+ *  Migrates the legacy nested (account-keyed) format to flat on first load.
  *  Drops expired entries during load so the in-memory map starts clean. */
-const loadBuyFreeze = (bot: StarkMercher, accountName: string): Map<string, number> => {
+const loadBuyFreeze = (bot: StarkMercher): Map<string, number> => {
     const raw = bot.buyFreezeSetting.value;
     if (!raw || raw === '{}') return new Map();
     try {
         const parsed = JSON.parse(raw);
         if (!parsed || typeof parsed !== 'object') return new Map();
-        const accountMap = parsed[accountName];
-        if (!accountMap || typeof accountMap !== 'object') return new Map();
         const now = Date.now();
         const result = new Map<string, number>();
-        for (const [name, until] of Object.entries(accountMap)) {
+        // Detect legacy nested format: { account: { item: until } }.
+        // In the flat format, all values are numbers. In the nested format,
+        // values are objects.
+        const values = Object.values(parsed);
+        const isNested = values.length > 0 && values.every(v => v !== null && typeof v === 'object');
+        if (isNested) {
+            // Flatten all accounts, keeping the latest expiration per item.
+            for (const accountMap of values as Record<string, number>[]) {
+                if (!accountMap || typeof accountMap !== 'object') continue;
+                for (const [name, until] of Object.entries(accountMap)) {
+                    if (typeof until !== 'number') continue;
+                    if (now >= until) continue; // drop expired
+                    const existing = result.get(name);
+                    if (!existing || until > existing) result.set(name, until);
+                }
+            }
+            // Re-save in the flat format so we don't migrate again.
+            const obj: Record<string, number> = {};
+            for (const [name, until] of result) obj[name] = until;
+            bot.buyFreezeSetting.value = JSON.stringify(obj);
+            titan.logf('[Stark Mercher] Migrated buy-freeze setting to global format (%d active entries).', result.size);
+            return result;
+        }
+        // Flat format: { item: until }.
+        for (const [name, until] of Object.entries(parsed)) {
             if (typeof until === 'number' && now < until) {
                 result.set(name, until);
             }
@@ -195,24 +220,17 @@ const loadBuyFreeze = (bot: StarkMercher, accountName: string): Map<string, numb
     }
 };
 
-/** Saves the buy-freeze map for an account to the hidden setting.
- *  Merges into the full persisted state (other accounts are preserved). */
-const saveBuyFreeze = (bot: StarkMercher, accountName: string, freezeMap: Map<string, number>): void => {
+/** Saves the global buy-freeze map to the hidden setting.
+ *  Overwrites the full persisted state (the map is global, no merge needed).
+ *  Skips expired entries so the setting doesn't bloat. */
+const saveBuyFreeze = (bot: StarkMercher, freezeMap: Map<string, number>): void => {
     try {
-        const raw = bot.buyFreezeSetting.value;
-        let all: Record<string, Record<string, number>> = {};
-        if (raw && raw !== '{}') {
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === 'object') all = parsed as Record<string, Record<string, number>>;
-        }
-        // Serialise the map — skip expired entries so we don't bloat the setting.
         const now = Date.now();
         const obj: Record<string, number> = {};
         for (const [name, until] of freezeMap) {
             if (now < until) obj[name] = until;
         }
-        all[accountName] = obj;
-        bot.buyFreezeSetting.value = JSON.stringify(all);
+        bot.buyFreezeSetting.value = JSON.stringify(obj);
     } catch (e) {
         titan.logf('[Stark Mercher] Failed to save buy-freeze state: %s', String(e));
     }
@@ -228,13 +246,15 @@ const saveBuyFreeze = (bot: StarkMercher, accountName: string, freezeMap: Map<st
 /** Returns the frozen merchable item with the soonest-expiring freeze that
  *  passes all the standard buy-scan checks (not occupied, affordable, not
  *  buy-limited, members-appropriate). Returns null if no frozen item is
- *  eligible. */
+ *  eligible. The `lowballTier` parameter scopes the scan to non-lowball or
+ *  lowball items only (or both with `'any'`). */
 const getFrozenFallbackItem = (
     buyFreezeUntil: Map<string, number>,
     occupiedNames: Set<string>,
     coinCount: number,
     buyLimitedNames: Set<string>,
     membersWorld: boolean,
+    lowballTier: LowballTier = 'any',
 ): MerchableItem | null => {
     // Sort frozen item names by ascending freeze expiry (soonest first).
     const sorted = [...buyFreezeUntil.entries()]
@@ -247,6 +267,8 @@ const getFrozenFallbackItem = (
         if (buyLimitedNames.has(lower)) continue;
         if (item.totalPurchasePrice > coinCount) continue;
         if (!membersWorld && item.members) continue;
+        if (lowballTier === 'non-lowball' && isLowballItem(item)) continue;
+        if (lowballTier === 'lowball' && !isLowballItem(item)) continue;
         return item;
     }
     return null;
@@ -254,7 +276,9 @@ const getFrozenFallbackItem = (
 
 /** Same as getFrozenFallbackItem but for partial-quantity buys (when we
  *  can't afford the full quantityToPurchase). Returns the frozen item with
- *  the soonest-expiring freeze that qualifies for a partial buy, or null. */
+ *  the soonest-expiring freeze that qualifies for a partial buy, or null.
+ *  The `lowballTier` parameter scopes the scan to non-lowball or lowball
+ *  items only (or both with `'any'`). */
 const getFrozenFallbackPartial = (
     buyFreezeUntil: Map<string, number>,
     occupiedNames: Set<string>,
@@ -262,6 +286,7 @@ const getFrozenFallbackPartial = (
     buyLimitedNames: Set<string>,
     membersWorld: boolean,
     minProfitGp: number = 15000,
+    lowballTier: LowballTier = 'any',
 ): PartialBuyResult | null => {
     const sorted = [...buyFreezeUntil.entries()]
         .sort((a, b) => a[1] - b[1]);
@@ -272,6 +297,8 @@ const getFrozenFallbackPartial = (
         if (occupiedNames.has(lower)) continue;
         if (buyLimitedNames.has(lower)) continue;
         if (!membersWorld && item.members) continue;
+        if (lowballTier === 'non-lowball' && isLowballItem(item)) continue;
+        if (lowballTier === 'lowball' && !isLowballItem(item)) continue;
         if (item.purchasePrice > coinCount) continue;
         // Full quantity is affordable — getFirstUnoccupiedMerchableItem
         // would have returned it already, but check anyway.
@@ -650,6 +677,49 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     const cache = ensureCache(bot);
     const loop = bot.autoLoop;
 
+    // --- Cached inventory snapshot ---
+    // Build a name→Item map once per tick from a single getAll() call.
+    // This replaces multiple titan.utils.inventory.find(name) calls (each
+    // creates a native query handle) with a map lookup. The find() calls
+    // were in: completed-sell sweep, cache reconciliation, abort completion,
+    // and sell scan — up to 5+ separate native queries per tick.
+    // The snapshot is built lazily — only accessed when a section needs it.
+    let invSnapshot: Map<string, titan.Item> | null = null;
+    const getInvSnapshot = (): Map<string, titan.Item> => {
+        if (invSnapshot) return invSnapshot;
+        invSnapshot = new Map();
+        for (const item of titan.utils.inventory.getAll()) {
+            invSnapshot.set(item.name, item);
+        }
+        return invSnapshot;
+    };
+    /** Find an item in inventory by name using the cached snapshot.
+     *  Returns null if not found. Case-sensitive name match (same as
+     *  titan.utils.inventory.find for string queries — the SDK does a
+     *  case-insensitive substring match, but all our callers use exact
+     *  item names from the cache/slots, so exact match is fine). */
+    const findInInv = (itemName: string): titan.Item | null => {
+        const snap = getInvSnapshot();
+        // Try exact match first.
+        const exact = snap.get(itemName);
+        if (exact) return exact;
+        // Fall back to case-insensitive match (the SDK's find() does
+        // case-insensitive substring, so be conservative).
+        const lower = itemName.trim().toLowerCase();
+        for (const [name, item] of snap) {
+            if (name.trim().toLowerCase() === lower) return item;
+        }
+        return null;
+    };
+    /** Count coins (item ID 995) from the cached snapshot. */
+    const countCoinsInInv = (): number => {
+        let total = 0;
+        for (const item of getInvSnapshot().values()) {
+            if (item.id === 995) total += item.quantity;
+        }
+        return total;
+    };
+
     // Clear the idle-for-break flag at the start of each auto-loop tick.
     // It gets set again only when we reach the "nothing to do" branch at
     // the bottom of this function.
@@ -679,7 +749,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         for (const [name, until] of loop.buyFreezeUntil) {
             if (now >= until) { loop.buyFreezeUntil.delete(name); freezeRemoved = true; }
         }
-        if (freezeRemoved) saveBuyFreeze(bot, resolveFreezeAccountName(bot), loop.buyFreezeUntil);
+        if (freezeRemoved) saveBuyFreeze(bot, loop.buyFreezeUntil);
         if (removed > 0) cache.save();
         loop.lastCleanupMs = now;
     }
@@ -696,7 +766,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         for (const [name, until] of loop.buyFreezeUntil) {
             if (cleanupNow >= until) { loop.buyFreezeUntil.delete(name); freezeRemoved = true; }
         }
-        if (freezeRemoved) saveBuyFreeze(bot, resolveFreezeAccountName(bot), loop.buyFreezeUntil);
+        if (freezeRemoved) saveBuyFreeze(bot, loop.buyFreezeUntil);
         if (removed > 0) {
             cache.save();
             debugLog(bot, `Auto: periodic cache cleanup removed ${removed} expired entr${removed === 1 ? 'y' : 'ies'}`);
@@ -784,7 +854,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             // entry so buy-limit tracking (totalBought) is preserved.
             if (loop.abortSlotInfo && loop.abortSlotInfo.type === 'buy' && loop.abortSlotInfo.progress <= 0) {
                 const itemName = loop.abortSlotInfo.itemName;
-                const inInventory = titan.utils.inventory.find(itemName);
+                const inInventory = findInInv(itemName);
                 if (inInventory) {
                     // The buy partially filled during the abort flow — items
                     // were collected to inventory. Keep the cache entry so
@@ -808,13 +878,13 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 // For sell offers, filledQty = listed qty - remaining in inv.
                 let filledQty = 0;
                 if (info.type === 'buy') {
-                    const inInv = titan.utils.inventory.find(info.itemName);
+                    const inInv = findInInv(info.itemName);
                     filledQty = inInv ? inInv.quantity : 0;
                 } else {
                     // Sell abort: the difference between what was listed and
                     // what's back in inventory is what sold before the abort.
                     const entry = cache.get(info.itemName);
-                    const inInv = titan.utils.inventory.find(info.itemName);
+                    const inInv = findInInv(info.itemName);
                     if (entry?.sellQuantity !== undefined && inInv) {
                         filledQty = Math.max(0, entry.sellQuantity - inInv.quantity);
                     }
@@ -945,7 +1015,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             const lower = cacheKey.trim().toLowerCase();
             if (slotItemNames.has(lower)) continue; // still in a GE slot
             // Check inventory — item may have been collected and not yet sold
-            if (titan.utils.inventory.find(cacheKey)) continue;
+            if (findInInv(cacheKey)) continue;
             // Preserve entries with active buy-limit tracking (totalBought
             // > 0 within the 4-hour window) even if not in a slot or
             // inventory — the buy-limit data must persist across cycles.
@@ -1039,7 +1109,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         if (inSlot) continue; // still in a slot — not yet collected
         // Is this item in inventory? (returned after an abort — profit
         // will be recorded at re-list time in Step 5)
-        const inInv = titan.utils.inventory.find(cacheKey);
+        const inInv = findInInv(cacheKey);
         if (inInv) continue; // in inventory — abort case, handled at re-list
         // Item is not in any slot or inventory → sell completed 100%.
         // CAPTURE all profit/history data from the cache entry BEFORE clearing
@@ -1112,6 +1182,9 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         // already shows the sell as cleared so the sweep won't re-trigger.
         if (profit !== 0 && playerName) {
             addDailyProfit(bot, playerName, profit);
+            // Cache the updated daily profit for the overlay.
+            bot.cachedDailyProfit = getDailyProfit(bot, playerName);
+            bot.cachedDailyProfitAccount = playerName;
             debugLog(bot, `Auto: daily profit += ${profit}gp (${soldQty}x ${cacheKey} @ ${profitPerItem}gp/item net — sell=${entry.sellPrice}gp, tax=${taxPerItem}gp, buy=${entry.buyPrice}gp — 100% completed sell)`);
         }
         if (merchEntry && playerName && merchProfit !== 0) {
@@ -1193,7 +1266,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 } else {
                     const freezeUntil = Date.now() + BUY_FREEZE_DURATION_MS;
                     loop.buyFreezeUntil.set(freezeKey, freezeUntil);
-                    saveBuyFreeze(bot, resolveFreezeAccountName(bot), loop.buyFreezeUntil);
+                    saveBuyFreeze(bot, loop.buyFreezeUntil);
                     titan.logf('[Stark Mercher] Auto: freezing %s from buying for %d min (buy offer aborted — %s)',
                         slot.itemName, Math.round(BUY_FREEZE_DURATION_MS / 60000), reason);
                 }
@@ -1257,8 +1330,9 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     // Check for empty slots and inventory items to sell.
     const emptySlot = findEmptyOfferSlot();
     if (emptySlot !== -1) {
-        // Get inventory items (non-coins).
-        const invItems = titan.utils.inventory.getAll();
+        // Get inventory items from the cached snapshot (single getAll()
+        // call already made for this tick, shared across all sections).
+        const invItems = [...getInvSnapshot().values()];
         const occupiedNames = getOccupiedItemNames(slots);
         const sellableItems = invItems.filter(i => i.id !== 995);
         debugLog(bot, `Auto: sell scan — empty slot ${emptySlot + 1}, ${sellableItems.length} non-coin inv item(s)${sellableItems.length > 0 ? ': ' + sellableItems.map(i => `${i.name}x${i.quantity}`).join(', ') : ''}`);
@@ -1398,6 +1472,9 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             // Now safe to write the pending partial profit.
             if (pendingPartialProfit !== 0 && playerName) {
                 addDailyProfit(bot, playerName, pendingPartialProfit);
+                // Cache the updated daily profit for the overlay.
+                bot.cachedDailyProfit = getDailyProfit(bot, playerName);
+                bot.cachedDailyProfitAccount = playerName;
                 debugLog(bot, `Auto: ${pendingPartialLog}`);
             }
 
@@ -1433,10 +1510,14 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     const emptyBuySlot = findEmptyOfferSlot();
     if (emptyBuySlot !== -1) {
         const occupiedNames = getOccupiedItemNames(slots);
-        // Count coins in inventory (item ID 995). This is the total budget
-        // available for new buy offers. We count once per loop iteration,
-        // not per item, since the coin stack doesn't change between checks.
-        const coinCount = titan.utils.inventory.count(995);
+        // Count coins from the cached inventory snapshot (single getAll()
+        // call shared across all sections of this tick). This is the total
+        // budget available for new buy offers.
+        const coinCount = countCoinsInInv();
+        // Cache the coin count for the overlay so it doesn't have to
+        // call titan.utils.inventory.count(995) every frame (which
+        // exhausts native handles over hours).
+        bot.cachedCoinCount = coinCount;
         // Get the set of items currently buy-limited (within the 4-hour GE
         // cooldown). These are skipped by getFirstUnoccupiedMerchableItem.
         const buyLimitedNames = cache.getBuyLimitedItemNames();
@@ -1467,29 +1548,51 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 freezeRemoved = true;
             }
         }
-        if (freezeRemoved) saveBuyFreeze(bot, resolveFreezeAccountName(bot), loop.buyFreezeUntil);
+        if (freezeRemoved) saveBuyFreeze(bot, loop.buyFreezeUntil);
         if (frozenNames.size > 0) {
             debugLog(bot, `Auto: ${frozenNames.size} item(s) buy-frozen — skipping: ${[...frozenNames].join(', ')}`);
         }
 
-        let merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames);
-
-        // Fallback: if no non-frozen item was found, try again allowing frozen
-        // items. An empty slot earns 0gp — a frozen item might buy now if the
-        // price issue that caused the freeze has resolved. This only triggers
-        // when there are genuinely no other merchable items available.
+        // --- Buy scan with lowball tiering ---
+        // Non-lowball items (instant-fill, buy at market) are tried first.
+        // Lowball items (buy below market, slower fills, less reliable ETA)
+        // are only attempted when all non-lowball items are occupied,
+        // buy-limited, frozen, or unaffordable. Within each lowball tier,
+        // frozen items are used as a fallback (an empty slot earns 0gp).
         //
-        // Among frozen items, prefer the one frozen the longest ago (soonest-
-        // expiring freeze). Market conditions have had the most time to change
-        // since that abort, making it the most likely to actually fill now.
-        // An item frozen 2 minutes ago (3 min remaining) should not be picked
-        // over an item frozen 4 minutes ago (1 min remaining).
+        // Tier order:
+        //   1. Non-lowball, non-frozen (primary — instant-fill)
+        //   2. Non-lowball, frozen fallback (soonest-expiring freeze)
+        //   3. Lowball, non-frozen (only when all non-lowball exhausted)
+        //   4. Lowball, frozen fallback (last resort)
+        let merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 'non-lowball');
+
+        // Tier 2: non-lowball frozen fallback.
         if (!merch && frozenNames.size > 0) {
-            merch = getFrozenFallbackItem(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld());
+            merch = getFrozenFallbackItem(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 'non-lowball');
             if (merch) {
                 const freezeMs = loop.buyFreezeUntil.get(merch.itemName.trim().toLowerCase()) ?? 0;
                 const remainingMs = freezeMs - Date.now();
-                debugLog(bot, `Auto: using frozen item ${merch.itemName} as fallback — no other merchable items available (empty slot is worse than a frozen item, freeze expires in ${Math.max(0, Math.round(remainingMs / 60000))} min)`);
+                debugLog(bot, `Auto: using frozen non-lowball item ${merch.itemName} as fallback — no other non-lowball items available (freeze expires in ${Math.max(0, Math.round(remainingMs / 60000))} min)`);
+            }
+        }
+
+        // Tier 3: lowball, non-frozen — only when all non-lowball items are
+        // occupied, buy-limited, frozen, or unaffordable.
+        if (!merch) {
+            merch = getFirstUnoccupiedMerchableItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 'lowball');
+            if (merch) {
+                debugLog(bot, `Auto: using lowball item ${merch.itemName} (${merch.lowballPercent.toFixed(2)}% lowball) — all non-lowball items occupied/limited/frozen/unaffordable`);
+            }
+        }
+
+        // Tier 4: lowball frozen fallback — last resort.
+        if (!merch && frozenNames.size > 0) {
+            merch = getFrozenFallbackItem(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 'lowball');
+            if (merch) {
+                const freezeMs = loop.buyFreezeUntil.get(merch.itemName.trim().toLowerCase()) ?? 0;
+                const remainingMs = freezeMs - Date.now();
+                debugLog(bot, `Auto: using frozen lowball item ${merch.itemName} as fallback — no other items available (freeze expires in ${Math.max(0, Math.round(remainingMs / 60000))} min)`);
             }
         }
 
@@ -1499,19 +1602,31 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         // is floor(coins / purchasePrice) capped at the GE limit, and the
         // expected profit (reducedQty * profitMargin) must be >= 15k gp.
         // This keeps empty slots productive when most of the cash stack is
-        // tied up in other offers.
+        // tied up in other offers. Same lowball tiering: non-lowball first.
         let partial: PartialBuyResult | null = null;
         if (!merch) {
-            partial = getFirstPartialBuyItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames);
+            // Non-lowball partial.
+            partial = getFirstPartialBuyItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 15000, 'non-lowball');
             if (partial) {
                 debugLog(bot, `Auto: partial-quantity buy — ${partial.item.itemName} full qty ${partial.item.quantityToPurchase} needs ${partial.item.totalPurchasePrice}gp, have ${coinCount}gp — buying ${partial.quantity} instead (profit ${partial.quantity * partial.item.profitMargin}gp)`);
             } else if (frozenNames.size > 0) {
-                // Try partial with frozen items allowed too, preferring the
-                // soonest-expiring freeze (same rationale as the full-qty
-                // fallback above).
-                partial = getFrozenFallbackPartial(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld());
+                // Non-lowball frozen fallback.
+                partial = getFrozenFallbackPartial(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 15000, 'non-lowball');
                 if (partial) {
-                    debugLog(bot, `Auto: partial-quantity buy (frozen fallback) — ${partial.item.itemName} buying ${partial.quantity} (profit ${partial.quantity * partial.item.profitMargin}gp)`);
+                    debugLog(bot, `Auto: partial-quantity buy (frozen non-lowball fallback) — ${partial.item.itemName} buying ${partial.quantity} (profit ${partial.quantity * partial.item.profitMargin}gp)`);
+                }
+            }
+            // Lowball partial — only if no non-lowball partial found.
+            if (!partial) {
+                partial = getFirstPartialBuyItem(occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), frozenNames, 15000, 'lowball');
+                if (partial) {
+                    debugLog(bot, `Auto: partial-quantity buy (lowball) — ${partial.item.itemName} full qty ${partial.item.quantityToPurchase} needs ${partial.item.totalPurchasePrice}gp, have ${coinCount}gp — buying ${partial.quantity} instead (profit ${partial.quantity * partial.item.profitMargin}gp)`);
+                } else if (frozenNames.size > 0) {
+                    // Lowball frozen fallback.
+                    partial = getFrozenFallbackPartial(loop.buyFreezeUntil, occupiedNames, coinCount, buyLimitedNames, isMembersWorld(), 15000, 'lowball');
+                    if (partial) {
+                        debugLog(bot, `Auto: partial-quantity buy (frozen lowball fallback) — ${partial.item.itemName} buying ${partial.quantity} (profit ${partial.quantity * partial.item.profitMargin}gp)`);
+                    }
                 }
             }
         }
@@ -1625,7 +1740,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         }
         if (swapFrozenNames.size > 0) {
             const swapOccupiedNames = getOccupiedItemNames(slots);
-            const swapCoinCount = titan.utils.inventory.count(995);
+            const swapCoinCount = countCoinsInInv();
             const swapBuyLimitedNames = cache.getBuyLimitedItemNames();
             for (let i = 0; i < slots.length; i++) {
                 const slot = slots[i];
@@ -1635,7 +1750,12 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 if (slot.progress >= 0.5) continue; // nearly done — let it finish
 
                 // Is there a non-frozen merchable item available to replace it?
-                const swapCandidate = getFirstUnoccupiedMerchableItem(swapOccupiedNames, swapCoinCount, swapBuyLimitedNames, isMembersWorld(), swapFrozenNames);
+                // Prefer non-lowball (instant-fill) swap candidates first,
+                // then lowball — same tiering as the primary buy scan.
+                let swapCandidate = getFirstUnoccupiedMerchableItem(swapOccupiedNames, swapCoinCount, swapBuyLimitedNames, isMembersWorld(), swapFrozenNames, 'non-lowball');
+                if (!swapCandidate) {
+                    swapCandidate = getFirstUnoccupiedMerchableItem(swapOccupiedNames, swapCoinCount, swapBuyLimitedNames, isMembersWorld(), swapFrozenNames, 'lowball');
+                }
                 if (swapCandidate) {
                     debugLog(bot, `Auto: aborting frozen fallback buy ${slot.itemName} in slot ${i + 1} (${(slot.progress * 100).toFixed(0)}% progress) — replacing with non-frozen merchable item ${swapCandidate.itemName}`);
                     bot.statusText = `Swapping frozen ${slot.itemName} for ${swapCandidate.itemName}`;
@@ -1708,11 +1828,11 @@ export const resetAutoLoop = (bot: StarkMercher): void => {
     loop.cache = null;
     loop.sellAttemptedItems.clear();
     loop.buyAttemptedItems.clear();
-    // Restore the buy-freeze map from the hidden setting so freezes survive
-    // hot reloads and client restarts. Expired entries are dropped during
-    // load. If no player name is available yet (e.g. logged out at reload
-    // time), the last-active-account fallback is used.
-    loop.buyFreezeUntil = loadBuyFreeze(bot, resolveFreezeAccountName(bot));
+    // Restore the global buy-freeze map from the hidden setting so freezes
+    // survive hot reloads and client restarts. Expired entries are dropped
+    // during load. The freeze map is global (not account-keyed) — freezes
+    // represent market/item-level signals, not account-specific state.
+    loop.buyFreezeUntil = loadBuyFreeze(bot);
     loop.failureCounters = {};
     loop.lastGeOpenDispatchMs = 0;
     loop.lastCollectDispatchMs = 0;

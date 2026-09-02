@@ -13,6 +13,7 @@ import { renderBotOverlay } from './widgets/bot-overlay.js';
 import { loadOfferCache } from './general/state-persist.js';
 import { getMerchHistory } from './data/merch-history.js';
 import { getAbortHistory } from './data/abort-history.js';
+import { getDailyProfit } from './data/daily-profit.js';
 import type { SessionProfile } from './antiban/session-profile.js';
 
 export class StarkMercher extends titan.Plugin {
@@ -33,6 +34,22 @@ export class StarkMercher extends titan.Plugin {
     // statusText is the human-readable top-level action string shown in the
     // overlay's Status field. Updated by the auto-loop and test flows.
     statusText = 'Stopped';
+
+    // --- Cached values for overlay (avoid per-frame native queries) ---
+    // The overlay renders every frame (30-60 FPS). Calling
+    // titan.utils.inventory.count(995) or getDailyProfit() every frame
+    // creates native query handles that accumulate and exhaust the finite
+    // handle table over hours, causing FPS to drop to 0. These fields are
+    // refreshed by the auto-loop (which already reads the coin count) and
+    // by a fallback timer in onGameTick when the auto-loop isn't running.
+    // -1 = not yet cached (overlay shows '-' until first refresh).
+    cachedCoinCount = -1;
+    cachedDailyProfit = 0;
+    cachedDailyProfitAccount = '';
+    /** Tick of the last overlay cache refresh. Used by the fallback timer
+     *  in onGameTick to refresh every 30 ticks when the auto-loop isn't
+     *  running (e.g. Paused mode, logged out, GE not open). */
+    lastOverlayCacheRefreshTick = -999;
 
     // Action throttle state
     lastActionTick = -1;
@@ -91,6 +108,11 @@ export class StarkMercher extends titan.Plugin {
     currentPlayerName = '';
     sessionProfile: SessionProfile | null = null;
     unexpectedLogoutAtMs = 0;
+    // --- Multi-account rotation state ---
+    // Which index in the roster to check next when selecting an account to
+    // log in. Persisted in rotationIndexSetting. Advanced by selectNextAccount()
+    // each time an account is selected. -1 = not yet loaded from setting.
+    rotationIndex = -1;
     // Login FSM fields
     titleNextClickAt = 0;
     titleFirstSeenAtMs = 0;
@@ -235,11 +257,16 @@ export class StarkMercher extends titan.Plugin {
     });
 
     // --- Buy-freeze setting (hidden) ---
-    // Stores per-account buy-freeze state as JSON. Keyed by account name,
-    // each value is a map of lowercase item name -> freeze-until timestamp
-    // (ms). Survives hot reloads so a buy freeze applied after aborting a
-    // stale buy offer is not lost on plugin toggle.
+    // Stores the global buy-freeze state as JSON. A flat map of lowercase
+    // item name -> freeze-until timestamp (ms). Freezes are global (not
+    // account-keyed) because they represent a market/item-level signal —
+    // an item that isn't buying at the offered price on one account is
+    // unlikely to buy at that price on another account either. Survives
+    // hot reloads so a buy freeze applied after aborting a stale buy offer
+    // is not lost on plugin toggle.
     // Same persistence limitation as offerCacheSetting — hot reload only.
+    // Legacy nested format ({ account: { item: until } }) is migrated to
+    // flat on first load by loadBuyFreeze() in auto-loop.ts.
     buyFreezeSetting: titan.Setting<string> = this.stringSetting({
         key: 'buyFreeze',
         name: 'Buy freeze (hidden)',
@@ -258,6 +285,44 @@ export class StarkMercher extends titan.Plugin {
     abortHistorySetting: titan.Setting<string> = this.stringSetting({
         key: 'abortHistory',
         name: 'Abort history (hidden)',
+        default: '{}',
+        hidden: true,
+    });
+
+    // --- Account roster setting (visible) ---
+    // Comma-separated list of character names to rotate through. When 2+
+    // names are listed, the bot rotates between accounts: each account runs
+    // the full auto-merch loop until idle, logs out, and the next eligible
+    // account logs in. Each account's sleep/wake schedule comes from its
+    // own SessionProfile. When empty or a single name, the bot behaves as
+    // a single-account bot (no rotation).
+    accountRosterSetting: titan.Setting<string> = this.stringSetting({
+        key: 'accountRoster',
+        name: 'Account Roster',
+        default: '',
+        tooltip: 'Comma-separated character names to rotate through. Each account runs until idle, then the next eligible account logs in. Leave empty for single-account mode.',
+        position: -1,
+    });
+
+    // --- Hidden rotation index setting ---
+    // Stores the current rotation index (which account in the roster to
+    // check next). Persisted so it survives hot reloads. Same persistence
+    // limitation as offerCacheSetting — hot reload only.
+    rotationIndexSetting: titan.Setting<string> = this.stringSetting({
+        key: 'rotationIndex',
+        name: 'Rotation index (hidden)',
+        default: '0',
+        hidden: true,
+    });
+
+    // --- Hidden account break state setting ---
+    // Stores per-account break state as JSON: { accountName: { lastLogoutAtMs,
+    // minBreakDurationMs } }. Used by the rotation system to determine if an
+    // account's minimum break has lapsed before logging it back in. Same
+    // persistence limitation as offerCacheSetting — hot reload only.
+    accountBreakStateSetting: titan.Setting<string> = this.stringSetting({
+        key: 'accountBreakState',
+        name: 'Account break state (hidden)',
         default: '{}',
         hidden: true,
     });
@@ -421,44 +486,54 @@ export class StarkMercher extends titan.Plugin {
         name: 'Log Buy Freezes',
         position: -1,
         onClick: () => {
-            const accountName = this.currentPlayerName || titan.state.client.localPlayer?.name || '';
-            if (!accountName) {
-                titan.log('[Stark Mercher] Cannot log buy freezes — no account name available.');
-                return;
-            }
             const raw = this.buyFreezeSetting.value;
             if (!raw || raw === '{}') {
-                titan.logf('[Stark Mercher] No buy freezes for any account.');
+                titan.logf('[Stark Mercher] No buy freezes active.');
                 return;
             }
-            let all: Record<string, Record<string, number>>;
+            let parsed: Record<string, unknown>;
             try {
-                all = JSON.parse(raw);
+                parsed = JSON.parse(raw);
             } catch (e) {
                 titan.logf('[Stark Mercher] Failed to parse buy-freeze data: %s', String(e));
                 return;
             }
-            const accountNames = Object.keys(all);
-            if (accountNames.length === 0) {
-                titan.logf('[Stark Mercher] No buy freezes for any account.');
+            if (!parsed || typeof parsed !== 'object') {
+                titan.logf('[Stark Mercher] No buy freezes active.');
                 return;
             }
-            for (const acct of accountNames) {
-                const freezes = all[acct];
-                const items = Object.keys(freezes);
-                if (items.length === 0) {
-                    titan.logf('[Stark Mercher] Buy freezes for %s: none active.', acct);
-                    continue;
+            const now = Date.now();
+            // Support both flat ({ item: until }) and legacy nested
+            // ({ account: { item: until } }) formats for diagnostics.
+            const values = Object.values(parsed);
+            const isNested = values.length > 0 && values.every(v => v !== null && typeof v === 'object');
+            let flat: Record<string, number>;
+            if (isNested) {
+                // Flatten legacy nested format for display.
+                flat = {};
+                for (const accountMap of values as Record<string, number>[]) {
+                    if (!accountMap || typeof accountMap !== 'object') continue;
+                    for (const [name, until] of Object.entries(accountMap)) {
+                        if (typeof until !== 'number') continue;
+                        const existing = flat[name];
+                        if (!existing || until > existing) flat[name] = until;
+                    }
                 }
-                const now = Date.now();
-                const active = items.filter(name => freezes[name] > now);
-                const expired = items.length - active.length;
-                titan.logf('[Stark Mercher] Buy freezes for %s (%d active, %d expired):', acct, active.length, expired);
-                for (const name of active) {
-                    const until = freezes[name];
-                    const minsLeft = Math.max(0, Math.ceil((until - now) / 60000));
-                    titan.logf('[Stark Mercher]   %s: expires in %d min (at %s)', name, minsLeft, new Date(until).toISOString());
-                }
+            } else {
+                flat = parsed as Record<string, number>;
+            }
+            const items = Object.keys(flat);
+            if (items.length === 0) {
+                titan.logf('[Stark Mercher] No buy freezes active.');
+                return;
+            }
+            const active = items.filter(name => flat[name] > now);
+            const expired = items.length - active.length;
+            titan.logf('[Stark Mercher] Buy freezes (%d active, %d expired):', active.length, expired);
+            for (const name of active) {
+                const until = flat[name];
+                const minsLeft = Math.max(0, Math.ceil((until - now) / 60000));
+                titan.logf('[Stark Mercher]   %s: expires in %d min (at %s)', name, minsLeft, new Date(until).toISOString());
             }
             titan.logf('[Stark Mercher] Buy freeze dump complete.');
         },
@@ -596,6 +671,28 @@ export class StarkMercher extends titan.Plugin {
     }
     onGameTick = (tick: number) => {
         if (this.terminated) return;
+
+        // --- Overlay cache refresh (fallback) ---
+        // The overlay reads bot.cachedCoinCount and bot.cachedDailyProfit
+        // instead of calling titan.utils.inventory.count(995) and
+        // getDailyProfit() every frame (which exhausts native handles over
+        // hours). The auto-loop refreshes these when it runs, but when it's
+        // not running (Paused mode, logged out, GE not open, action delay
+        // pending), we refresh here every 30 ticks (~18 seconds) as a
+        // fallback. This is at most 1 native query per 18 seconds, not per
+        // frame — negligible handle creation.
+        if (tick - this.lastOverlayCacheRefreshTick >= 30) {
+            this.lastOverlayCacheRefreshTick = tick;
+            this.cachedCoinCount = titan.utils.inventory.count(995);
+            const playerName = this.currentPlayerName || titan.state.client.localPlayer?.name || '';
+            if (playerName) {
+                if (this.cachedDailyProfitAccount !== playerName) {
+                    this.cachedDailyProfitAccount = playerName;
+                }
+                this.cachedDailyProfit = getDailyProfit(this, playerName);
+            }
+        }
+
         // Paused mode: no script logic runs at all. The overlay still renders
         // (it's a separate render callback) so the user can see the status and
         // switch to Auto Merch.

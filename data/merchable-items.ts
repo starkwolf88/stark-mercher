@@ -69,7 +69,31 @@ export interface MerchableItem {
     dataFetchedAt: number;
     /** ISO string of when the price data was fetched (human-readable). */
     dataFetchedAtIso: string;
+    /** Lowball percentage applied to the buy price (0 = no lowball, buy at market). */
+    lowballPercent: number;
+    /** Lowball amount in gp (the reduction from lowballBasePrice to purchasePrice). */
+    lowballAmount: number;
+    /** Pre-lowball buy price (the market price before the lowball was applied). */
+    lowballBasePrice: number;
 }
+
+// --- Lowball helpers -------------------------------------------------------
+
+/**
+ * Lowball tier for buy-scan prioritisation.
+ * - `'non-lowball'` — only items with `lowballPercent === 0` (instant-fill, buy at market).
+ * - `'lowball'` — only items with `lowballPercent > 0` (buy below market, slower fills).
+ * - `'any'` — all items in JSON order (no lowball filtering, backward-compatible default).
+ */
+export type LowballTier = 'non-lowball' | 'lowball' | 'any';
+
+/**
+ * Returns true if the item has a lowball applied (`lowballPercent > 0`).
+ * Lowball items buy below market price and fill slower; non-lowball items
+ * buy at market and fill immediately.
+ */
+export const isLowballItem = (item: MerchableItem): boolean =>
+    item.lowballPercent > 0;
 
 // --- Module-level cache ----------------------------------------------------
 // The JSON is inlined at build time, so we just cast and cache it once.
@@ -123,6 +147,14 @@ export const getMerchableItemById = (itemId: number): MerchableItem | null => {
  * is not currently frozen (recently aborted buy offer).
  * Used by the buying flow to pick the next item to buy.
  *
+ * **Lowball tiering**: The `lowballTier` parameter controls whether the scan
+ * considers only non-lowball items (instant-fill, buy at market), only lowball
+ * items (buy below market, slower fills), or all items. The auto-loop calls
+ * this function in tier order — non-lowball first, then lowball — so that
+ * instant-fill items fill GE slots before slower lowball items are attempted.
+ * Lowball items have less reliable ETA/profit-per-hour estimates because the
+ * fill rate depends on the price distribution below the lowballed price.
+ *
  * @param occupiedItemNames - Set of item names (lowercase) currently in GE slots.
  * @param availableCoins - Total coins in inventory (item ID 995). Items whose
  *   totalPurchasePrice exceeds this are skipped. Pass Infinity to skip the
@@ -133,6 +165,9 @@ export const getMerchableItemById = (itemId: number): MerchableItem | null => {
  *   true so P2P worlds consider every item.
  * @param frozenItemNames - Set of item names (lowercase) that are temporarily
  *   frozen from buying (recently aborted buy offer). These are skipped. Optional.
+ * @param lowballTier - Which lowball tier to scan: `'non-lowball'` (only
+ *   instant-fill items), `'lowball'` (only lowballed items), or `'any'` (all
+ *   items in JSON order). Defaults to `'any'` for backward compatibility.
  */
 export const getFirstUnoccupiedMerchableItem = (
     occupiedItemNames: Set<string>,
@@ -140,6 +175,7 @@ export const getFirstUnoccupiedMerchableItem = (
     buyLimitedItemNames: Set<string> = new Set(),
     isMembersWorld: boolean = true,
     frozenItemNames: Set<string> = new Set(),
+    lowballTier: LowballTier = 'any',
 ): MerchableItem | null => {
     const items = ensureLoaded();
     for (const item of items) {
@@ -149,6 +185,8 @@ export const getFirstUnoccupiedMerchableItem = (
         if (frozenItemNames.has(lower)) continue;
         if (item.totalPurchasePrice > availableCoins) continue;
         if (!isMembersWorld && item.members) continue;
+        if (lowballTier === 'non-lowball' && isLowballItem(item)) continue;
+        if (lowballTier === 'lowball' && !isLowballItem(item)) continue;
         return item;
     }
     return null;
@@ -178,8 +216,13 @@ export interface PartialBuyResult {
  * The reduced quantity is: min(floor(availableCoins / purchasePrice), limit).
  * Profit check: reducedQty * profitMargin >= minProfitGp.
  *
+ * **Lowball tiering**: Same `lowballTier` parameter as
+ * `getFirstUnoccupiedMerchableItem`. The auto-loop calls this in tier order
+ * (non-lowball first, then lowball) for consistency with the primary buy scan.
+ *
  * @param minProfitGp - Minimum total profit (reducedQty * profitMargin) for
  *   the partial buy to be worthwhile. Default 15000.
+ * @param lowballTier - Which lowball tier to scan. Defaults to `'any'`.
  */
 export const getFirstPartialBuyItem = (
     occupiedItemNames: Set<string>,
@@ -188,6 +231,7 @@ export const getFirstPartialBuyItem = (
     isMembersWorld: boolean = true,
     frozenItemNames: Set<string> = new Set(),
     minProfitGp: number = 15000,
+    lowballTier: LowballTier = 'any',
 ): PartialBuyResult | null => {
     const items = ensureLoaded();
     for (const item of items) {
@@ -196,6 +240,8 @@ export const getFirstPartialBuyItem = (
         if (buyLimitedItemNames.has(lower)) continue;
         if (frozenItemNames.has(lower)) continue;
         if (!isMembersWorld && item.members) continue;
+        if (lowballTier === 'non-lowball' && isLowballItem(item)) continue;
+        if (lowballTier === 'lowball' && !isLowballItem(item)) continue;
         // Can't afford even 1 unit — skip.
         if (item.purchasePrice > availableCoins) continue;
         // Full quantity is affordable — getFirstUnoccupiedMerchableItem

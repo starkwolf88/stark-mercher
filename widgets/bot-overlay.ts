@@ -16,7 +16,6 @@
 // ============================================================================
 
 import type { StarkMercher } from '../stark-mercher.js';
-import { getDailyProfit } from '../data/daily-profit.js';
 import { formatUKTime } from '../antiban/session.js';
 
 // --- Layout constants ------------------------------------------------------
@@ -135,9 +134,16 @@ interface OverlayLine {
 
 export const renderBotOverlay = (bot: StarkMercher): void => {
     const status = getStatusText(bot);
-    const coins = titan.utils.inventory.count(995);
+    // Read cached values instead of calling titan.utils.inventory.count(995)
+    // and getDailyProfit() every frame. Per-frame native queries exhaust the
+    // finite native handle table over hours, causing FPS to drop to 0.
+    // The cache is refreshed by the auto-loop and by a fallback timer in
+    // onGameTick (every 30 ticks when the auto-loop isn't running).
+    const coins = bot.cachedCoinCount;
     const playerName = bot.currentPlayerName || titan.state.client.localPlayer?.name || '';
-    const dailyProfit = playerName ? getDailyProfit(bot, playerName) : 0;
+    const dailyProfit = (playerName && bot.cachedDailyProfitAccount === playerName)
+        ? bot.cachedDailyProfit
+        : 0;
 
     const isLoggedOut = bot.breakPhase === 'logged_out';
 
@@ -173,7 +179,8 @@ export const renderBotOverlay = (bot: StarkMercher): void => {
     lines.push({ text: 'Delay:', key: 'Delay:', value: delayStr, valueColor: delayColor });
 
     // Inventory Coins
-    lines.push({ text: 'Inventory Coins:', key: 'Inventory Coins:', value: `${formatGp(coins)} gp` });
+    const coinStr = coins >= 0 ? `${formatGp(coins)} gp` : '-';
+    lines.push({ text: 'Inventory Coins:', key: 'Inventory Coins:', value: coinStr, valueColor: coins >= 0 ? TEXT_COLOR : GREY_COLOR });
 
     // Daily Profit
     const profitStr = `${dailyProfit >= 0 ? '+' : ''}${formatGp(dailyProfit)} gp`;

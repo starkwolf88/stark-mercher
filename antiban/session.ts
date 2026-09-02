@@ -32,6 +32,7 @@ import { cancelHop } from './hopper.js';
 import { loadOfferCache } from '../general/state-persist.js';
 import { getMerchHistory } from '../data/merch-history.js';
 import { getAbortHistory } from '../data/abort-history.js';
+import { isRotationEnabled, selectNextAccount, recordAccountLogout, recordAccountLogin, loadRotationIndex } from './account-rotation.js';
 
 /** Dumps cache, merch history, and buy-freeze state to the log. Called
  *  automatically after each logout so the user can review state without
@@ -114,27 +115,48 @@ const dumpStateOnLogout = (bot: StarkMercher): void => {
         titan.logf('[Stark Mercher] Abort history dump complete.');
     }
 
-    // --- Buy freezes ---
+    // --- Buy freezes (global, flat format; legacy nested supported for display) ---
     const freezeRaw = bot.buyFreezeSetting.value;
     if (!freezeRaw || freezeRaw === '{}') {
-        titan.logf('[Stark Mercher] No buy freezes for any account.');
+        titan.logf('[Stark Mercher] No buy freezes active.');
     } else {
         try {
-            const all = JSON.parse(freezeRaw);
-            const accountNames = Object.keys(all);
-            for (const acct of accountNames) {
-                const freezes = all[acct];
-                const items = Object.keys(freezes);
-                if (items.length === 0) continue;
-                const now = Date.now();
-                const active = items.filter(name => freezes[name] > now);
-                const expired = items.length - active.length;
-                titan.logf('[Stark Mercher] Buy freezes for %s (%d active, %d expired):', acct, active.length, expired);
-                for (const name of active) {
-                    const until = freezes[name];
-                    const minsLeft = Math.max(0, Math.ceil((until - now) / 60000));
-                    titan.logf('[Stark Mercher]   %s: expires in %d min (at %s)', name, minsLeft, new Date(until).toISOString());
+            const parsed = JSON.parse(freezeRaw);
+            if (!parsed || typeof parsed !== 'object') {
+                titan.logf('[Stark Mercher] No buy freezes active.');
+                return;
+            }
+            const now = Date.now();
+            // Support both flat ({ item: until }) and legacy nested
+            // ({ account: { item: until } }) formats for diagnostics.
+            const values = Object.values(parsed);
+            const isNested = values.length > 0 && values.every(v => v !== null && typeof v === 'object');
+            let flat: Record<string, number>;
+            if (isNested) {
+                flat = {};
+                for (const accountMap of values as Record<string, number>[]) {
+                    if (!accountMap || typeof accountMap !== 'object') continue;
+                    for (const [name, until] of Object.entries(accountMap)) {
+                        if (typeof until !== 'number') continue;
+                        const existing = flat[name];
+                        if (!existing || until > existing) flat[name] = until;
+                    }
                 }
+            } else {
+                flat = parsed as Record<string, number>;
+            }
+            const items = Object.keys(flat);
+            if (items.length === 0) {
+                titan.logf('[Stark Mercher] No buy freezes active.');
+                return;
+            }
+            const active = items.filter(name => flat[name] > now);
+            const expired = items.length - active.length;
+            titan.logf('[Stark Mercher] Buy freezes (%d active, %d expired):', active.length, expired);
+            for (const name of active) {
+                const until = flat[name];
+                const minsLeft = Math.max(0, Math.ceil((until - now) / 60000));
+                titan.logf('[Stark Mercher]   %s: expires in %d min (at %s)', name, minsLeft, new Date(until).toISOString());
             }
             titan.logf('[Stark Mercher] Buy freeze dump complete.');
         } catch (e) {
@@ -400,6 +422,24 @@ function debugLog(bot: StarkMercher, msg: string): void {
 
 function humanLog(bot: StarkMercher, msg: string, ...args: unknown[]): void {
     titan.logf('[Stark Mercher] ' + msg, ...args);
+}
+
+// --- Multi-character rotation helpers ---------------------------------------
+
+/**
+ * Select the next account to log in after a break ends.
+ * When rotation is enabled (roster has 2+ names), delegates to
+ * selectNextAccount() which iterates the roster checking sleep/break
+ * eligibility. When rotation is disabled, returns the current account
+ * name (same-account relogin — the original behavior).
+ */
+function selectNextAccountForLogin(bot: StarkMercher): string | null {
+    if (!isRotationEnabled(bot)) {
+        // Single-account mode — log back into the same account
+        return bot.currentPlayerName || bot.lastActiveAccountSetting.value.trim() || null;
+    }
+    // Multi-account rotation — select next eligible account
+    return selectNextAccount(bot);
 }
 
 // --- Public API -------------------------------------------------------------
@@ -670,11 +710,37 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
 
             // Check if break duration has elapsed
             if (bot.breakPhase === 'logged_out' && now >= bot.breakTargetEndMs) {
-                // Break is over — start logging in
+                // Break is over — start logging in.
+                // With multi-account rotation, select the next eligible
+                // account from the roster instead of logging back into the
+                // same account.
+                const nextAccount = selectNextAccountForLogin(bot);
+                if (nextAccount) {
+                    if (nextAccount !== bot.currentPlayerName) {
+                        humanLog(bot, 'Break ended (%s) — rotating to account %s', bot.breakType, nextAccount);
+                        bot.currentPlayerName = nextAccount;
+                        bot.sessionProfile = loadOrCreateSessionProfile(bot, nextAccount);
+                        if (bot.lastActiveAccountSetting.value !== nextAccount) {
+                            bot.lastActiveAccountSetting.value = nextAccount;
+                        }
+                        // Re-sample nightly break for the new account
+                        bot.nightlyBreakTargetTime = -1;
+                        bot.nightlySleepMinutes = -1;
+                    } else {
+                        humanLog(bot, 'Break ended (%s), logging back in', bot.breakType);
+                    }
+                } else {
+                    humanLog(bot, 'Break ended (%s) but no eligible account found — waiting', bot.breakType);
+                    // Don't transition to logging_in yet; stay logged_out
+                    // and retry on the next tick. Push breakTargetEndMs
+                    // forward by 30 seconds to avoid spamming the log.
+                    bot.breakTargetEndMs = now + 30000;
+                    saveBreakState(bot);
+                    return true;
+                }
                 bot.breakPhase = 'logging_in';
                 resetLogoutState(bot);
                 resetLoginState(bot);
-                humanLog(bot, 'Break ended (%s), logging back in', bot.breakType);
                 saveBreakState(bot);
             }
 
@@ -701,6 +767,10 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
                 resetLoginState(bot);
                 bot.autoLoop.needsPostLoginCleanup = true;
                 humanLog(bot, 'Logged back in, resuming auto-loop');
+                // Clear per-account break state on successful login
+                if (isRotationEnabled(bot) && bot.currentPlayerName) {
+                    recordAccountLogin(bot, bot.currentPlayerName);
+                }
                 clearBreakState(bot);
             }
             return true;
@@ -761,6 +831,10 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
             resetLoginState(bot);
             bot.autoLoop.needsPostLoginCleanup = true;
             humanLog(bot, 'Logged back in, resuming auto-loop');
+            // Clear per-account break state on successful login
+            if (isRotationEnabled(bot) && bot.currentPlayerName) {
+                recordAccountLogin(bot, bot.currentPlayerName);
+            }
             clearBreakState(bot);
         }
         return true;
@@ -808,6 +882,13 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
             const wakeTime = new Date(bot.breakTargetEndMs);
             humanLog(bot, 'Nightly sleep starting — wake at %s (%d min sleep)',
                 wakeTime.toISOString(), bot.nightlySleepMinutes);
+            // Record per-account break state for multi-character rotation.
+            // The duration is the full sleep duration — the account won't
+            // be selected again until its wake time.
+            if (isRotationEnabled(bot) && bot.currentPlayerName) {
+                const sleepDurationMs = bot.nightlySleepMinutes * MS_PER_MINUTE;
+                recordAccountLogout(bot, bot.currentPlayerName, sleepDurationMs);
+            }
             saveBreakState(bot);
         }
         // While logging out, dispatch logout
@@ -856,6 +937,11 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
         bot.nextActionEtaMin = -1;
         resetLogoutState(bot);
         humanLog(bot, 'Short break starting — %d min logout', Math.round(duration / MS_PER_MINUTE));
+        // Record per-account break state for multi-character rotation.
+        // The duration is the ETA-based minimum break for this account.
+        if (isRotationEnabled(bot) && bot.currentPlayerName) {
+            recordAccountLogout(bot, bot.currentPlayerName, duration);
+        }
         logoutForBreak(bot, 'short');
         saveBreakState(bot);
         return true;
@@ -904,11 +990,33 @@ export function wallClockStep(bot: StarkMercher): void {
         }
 
         if (bot.breakPhase === 'logged_out' && now >= bot.breakTargetEndMs) {
-            bot.breakPhase = 'logging_in';
-            resetLogoutState(bot);
-            resetLoginState(bot);
-            humanLog(bot, 'Break ended (%s), logging back in', bot.breakType);
-            saveBreakState(bot);
+            // Break is over — select next account for multi-character rotation.
+            const nextAccount = selectNextAccountForLogin(bot);
+            if (nextAccount) {
+                if (nextAccount !== bot.currentPlayerName) {
+                    humanLog(bot, 'Break ended (%s) — rotating to account %s', bot.breakType, nextAccount);
+                    bot.currentPlayerName = nextAccount;
+                    bot.sessionProfile = loadOrCreateSessionProfile(bot, nextAccount);
+                    if (bot.lastActiveAccountSetting.value !== nextAccount) {
+                        bot.lastActiveAccountSetting.value = nextAccount;
+                    }
+                    // Re-sample nightly break for the new account
+                    bot.nightlyBreakTargetTime = -1;
+                    bot.nightlySleepMinutes = -1;
+                } else {
+                    humanLog(bot, 'Break ended (%s), logging back in', bot.breakType);
+                }
+                bot.breakPhase = 'logging_in';
+                resetLogoutState(bot);
+                resetLoginState(bot);
+                saveBreakState(bot);
+            } else {
+                // No eligible account — wait and retry
+                if (bot.breakTargetEndMs <= now) {
+                    bot.breakTargetEndMs = now + 30000;
+                    saveBreakState(bot);
+                }
+            }
         }
 
         if (bot.breakPhase === 'logging_out') {

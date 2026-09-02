@@ -412,7 +412,8 @@ items while freeing up cash for additional slots.
 - `determine-flips.mjs` reads `mappingEntry.members` from the OSRS Wiki `/mapping`
   endpoint and stores `members: boolean` on every output item.
 - `data/merchable-items.ts` exposes `members` on `MerchableItem` and
-  `getFirstUnoccupiedMerchableItem` accepts an `isMembersWorld` flag.
+  `getFirstUnoccupiedMerchableItem` accepts an `isMembersWorld` flag and a
+  `lowballTier` flag (`'non-lowball'`, `'lowball'`, or `'any'`).
 - `grand_exchange/widgets.ts` already provides `isMembersWorld()` and
   `offerSlotCount()` (3 slots F2P, 8 P2P).
 - `grand_exchange/auto-loop.ts` passes `isMembersWorld()` to
@@ -421,10 +422,30 @@ items while freeing up cash for additional slots.
 ## Relationship to plugin
 
 `data/merchable-items.ts` imports `merchableItems.json` at build time and exposes
-`getMerchableItems`, `getMerchableItem`, `getMerchableItemById`, and
-`getFirstUnoccupiedMerchableItem`. The plugin uses `purchasePrice`, `salePrice`,
-`quantityToPurchase`, `limit`, and `totalPurchasePrice` from each item to place GE
-offers. The `dataFetchedAt` timestamp is used to ignore stale data.
+`getMerchableItems`, `getMerchableItem`, `getMerchableItemById`,
+`getFirstUnoccupiedMerchableItem`, `getFirstPartialBuyItem`, and `isLowballItem`.
+The plugin uses `purchasePrice`, `salePrice`, `quantityToPurchase`, `limit`, and
+`totalPurchasePrice` from each item to place GE offers. The `dataFetchedAt`
+timestamp is used to ignore stale data. The `lowballPercent`, `lowballAmount`,
+and `lowballBasePrice` fields are used by the buy scan to prioritise instant-fill
+(non-lowball) items over slower lowball items — see "Lowball buy-scan tiering" below.
+
+### Lowball buy-scan tiering
+
+The auto-loop buy scan uses a 4-tier priority order to ensure GE slots fill with
+instant-buy items before slower lowball offers are attempted:
+
+1. **Non-lowball, non-frozen** — `getFirstUnoccupiedMerchableItem(..., 'non-lowball')`
+2. **Non-lowball, frozen fallback** — `getFrozenFallbackItem(..., 'non-lowball')`
+3. **Lowball, non-frozen** — `getFirstUnoccupiedMerchableItem(..., 'lowball')`
+4. **Lowball, frozen fallback** — `getFrozenFallbackItem(..., 'lowball')`
+
+Lowball items (`lowballPercent > 0`) buy below market price and fill slower; their
+ETA is adjusted by a `1.5x lowball%` volume factor heuristic, but the real fill rate
+depends on the price distribution below the lowballed price, making profit-per-hour
+less reliable than non-lowball items. The partial-quantity fallback and frozen
+swap-out follow the same non-lowball-first tiering. Within each tier, items are
+attempted in `flipScore` (profit-per-hour) order.
 
 Changes to `determine-flips.mjs` affect the plugin only after `npm run build`
 re-bundles the JSON.

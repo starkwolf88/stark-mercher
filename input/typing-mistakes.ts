@@ -22,6 +22,32 @@
 // integrates with the existing per-account humanisation (reaction bias, jitter,
 // rare distraction). This yields 1-3 ticks (0.6-1.8s) normally, with the 0.1%
 // distraction event bypassing the cap (12-36s "tabbed out while correcting").
+//
+// --- Tick-driven state machine ---------------------------------------------
+// The mistake sequence is driven by game ticks, NOT setTimeout. The Titan
+// plugin runtime does not expose setTimeout/setTimeout, so any use of it
+// crashes the plugin with ReferenceError. Instead, the sequence advances via
+// tickMistakeSequence(), which is called from isTyping() in typing.ts every
+// time the GE flow's waitForTyping step polls typing status (once per tick).
+// tickMistakeSequence() uses titan.state.client.tick to advance exactly once
+// per game tick, even if isTyping() is called multiple times within the same
+// tick.
+//
+// Phases:
+//   phase1_typing        — humanType is typing part1 + wrongChar.
+//                         On completion → realise_gap (set tick counter).
+//   realise_gap          — count down N ticks (the realisation delay).
+//                         When counter hits 0 → press Backspace, enter
+//                         post_backspace_gap (set 1-tick counter).
+//   post_backspace_gap   — 1-tick pause after Backspace.
+//                         When counter hits 0 → start phase2_typing.
+//   phase2_typing        — humanType is typing part2.
+//                         On completion → deactivate sequence.
+//
+// A tick-based safety watchdog (MAX_MISTAKE_DURATION_TICKS) force-clears the
+// sequence if it hasn't completed within the safety window, so isTyping()
+// can return false and the flow can recover via its normal re-attempt/fail
+// path.
 // ============================================================================
 
 import { humanType, setMistakeSequenceActive } from './typing.js';
@@ -138,43 +164,129 @@ const chanceForKind = (kind: TypingKind): number => {
 // Game ticks are ~600ms. createDelay returns tick counts.
 const TICK_MS = 600;
 
-// --- Safety watchdog -------------------------------------------------------
-// The mistake sequence uses setTimeout for the realisation delay and the
-// post-backspace gap. If the Titan runtime fails to fire a setTimeout
-// callback (observed in production: the 1800ms realisation delay never
-// fired, leaving mistakeSequenceActive=true permanently and causing the
-// buy flow to time out at step 4), this watchdog force-clears the
-// sequence after MAX_MISTAKE_DURATION_MS so isTyping() can return false
-// and the flow can recover via its normal re-attempt/fail path.
-const MAX_MISTAKE_DURATION_MS = 8000;
-let mistakeWatchdog: ReturnType<typeof setTimeout> | null = null;
+// --- Tick-driven state machine ---------------------------------------------
+// The mistake sequence advances once per game tick via tickMistakeSequence(),
+// called from isTyping() in typing.ts. This replaces the former setTimeout-
+// based scheduling, which crashed because the Titan runtime does not expose
+// setTimeout.
 
-const clearMistakeWatchdog = (): void => {
-    if (mistakeWatchdog !== null) {
-        clearTimeout(mistakeWatchdog);
-        mistakeWatchdog = null;
-    }
-};
+type MistakePhase = 'idle' | 'phase1_typing' | 'realise_gap' | 'post_backspace_gap' | 'phase2_typing';
 
-const startMistakeWatchdog = (): void => {
-    clearMistakeWatchdog();
-    mistakeWatchdog = setTimeout(() => {
-        mistakeWatchdog = null;
-        // The sequence hasn't completed within the safety window. Force-clear
-        // the active flag so isTyping() can return false. Also set the cancel
-        // flag so any pending setTimeout chain bails out at its next check.
-        mistakeCancelled = true;
-        setMistakeSequenceActive(false);
-        debugLog(`Typing mistake: safety watchdog fired after ${MAX_MISTAKE_DURATION_MS}ms — sequence stuck, force-clearing`);
-    }, MAX_MISTAKE_DURATION_MS);
-};
+interface MistakeState {
+    phase: MistakePhase;
+    /** Remaining ticks to count down for the current gap phase. */
+    ticksRemaining: number;
+    /** The part2 text to type after the backspace correction. */
+    part2: string;
+    /** Typing opts to pass through to humanType for part2. */
+    opts?: { minDelayMs?: number; maxDelayMs?: number };
+    /** onDone callback to fire when the full sequence completes. */
+    onDone?: (completed: boolean) => void;
+    /** Tick number when the sequence started (for the safety watchdog). */
+    startTick: number;
+    /** Last tick number that tickMistakeSequence() advanced on (dedup). */
+    lastAdvanceTick: number;
+}
 
-/** Clear the watchdog and deactivate the sequence flag. Called at every
- *  sequence completion / abort point so the watchdog never outlives the
- *  sequence. Safe to call when no watchdog is pending (no-op). */
+let mistakeState: MistakeState | null = null;
+
+// Safety watchdog: force-clear the sequence if it hasn't completed within
+// this many ticks. 14 ticks ≈ 8.4s (was 8000ms in the setTimeout version).
+const MAX_MISTAKE_DURATION_TICKS = 14;
+
+// --- Cancel tracking -------------------------------------------------------
+// Module-level flag set by cancelTypingMistakeSequence() so any pending
+// phase callback bails out at its next check.
+let mistakeCancelled = false;
+
 const deactivateMistakeSequence = (): void => {
-    clearMistakeWatchdog();
+    mistakeState = null;
     setMistakeSequenceActive(false);
+};
+
+/**
+ * Advance the tick-driven mistake state machine by one tick.
+ * Called from isTyping() in typing.ts. Uses titan.state.client.tick to
+ * advance exactly once per game tick (dedup via lastAdvanceTick).
+ * Returns true if the sequence is still active after this call.
+ */
+export const tickMistakeSequence = (): boolean => {
+    if (!mistakeState) return false;
+    if (mistakeCancelled) {
+        deactivateMistakeSequence();
+        return false;
+    }
+
+    const currentTick = titan.state.client.tick;
+    // Dedup: only advance once per game tick.
+    if (mistakeState.lastAdvanceTick === currentTick) {
+        return true; // still active, just already advanced this tick
+    }
+    mistakeState.lastAdvanceTick = currentTick;
+
+    // Safety watchdog: force-clear if the sequence has run too long.
+    const elapsedTicks = currentTick - mistakeState.startTick;
+    if (elapsedTicks >= MAX_MISTAKE_DURATION_TICKS) {
+        debugLog(`Typing mistake: safety watchdog fired after ${elapsedTicks}t — sequence stuck, force-clearing`);
+        mistakeCancelled = true;
+        const cb = mistakeState.onDone;
+        deactivateMistakeSequence();
+        if (cb) cb(false);
+        return false;
+    }
+
+    // Advance gap phases (typing phases are driven by humanType's onDone,
+    // not by tick counting).
+    if (mistakeState.phase === 'realise_gap' || mistakeState.phase === 'post_backspace_gap') {
+        mistakeState.ticksRemaining--;
+        if (mistakeState.ticksRemaining <= 0) {
+            if (mistakeState.phase === 'realise_gap') {
+                // Phase 3: press Backspace to delete the wrong character.
+                try {
+                    titan.keyboard.sendKey(titan.keyboard.Key.Backspace);
+                } catch (e) {
+                    // If backspace fails, abort the sequence — the validation
+                    // step will catch any wrong text and Escape out.
+                    debugLog('Typing mistake: backspace failed, aborting sequence');
+                    mistakeCancelled = true;
+                    const cb = mistakeState.onDone;
+                    deactivateMistakeSequence();
+                    if (cb) cb(false);
+                    return false;
+                }
+                debugLog('Typing mistake: backspace sent, resuming in 1t');
+                // Phase 4: 1-tick gap after backspace before resuming typing.
+                mistakeState.phase = 'post_backspace_gap';
+                mistakeState.ticksRemaining = 1;
+            } else {
+                // post_backspace_gap finished — Phase 5: type part2.
+                mistakeState.phase = 'phase2_typing';
+                const part2 = mistakeState.part2;
+                const opts = mistakeState.opts;
+                const started = humanType(part2, opts, (completed2) => {
+                    if (mistakeCancelled) {
+                        deactivateMistakeSequence();
+                        return;
+                    }
+                    const cb = mistakeState?.onDone;
+                    deactivateMistakeSequence();
+                    if (cb) cb(completed2);
+                });
+                if (!started) {
+                    // humanType couldn't start — clear the flag and let the
+                    // caller retry on the next tick.
+                    debugLog('Typing mistake: humanType could not start part2, aborting');
+                    mistakeCancelled = true;
+                    const cb = mistakeState.onDone;
+                    deactivateMistakeSequence();
+                    if (cb) cb(false);
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
 };
 
 // --- typeStringWithMistake() ------------------------------------------------
@@ -218,70 +330,44 @@ export const typeStringWithMistake = (
     // part2's start). The flow's waitForTyping step polls isTyping() and must
     // not advance until the entire sequence is done.
     setMistakeSequenceActive(true);
-    startMistakeWatchdog();
     debugLog(`Typing mistake: typed '${wrongChar}' after '${part1}' (${kind}), correcting shortly`);
 
     // Phase 1: type part1 + wrongChar via humanType.
     const phase1Text = part1 + wrongChar;
+
+    mistakeCancelled = false;
+    mistakeState = {
+        phase: 'phase1_typing',
+        ticksRemaining: 0,
+        part2,
+        opts,
+        onDone,
+        startTick: titan.state.client.tick,
+        lastAdvanceTick: -1,
+    };
 
     const startPhase1 = (): boolean => {
         return humanType(phase1Text, opts, (completed1) => {
             if (!completed1 || mistakeCancelled) {
                 // Part1 was cancelled (e.g. user closed the prompt) or the
                 // sequence was cancelled externally. Abort.
+                const cb = mistakeState?.onDone;
                 deactivateMistakeSequence();
-                if (onDone) onDone(false);
+                if (cb) cb(false);
                 return;
             }
             // Phase 2: humanised realisation delay before pressing backspace.
             // createDelay(2, 100, 3) → 1-3 ticks normally, 0.1% distraction
             // bypasses the cap (12-36s "tabbed out").
             const realiseTicks = createDelay(2, 100, 3);
-            const realiseMs = realiseTicks * TICK_MS;
-            debugLog(`Typing mistake: realising in ${realiseTicks}t (${realiseMs}ms)`);
-
-            setTimeout(() => {
-                if (mistakeCancelled) {
-                    deactivateMistakeSequence();
-                    if (onDone) onDone(false);
-                    return;
-                }
-                // Phase 3: press Backspace to delete the wrong character.
-                try {
-                    titan.keyboard.sendKey(titan.keyboard.Key.Backspace);
-                } catch (e) {
-                    // If backspace fails, abort the sequence — the validation
-                    // step will catch any wrong text and Escape out.
-                    deactivateMistakeSequence();
-                    if (onDone) onDone(false);
-                    return;
-                }
-                debugLog('Typing mistake: backspace sent, resuming in 1t');
-
-                // Phase 4: 1-tick gap after backspace before resuming typing.
-                setTimeout(() => {
-                    if (mistakeCancelled) {
-                        deactivateMistakeSequence();
-                        if (onDone) onDone(false);
-                        return;
-                    }
-                    // Phase 5: type the remaining part2 via humanType.
-                    const started = humanType(part2, opts, (completed2) => {
-                        deactivateMistakeSequence();
-                        if (onDone) onDone(completed2);
-                    });
-                    if (!started) {
-                        // humanType couldn't start (e.g. another typing in
-                        // progress). Clear the flag and let the caller retry.
-                        deactivateMistakeSequence();
-                        if (onDone) onDone(false);
-                    }
-                }, TICK_MS);
-            }, realiseMs);
+            debugLog(`Typing mistake: realising in ${realiseTicks}t (${realiseTicks * TICK_MS}ms)`);
+            if (mistakeState) {
+                mistakeState.phase = 'realise_gap';
+                mistakeState.ticksRemaining = realiseTicks;
+            }
         });
     };
 
-    mistakeCancelled = false;
     const started = startPhase1();
     if (!started) {
         // humanType couldn't start the first phase — clear the flag so
@@ -290,11 +376,6 @@ export const typeStringWithMistake = (
     }
     return started;
 };
-
-// --- Cancel tracking -------------------------------------------------------
-// Module-level flag set by cancelTypingMistakeSequence() so any pending
-// setTimeout chain in an active mistake sequence bails out at the next check.
-let mistakeCancelled = false;
 
 export const cancelTypingMistakeSequence = (): void => {
     mistakeCancelled = true;

@@ -1,6 +1,7 @@
 import type { StarkMercher } from '../stark-mercher.js';
 import { resetAutoLoop } from '../grand_exchange/auto-loop.js';
 import { resetBreakState, restoreBreakState, initSessionProfile, resetHopState } from '../antiban/session.js';
+import { loadRotationIndex } from '../antiban/account-rotation.js';
 
 // onEnable()
 export const onEnable = (bot: StarkMercher) => {
@@ -56,6 +57,9 @@ const resetState = (bot: StarkMercher) => {
     }
     // Reset hop state (in-memory only; persisted timers are restored separately).
     resetHopState(bot);
+    // Load the rotation index from the hidden setting (for multi-character
+    // rotation). -1 = not yet loaded; loadRotationIndex returns 0 if unset.
+    bot.rotationIndex = loadRotationIndex(bot);
     // If the player is already in-world, load the session profile immediately.
     if (titan.state.client.localPlayer?.name) {
         initSessionProfile(bot);
