@@ -1035,17 +1035,20 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
             // Skip items that are currently being bought in a GE slot.
             // When we collect a partially bought offer, the items go to
             // inventory, but we don't want to sell them until the buy
-            // offer completes or is aborted.
+            // offer completes or is aborted. Items that are only being
+            // SOLD in another slot are NOT skipped — OSRS allows the same
+            // item to be listed in multiple sell slots simultaneously.
             if (occupiedNames.has(lowerName)) {
-                // Check if the occupied slot is a buy offer for this item.
+                let skipForBuy = false;
                 for (const slot of slots) {
                     if (slot.itemName && slot.itemName.trim().toLowerCase() === lowerName && slot.type === 'buy') {
                         debugLog(bot, `Auto: skipping ${itemName} — currently being bought in a GE slot`);
                         loop.sellAttemptedItems.add(lowerName);
+                        skipForBuy = true;
                         break;
                     }
                 }
-                continue;
+                if (skipForBuy) continue;
             }
 
             // This item is not being bought — we can sell it.

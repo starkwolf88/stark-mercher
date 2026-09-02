@@ -101,6 +101,11 @@ export class BuyOfferFlow {
     // up to MAX_REATTEMPTS times before failing. This prevents spam-clicking:
     // we only re-attempt when the expected state hasn't appeared after waiting.
     private reattempts = 0;
+    // Set by step 6 when the GE's default price already matches our target
+    // but the quantity doesn't. After the quantity is submitted (step 12),
+    // we skip the price entry steps (13-16) and go straight to validation
+    // (step 17) instead of clicking "Enter price".
+    private _skipPriceEntry = false;
 
     constructor(opts: BuyOfferOptions) {
         this.quantity = opts.quantity;
@@ -452,6 +457,40 @@ export class BuyOfferFlow {
             return false;
         }
         this.log(`Item validated: "${loadedName}"`);
+        // Check if the GE's default quantity and price already match our
+        // targets. The buy config screen defaults to qty=1 and a market
+        // price. If our target qty is 1, skip the qty entry steps (7-11).
+        // If the default price also matches, skip the price entry steps
+        // (12-16) and go straight to validation (step 17).
+        const currentQty = readOfferQuantity();
+        const currentPrice = readOfferPrice();
+        const qtyOk = currentQty !== null && currentQty === this.quantity;
+        const priceOk = currentPrice !== null && currentPrice === this.price;
+        if (qtyOk && priceOk) {
+            this.log(`Step 6: qty=${currentQty} and price=${currentPrice}gp already match target — skipping entry steps`);
+            this.step = 17; // skip to validate
+            this.waitTicks = 0;
+            this.reattempts = 0;
+            this.computeDelay(1, 35, 5);
+            this.advance();
+            return true;
+        }
+        if (priceOk && !qtyOk) {
+            // Price already matches but qty doesn't — skip price entry after
+            // qty is set. We'll still type the qty, then jump to validation.
+            this.log(`Step 6: price=${currentPrice}gp matches target, qty=${currentQty ?? 'unknown'} ≠ ${this.quantity} — will set qty only`);
+            this._skipPriceEntry = true;
+        } else if (qtyOk && !priceOk) {
+            // Qty already matches but price doesn't — skip qty entry, go
+            // straight to price entry (step 12).
+            this.log(`Step 6: qty=${currentQty} matches target, price=${currentPrice ?? 'unknown'}gp ≠ ${this.price}gp — will set price only`);
+            this.step = 12; // skip to price entry
+            this.waitTicks = 0;
+            this.reattempts = 0;
+            this.computeDelay(1, 35, 5);
+            this.advance();
+            return true;
+        }
         // Set a delay before the next action (clicking qty enter).
         this.computeDelay(1, 35, 5);
         this.advance();
@@ -516,6 +555,17 @@ export class BuyOfferFlow {
         this.log('Step 12: Pressing Enter to submit quantity');
         if (!pressEnter()) {
             return this.waitTick();
+        }
+        // If the default price already matched our target (detected in step 6),
+        // skip the price entry steps and go straight to validation.
+        if (this._skipPriceEntry) {
+            this.log('Step 12: skipping price entry — default price already matches target');
+            this.step = 17; // skip to validate
+            this.waitTicks = 0;
+            this.reattempts = 0;
+            this.computeDelay(1, 35, 5);
+            this.advance();
+            return true;
         }
         this.computeDelay(1, 35, 5);
         this.advance();

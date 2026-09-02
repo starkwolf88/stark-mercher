@@ -179,31 +179,34 @@ export class StarkMercher extends titan.Plugin {
         hidden: true,
     });
 
-    // --- Hidden offer cache setting ---
+    // --- Offer cache setting (visible for manual backup) ---
     // Stores the per-account offer cache as JSON. Survives hot reloads
     // (plugin off/on within the same client session) but NOT client
     // restarts — Titan's host app does not persist hidden settings to
     // plugin_settings.json, and plugin-side .value writes are not marked
     // dirty for disk persistence. On client restart, the cache is empty
     // and must be reconstructed from live GE state (reverse reconciliation
-    // in auto-loop.ts Step 2b).
+    // in auto-loop.ts Step 2b). This setting is visible so you can
+    // manually copy the JSON out before closing the client and paste it
+    // back in after restarting to preserve offer metadata across restarts.
     offerCacheSetting: titan.Setting<string> = this.stringSetting({
         key: 'offerCache',
-        name: 'Offer cache (hidden)',
+        name: 'Offer cache (manual backup)',
         default: '{}',
-        hidden: true,
+        hidden: false,
     });
 
-    // --- Hidden daily profit setting ---
+    // --- Daily profit setting (visible for manual backup) ---
     // Stores per-account daily profit as JSON. Keyed by account name.
     // Each entry has { dayStartedAt, profit }. Day rollover is handled by
     // comparing dayStartedAt to the current day's midnight on read/write.
     // Same persistence limitation as offerCacheSetting — hot reload only.
+    // Visible so you can manually copy/paste the JSON across client restarts.
     dailyProfitSetting: titan.Setting<string> = this.stringSetting({
         key: 'dailyProfit',
-        name: 'Daily profit (hidden)',
+        name: 'Daily profit (manual backup)',
         default: '{}',
-        hidden: true,
+        hidden: false,
     });
 
     // --- Hidden hop state setting ---
@@ -242,29 +245,31 @@ export class StarkMercher extends titan.Plugin {
         hidden: true,
     });
 
-    // --- Hidden merch history setting ---
+    // --- Merch history setting (visible for manual backup) ---
     // Stores per-account merch history (profits and losses) as JSON.
     // Each entry records item, qty, profit/loss, date, buy price, avg sold
     // price, and revision count for a completed merch cycle.
     // Same persistence limitation as offerCacheSetting — hot reload only.
+    // Visible so you can manually copy/paste the JSON across client restarts.
     merchHistorySetting: titan.Setting<string> = this.stringSetting({
         key: 'merchHistory',
-        name: 'Merch history (hidden)',
+        name: 'Merch history (manual backup)',
         default: '{}',
-        hidden: true,
+        hidden: false,
     });
 
-    // --- Hidden buy-freeze setting ---
+    // --- Buy-freeze setting (visible for manual backup) ---
     // Stores per-account buy-freeze state as JSON. Keyed by account name,
     // each value is a map of lowercase item name -> freeze-until timestamp
     // (ms). Survives hot reloads so a buy freeze applied after aborting a
     // stale buy offer is not lost on plugin toggle.
     // Same persistence limitation as offerCacheSetting — hot reload only.
+    // Visible so you can manually copy/paste the JSON across client restarts.
     buyFreezeSetting: titan.Setting<string> = this.stringSetting({
         key: 'buyFreeze',
-        name: 'Buy freeze (hidden)',
+        name: 'Buy freeze (manual backup)',
         default: '{}',
-        hidden: true,
+        hidden: false,
     });
 
     // --- Overlay HUD registration ---
