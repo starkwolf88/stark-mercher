@@ -46,6 +46,7 @@ import {
 } from './widgets.js';
 import { isTyping } from '../input/typing.js';
 import { cancelTypingMistakeSequence } from '../input/typing-mistakes.js';
+import { formatGeInput } from '../general/helpers.js';
 
 export interface BuyOfferOptions {
     /** Slot number 1-8, or undefined for first available empty slot. */
@@ -537,9 +538,9 @@ export class BuyOfferFlow {
 
     // Step 10: Start typing the quantity.
     private startTypingQty(): boolean {
-        this.log(`Step 10: Typing quantity "${this.quantity}"`);
+        this.log(`Step 10: Typing quantity "${formatGeInput(this.quantity)}"`);
         if (!this.typingStarted) {
-            if (!typeString(String(this.quantity), 'quantity')) {
+            if (!typeString(formatGeInput(this.quantity), 'quantity')) {
                 return this.waitTick();
             }
             this.typingStarted = true;
@@ -608,9 +609,9 @@ export class BuyOfferFlow {
 
     // Step 15: Start typing the price.
     private startTypingPrice(): boolean {
-        this.log(`Step 15: Typing price "${this.price}"`);
+        this.log(`Step 15: Typing price "${formatGeInput(this.price)}"`);
         if (!this.typingStarted) {
-            if (!typeString(String(this.price), 'price')) {
+            if (!typeString(formatGeInput(this.price), 'price')) {
                 return this.waitTick();
             }
             this.typingStarted = true;

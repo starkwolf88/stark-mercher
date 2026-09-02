@@ -442,6 +442,46 @@ function selectNextAccountForLogin(bot: StarkMercher): string | null {
     return selectNextAccount(bot);
 }
 
+/**
+ * After the current account logs out for a break, immediately check if a
+ * different account in the roster is eligible to log in right now. If so,
+ * transition to logging_in with that account, skipping the break wait.
+ * This implements the "next roster account is considered immediately"
+ * behaviour: account A logs out → account B logs in right away, rather
+ * than waiting for account A's break timer to expire.
+ *
+ * Returns true if an immediate rotation was triggered (caller should stop
+ * processing), false if no other account is eligible (caller should fall
+ * through to the normal break-timer wait).
+ */
+function tryImmediateRotation(bot: StarkMercher): boolean {
+    if (!isRotationEnabled(bot)) return false;
+    // Only rotate immediately if the current account just logged out for
+    // a break (not an unexpected disconnect — those retry the same account).
+    if (bot.breakPhase !== 'logged_out') return false;
+    const nextAccount = selectNextAccount(bot);
+    if (!nextAccount) return false;
+    // Only skip the break wait if we're switching to a DIFFERENT account.
+    // If the same account is selected, it means no other account is
+    // eligible — fall through to the normal break-timer wait.
+    if (nextAccount === bot.currentPlayerName) return false;
+    humanLog(bot, 'Rotation: %s logged out — immediately rotating to %s (skip break wait)',
+        bot.currentPlayerName, nextAccount);
+    bot.currentPlayerName = nextAccount;
+    bot.sessionProfile = loadOrCreateSessionProfile(bot, nextAccount);
+    if (bot.lastActiveAccountSetting.value !== nextAccount) {
+        bot.lastActiveAccountSetting.value = nextAccount;
+    }
+    // Re-sample nightly break for the new account
+    bot.nightlyBreakTargetTime = -1;
+    bot.nightlySleepMinutes = -1;
+    bot.breakPhase = 'logging_in';
+    resetLogoutState(bot);
+    resetLoginState(bot);
+    saveBreakState(bot);
+    return true;
+}
+
 // --- Public API -------------------------------------------------------------
 
 /** Initialize session profile for the current account. Called on enable / login. */
@@ -706,6 +746,12 @@ export function breakStep(bot: StarkMercher, tick: number): boolean {
                 debugLog(bot, `Break: logged out, waiting until ${new Date(bot.breakTargetEndMs).toISOString()}`);
                 saveBreakState(bot);
                 dumpStateOnLogout(bot);
+                // Multi-account rotation: immediately check if a different
+                // account is eligible to log in right now. If so, skip the
+                // break wait and log in the next account.
+                if (tryImmediateRotation(bot)) {
+                    return true;
+                }
             }
 
             // Check if break duration has elapsed
@@ -987,6 +1033,12 @@ export function wallClockStep(bot: StarkMercher): void {
             debugLog(bot, `Break: logged out, waiting until ${new Date(bot.breakTargetEndMs).toISOString()}`);
             saveBreakState(bot);
             dumpStateOnLogout(bot);
+            // Multi-account rotation: immediately check if a different
+            // account is eligible to log in right now. If so, skip the
+            // break wait and log in the next account. tryImmediateRotation
+            // sets breakPhase='logging_in' on success, so the break-timer
+            // check below won't fire.
+            tryImmediateRotation(bot);
         }
 
         if (bot.breakPhase === 'logged_out' && now >= bot.breakTargetEndMs) {
