@@ -17,6 +17,7 @@ import type { StarkMercher } from '../stark-mercher.js';
 import type { OfferCacheData, OfferCacheEntry } from '../general/state-persist.js';
 import { loadOfferCache, saveOfferCache } from '../general/state-persist.js';
 import { getMerchableItem, type MerchableItem } from './merchable-items.js';
+import { getPriceHistoryEntry } from './price-history.js';
 
 // --- Price revision constants ----------------------------------------------
 // The revision strategy reduces the sale price each time an offer is
@@ -204,6 +205,79 @@ export class OfferCacheManager {
         this.dirty = true;
         titan.logf('[Stark Mercher] Cache: recorded buy offer for %s (buy=%d, sell=%d)',
             key, item.purchasePrice, item.salePrice);
+    }
+
+    /**
+     * Reconstructs a cache entry from a live GE slot after the cache was lost
+     * (e.g. client restart that didn't persist the hidden setting). Uses
+     * merchableItems.json for prices/ETAs, falling back to priceHistory.json
+     * (1h average prices) when the item is no longer in the merchable list.
+     *
+     * The reconstructed entry uses Date.now() as offerPlacedAt since the
+     * actual placement time is unknown. This gives the offer a fresh full ETA
+     * window before staleness checks can abort it — the safest choice since
+     * aborting an offer we know nothing about could discard partial fills.
+     *
+     * For sell offers, sellQuantity is set from the slot's item quantity so
+     * the completed-sell sweep can record profit when the sell finishes.
+     * sellConfirmed is set to true since the offer is already live on the GE.
+     *
+     * Returns true if an entry was created, false if no price data was found
+     * (the caller should leave the slot alone in that case).
+     */
+    reconstructEntry(
+        itemName: string,
+        slotType: 'buy' | 'sell',
+        slotQuantity: number,
+    ): boolean {
+        const key = itemName;
+        if (this.get(key)) return false; // already has an entry
+
+        const merch = getMerchableItem(itemName);
+        let buyPrice: number;
+        let sellPrice: number;
+        let purchaseEtaMinutes: number;
+        let saleEtaMinutes: number;
+
+        if (merch) {
+            buyPrice = merch.purchasePrice;
+            sellPrice = merch.salePrice;
+            purchaseEtaMinutes = merch.purchaseEtaMinutes;
+            saleEtaMinutes = merch.saleEtaMinutes;
+        } else {
+            const history = getPriceHistoryEntry(itemName);
+            if (!history || history.sell <= 0) {
+                return false; // no price data anywhere — can't reconstruct
+            }
+            buyPrice = history.buy;
+            sellPrice = history.sell;
+            purchaseEtaMinutes = 0;
+            saleEtaMinutes = 0;
+        }
+
+        const now = Date.now();
+        const entry: OfferCacheEntry = {
+            mode: slotType,
+            buyPrice,
+            sellPrice,
+            originalSellPrice: sellPrice,
+            offerPlacedAt: now,
+            revisedPrices: [sellPrice],
+            purchaseEtaMinutes,
+            saleEtaMinutes,
+            sellConfirmed: true, // offer is already live on the GE
+        };
+
+        if (slotType === 'sell') {
+            entry.sellQuantity = slotQuantity;
+        }
+
+        this.cache[key] = entry;
+        this.dirty = true;
+        titan.logf('[Stark Mercher] Cache: reconstructed entry for %s (%s, buy=%d, sell=%d, qty=%d) from %s',
+            key, slotType, buyPrice, sellPrice, slotQuantity,
+            merch ? 'merchableItems.json' : 'priceHistory.json (1h fallback)');
+        return true;
     }
 
     /**

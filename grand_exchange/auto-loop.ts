@@ -237,6 +237,13 @@ export interface AutoLoopState {
      *  GE slot or inventory — e.g. completed merches whose cache entry
      *  wasn't removed before the script restarted). */
     cacheReconciled: boolean;
+    /** Whether missing cache entries have been reconstructed from live GE
+     *  slots since the last script start. Runs once after the GE is first
+     *  opened with readable slots, immediately after cache reconciliation.
+     *  Reconstructs entries for active offers that survived a client restart
+     *  but lost their cache (hidden setting not persisted). Uses
+     *  merchableItems.json / priceHistory.json for prices and ETAs. */
+    cacheReconstructed: boolean;
     /** Set to true on script start and when the bot logs back in after a
      *  break. Triggers a cache cleanup sweep on the next auto-loop tick
      *  (removes 'idle' entries with expired buy-limit windows, and expired
@@ -272,6 +279,7 @@ export const createAutoLoopState = (): AutoLoopState => ({
     buyAttemptedItems: new Set(),
     buyFreezeUntil: new Map(),
     cacheReconciled: false,
+    cacheReconstructed: false,
     needsPostLoginCleanup: true,
     abortSlotInfo: null,
     lastCleanupMs: 0,
@@ -785,6 +793,48 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 removed.length, removed.length === 1 ? 'y' : 'ies', removed.join(', '));
         } else {
             debugLog(bot, 'Auto: cache reconciliation — no orphaned entries');
+        }
+    }
+
+    // --- Step 2c: Reverse reconciliation (reconstruct missing cache entries) ---
+    // After a client restart that loses the hidden cache setting, active GE
+    // offers survive on the server but have no cache entry. Without
+    // reconstruction, the staleness checks bail out (they need offerPlacedAt),
+    // completed sells lose their profit, and stuck offers sit forever.
+    // This step iterates over occupied slots and reconstructs cache entries
+    // from merchableItems.json / priceHistory.json so the bot can manage them.
+    if (!loop.cacheReconstructed) {
+        loop.cacheReconstructed = true;
+        const reconstructed: string[] = [];
+        const skipped: string[] = [];
+        for (const slot of slots) {
+            if (slot.type === 'empty' || !slot.itemName) continue;
+            const lower = slot.itemName.trim().toLowerCase();
+            if (cache.get(slot.itemName)) continue; // already has an entry
+            // Only reconstruct active or completed/aborted offers with a
+            // known type. Skip 'unknown' status slots (can't determine type).
+            if (slot.type !== 'buy' && slot.type !== 'sell') continue;
+            const created = cache.reconstructEntry(
+                slot.itemName,
+                slot.type,
+                slot.itemQuantity,
+            );
+            if (created) {
+                reconstructed.push(`${slot.itemName} (${slot.type})`);
+            } else {
+                skipped.push(slot.itemName);
+            }
+        }
+        if (reconstructed.length > 0) {
+            cache.save();
+            titan.logf('[Stark Mercher] Auto: reverse reconciliation reconstructed %d entr%s: %s',
+                reconstructed.length, reconstructed.length === 1 ? 'y' : 'ies', reconstructed.join(', '));
+        } else {
+            debugLog(bot, 'Auto: reverse reconciliation — no missing entries');
+        }
+        if (skipped.length > 0) {
+            titan.logf('[Stark Mercher] Auto: reverse reconciliation skipped %d slot(s) (no price data): %s',
+                skipped.length, skipped.join(', '));
         }
     }
 

@@ -125,7 +125,7 @@ A lightweight fallback price lookup written every run alongside `merchableItems.
 
 - ~1,800–3,000 entries (every item with valid 1h data + mapping name)
 - Written every run regardless of `merchableItems.length` (the 1h data is always available)
-- Consumed by `data/price-history.ts` in the plugin as a fallback sell-price source for inventory items that aren't in `merchableItems.json` or the offer cache (e.g. orphaned items after a long script stop or a JSON refresh during sleep)
+- Consumed by `data/price-history.ts` in the plugin as a fallback sell-price source for inventory items that aren't in `merchableItems.json` or the offer cache (e.g. orphaned items after a long script stop or a JSON refresh during sleep). Also used by reverse reconciliation (`OfferCacheManager.reconstructEntry`) to reconstruct cache entries for live GE offers after the cache is lost to a client restart, when the item is no longer in `merchableItems.json`.
 
 ## Volume-scaled lowball
 

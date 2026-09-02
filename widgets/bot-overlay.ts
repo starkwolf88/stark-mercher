@@ -44,7 +44,19 @@ const PROFIT_ZERO_COLOR = 0xFFCCCCCC;
 
 // --- Helpers ---------------------------------------------------------------
 
-const formatGp = (amount: number): string => amount.toLocaleString('en-US');
+const formatGp = (amount: number): string => {
+    // Manual thousands separator — Titan's runtime may not support
+    // toLocaleString('en-US') locale grouping.
+    const neg = amount < 0;
+    const abs = Math.abs(Math.floor(amount));
+    const s = abs.toString();
+    let out = '';
+    for (let i = 0; i < s.length; i++) {
+        if (i > 0 && (s.length - i) % 3 === 0) out += ',';
+        out += s[i];
+    }
+    return neg ? '-' + out : out;
+};
 
 const drawText = (x: number, y: number, text: string, color: number = TEXT_COLOR): void => {
     titan.overlay.screenText(x, y, text, color);

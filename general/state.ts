@@ -65,6 +65,7 @@ export const resetInFlightActionState = (bot: StarkMercher): void => {
     // so the bot re-validates its cache state against the live GE after a
     // hop or break.
     bot.autoLoop.cacheReconciled = false;
+    bot.autoLoop.cacheReconstructed = false;
     bot.autoLoop.needsPostLoginCleanup = true;
     // Clear idle-for-break flags — they reflect the auto-loop's idle state
     // which is no longer valid after a hop/break/login transition. Without

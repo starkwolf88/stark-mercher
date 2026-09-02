@@ -14,7 +14,7 @@
 
 - `stark-mercher.ts` — main plugin class, settings, state, `onEnable`, `onGameTick`, `tickLogic`.
 - `general/timing.ts` — `setAction`, `canPerformAction`, `shouldWait`; tick-based action throttling with backwards-tick recovery.
-- `general/state.ts` — `sanityCheckState` (per-tick stale-state auto-correction: clears stale `abortSlotInfo`, resets phase when active flow is gone, clears stale `logoutComplete`), `resetInFlightActionState` (clears auto-loop flows + test flows + idle-for-break flags + cache reconciliation flags on hop/break/login transitions).
+- `general/state.ts` — `sanityCheckState` (per-tick stale-state auto-correction: clears stale `abortSlotInfo`, resets phase when active flow is gone, clears stale `logoutComplete`), `resetInFlightActionState` (clears auto-loop flows + test flows + idle-for-break flags + cache reconciliation/reconstruction flags on hop/break/login transitions).
 - `general/lifecycle.ts` — `onEnable`, `terminate` helpers; resets all state including auto-loop state and hop state.
 - `general/state-persist.ts` — offer cache persistence via hidden JSON setting (mixology-style per-account). `loadOfferCache`, `saveOfferCache`, `OfferCacheData`, `OfferCacheEntry` (includes `sellQuantity` for daily profit tracking).
 - `general/state.ts` — `sanityCheckState` (per-tick stale-state auto-correction), `resetInFlightActionState` (clears auto-loop flows + test flows + idle-for-break flags + cache reconciliation flags on hop/break/login transitions).
@@ -23,7 +23,7 @@
 - `general/variables.ts` — shared variables.
 - `data/merchable-items.ts` — typed reader for `merchableItems.json` (inlined at build time by esbuild). `getMerchableItems`, `getMerchableItem`, `isMerchable`, `getFirstUnoccupiedMerchableItem`, `MerchableItem`.
 - `data/price-history.ts` — typed reader for `priceHistory.json` (inlined at build time). `getPriceHistoryEntry`. Fallback sell-price lookup for items not in merchableItems.json or the offer cache (e.g. orphaned inventory items after a long script stop or JSON refresh during sleep). Uses 1h average prices — no extra API calls.
-- `data/offer-cache.ts` — `OfferCacheManager` wrapping the persisted cache with price revision logic (5% of gross profit, min 1 gp, never below buyPrice+1) and Wiki API stub. `fetchWikiPrice` (stub — URL not yet configured).
+- `data/offer-cache.ts` — `OfferCacheManager` wrapping the persisted cache with price revision logic (5% of gross profit, min 1 gp, never below buyPrice+1), `reconstructEntry` (reverse reconciliation from live GE slots after cache loss), and Wiki API stub. `fetchWikiPrice` (stub — URL not yet configured).
 - `data/daily-profit.ts` — per-account daily profit tracking. `addDailyProfit`, `getDailyProfit`, `resetDailyProfit`, `getDayStartMs`. Persisted in hidden JSON setting. Resets at UK midnight via day-rollover comparison on read/write.
 - `widgets/bot-overlay.ts` — HUD overlay panel. `renderBotOverlay` draws Status, Inventory Coins, and Daily Profit. Registered via `this.overlay({ layer: 'AboveWidgets' })` in `stark-mercher.ts`.
 - `antiban/humanised-delay.ts` — `DelayProfile`, `generateDelayProfile`, `setDelayProfileForAccount`, `createDelay`; per-account deterministic humanised delay function inspired by mixology's anti-ban layers (jitter, hesitation, outlier, jitter amplification).
@@ -218,8 +218,20 @@ The offer cache is stored in a hidden string setting `offerCacheSetting` (key `o
 
 - **Load**: `OfferCacheManager` constructor calls `loadOfferCache(bot, accountName)` on first access (lazy).
 - **Save**: After every mutation (offer placed, price revised, entry removed), `cache.save()` writes back to the hidden setting.
-- **Survives restarts**: The hidden setting persists across client restarts and plugin hot-reloads. `resetAutoLoop()` clears the in-memory `OfferCacheManager` handle but does NOT clear the hidden setting — the cache is re-loaded from the setting on the next `autoLoopTick`.
+- **Hot-reload only**: The hidden setting survives plugin hot-reloads (off/on within the same client session) but does NOT reliably persist across client restarts. The Titan host only persists settings to disk when the user interacts with the UI; plugin-side `.value =` writes do not trigger the host's dirty flag. After a client restart, the cache may be empty while GE offers remain on the server. Reverse reconciliation (below) reconstructs missing entries from live GE slots.
 - **One entry per item**: A slot can only contain a single item, so one cache entry per item name is sufficient.
+
+### Reverse reconciliation (cache loss recovery)
+
+When the cache is lost after a client restart, active GE offers survive on the server but have no cache entry. Without reconstruction, staleness checks bail out (they need `offerPlacedAt`), completed sells lose their profit, and stuck offers sit forever. Reverse reconciliation runs once on the first GE-open tick after script start (Step 2c, immediately after orphan reconciliation):
+
+- Iterates over occupied slots with a known item name and type (`buy` or `sell`).
+- For each slot with no existing cache entry, calls `cache.reconstructEntry()`.
+- Prices and ETAs come from `merchableItems.json` (primary) or `priceHistory.json` (1h average fallback for items no longer in the merchable list).
+- `offerPlacedAt` is set to `Date.now()` — the actual placement time is unknown, so the offer gets a fresh full ETA window before staleness checks can abort it. This is the safest choice since aborting an offer we know nothing about could discard partial fills.
+- For sell offers, `sellQuantity` is set from the slot's item quantity so the completed-sell sweep can record profit when the sell finishes. `sellConfirmed` is set to `true` (the offer is already live on the GE).
+- If no price data is found in either source, the slot is skipped (logged) — the offer is left alone until it completes or the user intervenes.
+- Reconstructed profit is approximate: buy/sell prices come from current `merchableItems.json` or 1h averages, not the actual prices at which the offer was placed.
 
 ### `merchableItems.json` loading
 
@@ -233,10 +245,12 @@ The JSON is imported at the top of `data/merchable-items.ts` and inlined by esbu
 2. **Close GE sub-screens**: If the offer config screen, search prompt, or price prompt is open (e.g. after a script reload mid-flow or a misclick), close it with Escape via `sendKeyWithJitter`. This prevents slot clicks from landing on the sub-screen instead of the intended slot.
 3. **Defer to active flows**: If a buy/sell/abort flow is in progress, tick it and return.
 4. **Get all slot states**: `auditGeState()` reads all 8 slots via cached widget children.
-5. **Collect**: If any slot has `status === 'completed_or_aborted'`, click collect and return. Completed sell offers are NOT removed from the cache — entries are kept for buy-limit tracking (see below).
-6. **Stale offers**: For each active slot, check stale conditions (sell: 75% ETA + <25% sold; buy: 100% ETA + 0 bought, or 75% ETA + <50% bought for multi-qty; aggressive abort if item no longer in merchableItems.json). Start an `AbortOfferFlow` if stale. Buy offers are frozen for 15 min when the abort is triggered — the freeze is NOT re-applied if the item is already frozen (e.g. a previous abort attempt failed and is being retried). After the abort flow completes, the cache entry is only removed if the item is NOT in inventory — if the buy partially filled during the abort flow (especially after a failed first attempt), the collected items are in inventory and the cache entry is kept to preserve buy-limit tracking. The sell scan will pick up the items in the next iteration.
-7. **Selling**: Find empty slot + non-coin inventory item not being bought. Use cached sell price (revised if re-listing) or merchableItems.json price. Pass the actual sell quantity and the item's GE buy limit to `recordSellOffer()` for buy-limit tracking. Start a `SellOfferFlow`.
-8. **Buying**: Find empty slot + first unoccupied merchable item that is affordable AND not buy-limited (within the 4-hour GE cooldown). Record buy offer in cache. Start a `BuyOfferFlow`.
+5. **Cache reconciliation (2b)**: One-time orphan removal — removes cache entries for items not in any GE slot, not in inventory, no active buy-limit window, and no pending sell profit.
+6. **Reverse reconciliation (2c)**: One-time cache reconstruction — for occupied slots with no cache entry (lost after client restart), reconstructs entries from `merchableItems.json` / `priceHistory.json` so staleness checks and profit tracking work.
+7. **Completed-sell sweep + Collect**: If any slot has `status === 'completed_or_aborted'`, click collect and return. Completed sell offers are NOT removed from the cache — entries are kept for buy-limit tracking (see below).
+8. **Stale offers**: For each active slot, check stale conditions (sell: 75% ETA + <25% sold; buy: 100% ETA + 0 bought, or 75% ETA + <50% bought for multi-qty; aggressive abort if item no longer in merchableItems.json). Start an `AbortOfferFlow` if stale. Buy offers are frozen for 15 min when the abort is triggered — the freeze is NOT re-applied if the item is already frozen (e.g. a previous abort attempt failed and is being retried). After the abort flow completes, the cache entry is only removed if the item is NOT in inventory — if the buy partially filled during the abort flow (especially after a failed first attempt), the collected items are in inventory and the cache entry is kept to preserve buy-limit tracking. The sell scan will pick up the items in the next iteration.
+9. **Selling**: Find empty slot + non-coin inventory item not being bought. Use cached sell price (revised if re-listing) or merchableItems.json price. Pass the actual sell quantity and the item's GE buy limit to `recordSellOffer()` for buy-limit tracking. Start a `SellOfferFlow`.
+10. **Buying**: Find empty slot + first unoccupied merchable item that is affordable AND not buy-limited (within the 4-hour GE cooldown). Record buy offer in cache. Start a `BuyOfferFlow`.
 9. **Wait**: All slots occupied or nothing to do — idle with a humanised delay.
 
 ### GE 4-hour buy limit tracking
