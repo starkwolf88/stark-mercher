@@ -211,17 +211,28 @@ export class SellOfferFlow {
             this.fail(`Slot ${this.slotIndex + 1} is already occupied`);
             return false;
         }
-        // Verify the item is in the inventory.
-        const item = titan.utils.inventory.find(this._itemName);
-        if (!item) {
+        // Verify the item is in the inventory. Sum the quantity across ALL
+        // matching slots — the same item can appear as a noted stack and
+        // unnoted singles in separate slots (e.g. 6 noted Warrior rings +
+        // 1 unnoted in slot 2 + 1 unnoted in slot 3). The GE sell offer
+        // screen automatically combines noted + unnoted when you set the
+        // quantity, so we just need the total to be >= the offer quantity.
+        // We click the first matching slot — the game handles the rest.
+        const lowerName = this._itemName.trim().toLowerCase();
+        const matches = titan.utils.inventory.getAll().filter(
+            i => i.name.trim().toLowerCase() === lowerName,
+        );
+        if (matches.length === 0) {
             this.fail(`Item "${this._itemName}" not found in inventory`);
             return false;
         }
-        if (item.quantity < this.quantity) {
-            this.fail(`Not enough "${this._itemName}" in inventory: have ${item.quantity}, need ${this.quantity}`);
+        const totalQty = matches.reduce((sum, i) => sum + i.quantity, 0);
+        if (totalQty < this.quantity) {
+            this.fail(`Not enough "${this._itemName}" in inventory: have ${totalQty}, need ${this.quantity}`);
             return false;
         }
-        this.log(`Found ${item.quantity}x ${this._itemName} in inventory (slot ${item.slot})`);
+        const item = matches[0];
+        this.log(`Found ${totalQty}x ${this._itemName} in inventory (slot ${item.slot})`);
         this.computeDelay(1, 30, 4);
         this.advance();
         return true;

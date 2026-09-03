@@ -108,6 +108,16 @@ const FAST_SELL_QTY_THRESHOLD = 50;
 const FAST_SELL_VALUE_CAP = 10_000;      // 10k GP total sell value
 const FAST_SELL_PRICE_MULTIPLIER = 0.5;  // 50% of sell price
 
+// --- Minimum buy offer value -----------------------------------------------
+// Don't place buy offers with a total value below this threshold. When the
+// cash stack is low (e.g. 6k coins after filling other slots), the bot would
+// otherwise place tiny offers like 35 Death runes for 6.5k GP — wasting a GE
+// slot on an offer that earns almost nothing. Instead, skip the buy and let
+// the normal "nothing to do" fallthrough handle it (short break / logout /
+// account rotation). Once sells complete and coins recover, profitable offers
+// resume.
+const MIN_BUY_OFFER_VALUE = 100_000;     // 100k GP minimum total buy value
+
 // --- Buy freeze-out --------------------------------------------------------
 // When a buy offer is aborted (stale — not buying at the offered price), we
 // temporarily freeze that item so we don't immediately re-list it at the
@@ -711,8 +721,24 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     const getInvSnapshot = (): Map<string, titan.Item> => {
         if (invSnapshot) return invSnapshot;
         invSnapshot = new Map();
+        // Accumulate quantities across all inventory slots with the same
+        // item name. OSRS inventory can hold the same item in multiple
+        // slots — notably noted stacks (e.g. 6 noted Warrior rings) and
+        // unnoted singles (e.g. 1 unnoted in slot 2, 1 unnoted in slot 3).
+        // The GE sell offer screen automatically combines noted + unnoted
+        // when you set the quantity, so we just need the total quantity
+        // to be correct. We store a synthetic Item with the combined
+        // quantity and the first matching slot's index (used for the
+        // inventory widget click in the sell flow).
+        const qtyMap = new Map<string, number>();
+        const firstSlot = new Map<string, titan.Item>();
         for (const item of titan.utils.inventory.getAll()) {
-            invSnapshot.set(item.name, item);
+            qtyMap.set(item.name, (qtyMap.get(item.name) ?? 0) + item.quantity);
+            if (!firstSlot.has(item.name)) firstSlot.set(item.name, item);
+        }
+        for (const [name, qty] of qtyMap) {
+            const base = firstSlot.get(name)!;
+            invSnapshot.set(name, { ...base, quantity: qty });
         }
         return invSnapshot;
     };
@@ -1789,6 +1815,16 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 }
                 const adjustedTotal = adjustedQty * mItem.purchasePrice;
 
+                // Skip buy offers below the minimum value threshold. When
+                // the cash stack is low, placing tiny offers (e.g. 35 Death
+                // runes for 6.5k GP) wastes a GE slot on negligible profit.
+                // Fall through to the "nothing to do" branch — the bot will
+                // take a short break / logout / rotate to the next account,
+                // and resume buying once sells complete and coins recover.
+                if (adjustedTotal < MIN_BUY_OFFER_VALUE) {
+                    debugLog(bot, `Auto: skipping buy offer for ${mItem.itemName} — total ${adjustedTotal}gp below ${MIN_BUY_OFFER_VALUE}gp minimum (coins=${coinCount})`);
+                    // Fall through to "nothing to do" — don't return true.
+                } else {
                 // Record the buy offer in the cache.
                 cache.recordBuyOffer(mItem);
                 cache.save();
@@ -1806,6 +1842,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 loop.phase = 'buying';
                 loop.buyAttemptedItems.clear();
                 return true;
+                } // end else (offer above MIN_BUY_OFFER_VALUE)
             }
         } else if (partial) {
             const pItem = partial.item;
@@ -1822,6 +1859,11 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 }
                 const adjustedTotal = adjustedQty * pItem.purchasePrice;
 
+                // Same MIN_BUY_OFFER_VALUE guard as the merch path.
+                if (adjustedTotal < MIN_BUY_OFFER_VALUE) {
+                    debugLog(bot, `Auto: skipping partial buy offer for ${pItem.itemName} — total ${adjustedTotal}gp below ${MIN_BUY_OFFER_VALUE}gp minimum (coins=${coinCount})`);
+                    // Fall through to "nothing to do" — don't return true.
+                } else {
                 // Record the buy offer in the cache. We pass the item as-is
                 // (cache uses itemName/limit/sellPrice); the reduced quantity
                 // is handled by the BuyOfferFlow below.
@@ -1840,6 +1882,7 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 loop.phase = 'buying';
                 loop.buyAttemptedItems.clear();
                 return true;
+                } // end else (partial offer above MIN_BUY_OFFER_VALUE)
             }
         } else {
             // No affordable merchable item found — log a summary of why.
