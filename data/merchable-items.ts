@@ -159,8 +159,12 @@ const computeRuntimeEtas = (item: MerchableItem, quantity: number): {
     turnoverEtaMinutes: number;
 } | null => {
     if (quantity <= 0) return null;
-    // Lowball reduces effective buy volume: 1.5x the lowball %.
-    const lowballVolumeFactor = 1 - ((item.lowballPercent || 0) * 1.5 / 100);
+    // Lowball reduces effective buy volume: 2.0x the lowball %.
+    // Increased from 1.5x to 2.0x — lowball offers buy below market and only
+    // capture the portion of trades at or below the lowballed price. The 1.5x
+    // factor was too optimistic, producing ETAs that were too short and causing
+    // offers to sit at 0% progress well past their predicted ETA.
+    const lowballVolumeFactor = 1 - ((item.lowballPercent || 0) * 2.0 / 100);
     const effectivePurchaseVolume = Math.min(
         item.twoHourAverageHourlyPurchaseVolume * (1 - TWO_HOUR_VOLUME_BUFFER_PERCENTAGE / 100),
         item.oneHourPurchaseVolume,
@@ -234,8 +238,10 @@ export const evaluateItemAtRuntime = (
  *  Must match PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD in determine-flips.mjs. */
 export const RUNTIME_PROFIT_PER_SLOT_HOUR_MINIMUM = 20000;
 /** Maximum turnover ETA in minutes for an item to be worth buying at runtime.
- *  Must match MAX_TURNOVER_HOURS * 60 in determine-flips.mjs. */
-export const RUNTIME_MAX_TURNOVER_MINUTES = 150;
+ *  Tightened from 150 to 120 — items with 120-150min turnovers tie up capital
+ *  for 2+ hours per cycle and compound poorly. Faster-cycling items at 15m
+ *  produce more total profit even if per-cycle profit is lower. */
+export const RUNTIME_MAX_TURNOVER_MINUTES = 120;
 
 // --- Module-level cache ----------------------------------------------------
 // The JSON is inlined at build time, so we just cast and cache it once.

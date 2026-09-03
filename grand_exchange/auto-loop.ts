@@ -45,7 +45,7 @@ import { clickCollectToInventory } from './actions.js';
 import { getNetSellPrice, getGeTax } from './constants.js';
 import { openGe, nearGrandExchange, walkToGe } from './clerk.js';
 import { getMerchableItems, getMerchableItem, getFirstUnoccupiedMerchableItem, getFirstPartialBuyItem, isLowballItem, evaluateItemAtRuntime, RUNTIME_PROFIT_PER_SLOT_HOUR_MINIMUM, RUNTIME_MAX_TURNOVER_MINUTES, type MerchableItem, type PartialBuyResult, type BuyScanResult, type LowballTier } from '../data/merchable-items.js';
-import { getCrossAccountBuyingItemCount } from '../general/state-persist.js';
+import { getCrossAccountActiveItemCount } from '../general/state-persist.js';
 import { getRoster } from '../antiban/account-rotation.js';
 import { getPriceHistoryEntry } from '../data/price-history.js';
 import { OfferCacheManager } from '../data/offer-cache.js';
@@ -55,7 +55,7 @@ import { recordAbort, type AbortCategory } from '../data/abort-history.js';
 
 // --- Stale offer thresholds ------------------------------------------------
 // Sell: dynamic % of ETA passed with <25% sold → abort (scaled by profit margin)
-// Buy (0 bought): 125% of ETA passed with 0 bought → abort
+// Buy (0 bought): min(125% of ETA, absolute cap) passed with 0 bought → abort
 // Buy (multi-qty): 90% of ETA passed with <50% bought → abort
 // If the item is no longer in merchableItems.json, abort immediately
 // (the price target is stale).
@@ -65,6 +65,12 @@ import { recordAbort, type AbortCategory } from '../data/abort-history.js';
 // partial fills and triggers buy freezes that shrink the pool further.
 // Giving buys extra time beyond ETA avoids aborting offers that are still
 // slowly filling, especially when volume estimates are uncertain.
+//
+// However, an absolute cap on 0-progress offers prevents long-ETA items
+// (e.g. Demonic skin contract with 84-min buy ETA) from sitting idle for
+// 105+ minutes (125% of 84) before being aborted. The cap is tighter for
+// non-lowball items (which should fill quickly at market price) and more
+// generous for lowball items (which are expected to take longer).
 //
 // The sell ETA abort ratio scales with profit margin so that thin-margin
 // items get more time to sell (a 1gp cut on a 2gp margin is 50% of profit),
@@ -89,6 +95,13 @@ const BUY_ETA_ABORT_RATIO_MULTI = 0.90;  // 90% of buy ETA (<50% bought)
 const BUY_PROGRESS_ABORT_THRESHOLD = 0.50; // <50% bought
 const BUY_ETA_ABORT_RATIO_STALLED = 1.0; // 100% of buy ETA (stalled near completion)
 const BUY_PROGRESS_STALLED_THRESHOLD = 0.50; // >=50% bought but not completing
+// Absolute cap for 0-progress buy offers — regardless of ETA, abort if
+// nothing has been bought after this many minutes. Prevents long-ETA
+// items from tying up a GE slot for 1-2 hours with zero fills.
+// Non-lowball items buy at market price and should start filling quickly;
+// lowball items buy below market and are expected to take longer.
+const BUY_ZERO_PROGRESS_ABSOLUTE_ABORT_MIN = 15;      // 15 min for non-lowball
+const BUY_ZERO_PROGRESS_ABSOLUTE_ABORT_MIN_LOWBALL = 30; // 30 min for lowball
 
 // --- Fast-sell thresholds --------------------------------------------------
 // When we have a small quantity of low-value items (e.g. 10 chaos runes from
@@ -251,6 +264,92 @@ const saveBuyFreeze = (bot: StarkMercher, freezeMap: Map<string, number>): void 
     }
 };
 
+// --- Item abort count tracking (progressive freeze + hard skip) ------------
+// Tracks how many times each item has had a buy offer aborted for ETA reasons
+// recently. Items that repeatedly fail to fill get progressively longer freezes
+// and are eventually hard-skipped entirely — the market price estimate is
+// systematically wrong for them, and re-listing at the same price just wastes
+// another GE slot cycle.
+//
+// Count format: { "itemname": { count: N, lastAbortAt: ms } }
+// Count decays after ITEM_ABORT_COUNT_RESET_MS (1 hour) of no aborts.
+// Progressive freeze: BUY_FREEZE_DURATION_MS * min(count, 6) → 5, 10, 15, 20, 25, 30 min
+// Hard skip: items with count >= ITEM_ABORT_HARD_SKIP_THRESHOLD (4) are skipped entirely.
+
+interface ItemAbortCountEntry {
+    count: number;
+    lastAbortAt: number;
+}
+
+const ITEM_ABORT_COUNT_RESET_MS = 60 * 60 * 1000; // 1 hour since last abort
+const ITEM_ABORT_HARD_SKIP_THRESHOLD = 4; // skip entirely after 4 aborts
+
+/** Loads the global item abort count map from the hidden setting.
+ *  Drops entries whose last abort is older than the reset window. */
+const loadItemAbortCounts = (bot: StarkMercher): Map<string, ItemAbortCountEntry> => {
+    const raw = bot.itemAbortCountSetting.value;
+    if (!raw || raw === '{}') return new Map();
+    try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return new Map();
+        const now = Date.now();
+        const result = new Map<string, ItemAbortCountEntry>();
+        let removed = false;
+        for (const [name, entry] of Object.entries(parsed)) {
+            const e = entry as ItemAbortCountEntry;
+            if (e && typeof e.count === 'number' && typeof e.lastAbortAt === 'number') {
+                if (now - e.lastAbortAt < ITEM_ABORT_COUNT_RESET_MS) {
+                    result.set(name, e);
+                } else {
+                    removed = true;
+                }
+            }
+        }
+        if (removed) {
+            const obj: Record<string, ItemAbortCountEntry> = {};
+            for (const [name, e] of result) obj[name] = e;
+            bot.itemAbortCountSetting.value = JSON.stringify(obj);
+        }
+        return result;
+    } catch (e) {
+        titan.logf('[Stark Mercher] Failed to parse item abort counts: %s', String(e));
+        return new Map();
+    }
+};
+
+/** Saves the global item abort count map to the hidden setting. */
+const saveItemAbortCounts = (bot: StarkMercher, counts: Map<string, ItemAbortCountEntry>): void => {
+    try {
+        const obj: Record<string, ItemAbortCountEntry> = {};
+        for (const [name, e] of counts) obj[name] = e;
+        bot.itemAbortCountSetting.value = JSON.stringify(obj);
+    } catch (e) {
+        titan.logf('[Stark Mercher] Failed to save item abort counts: %s', String(e));
+    }
+};
+
+/** Increments the abort count for an item and returns the new count.
+ *  Called when a buy offer is aborted for ETA reasons. */
+const incrementItemAbortCount = (bot: StarkMercher, counts: Map<string, ItemAbortCountEntry>, itemName: string): number => {
+    const key = itemName.trim().toLowerCase();
+    const existing = counts.get(key);
+    const now = Date.now();
+    const newCount = (existing?.count ?? 0) + 1;
+    counts.set(key, { count: newCount, lastAbortAt: now });
+    saveItemAbortCounts(bot, counts);
+    return newCount;
+};
+
+/** Computes the progressive freeze duration based on the item's abort count.
+ *  First abort = 5 min, second = 10 min, etc., capped at 30 min. */
+const computeProgressiveFreezeMs = (counts: Map<string, ItemAbortCountEntry>, itemName: string): number => {
+    const key = itemName.trim().toLowerCase();
+    const entry = counts.get(key);
+    const count = entry?.count ?? 0;
+    const multiplier = Math.min(Math.max(count, 1), 6);
+    return BUY_FREEZE_DURATION_MS * multiplier;
+};
+
 // --- Frozen fallback helpers ----------------------------------------------
 // When all non-frozen merchable items are exhausted and the bot would
 // otherwise leave a GE slot empty, we fall back to a frozen item. Among
@@ -388,6 +487,12 @@ export interface AutoLoopState {
      *  hidden `buyFreezeSetting` so it survives hot reloads and client
      *  restarts. Restored in `resetAutoLoop()` on script start. */
     buyFreezeUntil: Map<string, number>;
+    /** Tracks how many times each item has had a buy offer aborted for ETA
+     *  reasons recently. Used for progressive freeze durations and hard-skipping
+     *  items that consistently don't fill. Persisted in the hidden
+     *  `itemAbortCountSetting` so it survives hot reloads and client restarts.
+     *  Restored in `resetAutoLoop()` on script start. Global (not account-keyed). */
+    itemAbortCounts: Map<string, ItemAbortCountEntry>;
     /** Whether the cache has been reconciled against live GE state since
      *  the last script start. Runs once after the GE is first opened with
      *  readable slots. Removes orphaned cache entries (items not in any
@@ -466,6 +571,7 @@ export const createAutoLoopState = (): AutoLoopState => ({
     sellAttemptedItems: new Set(),
     buyAttemptedItems: new Set(),
     buyFreezeUntil: new Map(),
+    itemAbortCounts: new Map(),
     cacheReconciled: false,
     cacheReconstructed: false,
     needsPostLoginCleanup: true,
@@ -615,10 +721,20 @@ const isBuyOfferStale = (slot: OfferSlotState, cache: OfferCacheManager): string
     const eta = merch ? merch.purchaseEtaMinutes : (entry.purchaseEtaMinutes ?? 0);
     if (eta <= 0) return null; // no ETA data at all — can't determine staleness
 
-    // Buy (0 bought): 125% of ETA passed with 0 bought → abort
-    const etaThresholdZero = eta * BUY_ETA_ABORT_RATIO_ZERO;
+    // Buy (0 bought): min(125% of ETA, absolute cap) passed with 0 bought → abort
+    // The absolute cap prevents long-ETA items from sitting idle for 1-2 hours.
+    // Non-lowball items (buy at market) get a tighter cap; lowball items get
+    // more time since they're expected to fill slower.
+    const isLowball = merch ? merch.lowballPercent > 0 : false;
+    const absoluteAbortMin = isLowball
+        ? BUY_ZERO_PROGRESS_ABSOLUTE_ABORT_MIN_LOWBALL
+        : BUY_ZERO_PROGRESS_ABSOLUTE_ABORT_MIN;
+    const etaThresholdZero = Math.min(eta * BUY_ETA_ABORT_RATIO_ZERO, absoluteAbortMin);
     if (slot.progress <= 0 && elapsedMin >= etaThresholdZero) {
-        return `ETA exceeded (0 bought): ${elapsedMin.toFixed(1)}min elapsed >= ${etaThresholdZero.toFixed(1)}min (${(BUY_ETA_ABORT_RATIO_ZERO * 100).toFixed(0)}% of ${eta.toFixed(1)}min ETA), progress 0% — buy price ${entry.buyPrice}gp`;
+        const reason = etaThresholdZero === absoluteAbortMin
+            ? `0-progress absolute cap: ${elapsedMin.toFixed(1)}min elapsed >= ${absoluteAbortMin}min cap (ETA ${eta.toFixed(1)}min, ${isLowball ? 'lowball' : 'non-lowball'}), progress 0% — buy price ${entry.buyPrice}gp`
+            : `ETA exceeded (0 bought): ${elapsedMin.toFixed(1)}min elapsed >= ${etaThresholdZero.toFixed(1)}min (${(BUY_ETA_ABORT_RATIO_ZERO * 100).toFixed(0)}% of ${eta.toFixed(1)}min ETA), progress 0% — buy price ${entry.buyPrice}gp`;
+        return reason;
     }
 
     // Buy (multi-qty): 90% of ETA passed with <50% bought → abort
@@ -664,10 +780,16 @@ const computeNextActionEtaMin = (slots: OfferSlotState[], cache: OfferCacheManag
             const merch = getMerchableItem(slot.itemName);
             eta = merch ? merch.purchaseEtaMinutes : (entry.purchaseEtaMinutes ?? 0);
             if (eta <= 0) continue;
-            // 0% progress: stale at 125% of ETA (later than completion)
+            // 0% progress: stale at min(125% of ETA, absolute cap)
             // <50% progress: stale at 90% of ETA (earlier than completion)
             // >=50% progress: stalled check at 100% of ETA (same as completion)
-            if (slot.progress < BUY_PROGRESS_ABORT_THRESHOLD && slot.itemQuantity > 1) {
+            if (slot.progress <= 0) {
+                const isLowball = merch ? merch.lowballPercent > 0 : false;
+                const absoluteAbortMin = isLowball
+                    ? BUY_ZERO_PROGRESS_ABSOLUTE_ABORT_MIN_LOWBALL
+                    : BUY_ZERO_PROGRESS_ABSOLUTE_ABORT_MIN;
+                abortRatio = Math.min(BUY_ETA_ABORT_RATIO_ZERO, absoluteAbortMin / eta);
+            } else if (slot.progress < BUY_PROGRESS_ABORT_THRESHOLD && slot.itemQuantity > 1) {
                 abortRatio = BUY_ETA_ABORT_RATIO_MULTI;
             }
         } else if (slot.type === 'sell') {
@@ -1317,11 +1439,21 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
                 if (existingFreeze && existingFreeze > Date.now()) {
                     debugLog(bot, `Auto: ${slot.itemName} already frozen (expires in ${Math.round((existingFreeze - Date.now()) / 60000)} min) — not re-freezing`);
                 } else {
-                    const freezeUntil = Date.now() + BUY_FREEZE_DURATION_MS;
+                    // Increment the abort count and use a progressive freeze
+                    // duration. Items that repeatedly fail to fill get longer
+                    // freezes, and are eventually hard-skipped entirely.
+                    const newCount = incrementItemAbortCount(bot, loop.itemAbortCounts, slot.itemName);
+                    const freezeMs = computeProgressiveFreezeMs(loop.itemAbortCounts, slot.itemName);
+                    const freezeUntil = Date.now() + freezeMs;
                     loop.buyFreezeUntil.set(freezeKey, freezeUntil);
                     saveBuyFreeze(bot, loop.buyFreezeUntil);
-                    titan.logf('[Stark Mercher] Auto: freezing %s from buying for %d min (buy offer aborted — %s)',
-                        slot.itemName, Math.round(BUY_FREEZE_DURATION_MS / 60000), reason);
+                    if (newCount >= ITEM_ABORT_HARD_SKIP_THRESHOLD) {
+                        titan.logf('[Stark Mercher] Auto: freezing %s from buying for %d min and hard-skipping (abort count %d >= %d — %s)',
+                            slot.itemName, Math.round(freezeMs / 60000), newCount, ITEM_ABORT_HARD_SKIP_THRESHOLD, reason);
+                    } else {
+                        titan.logf('[Stark Mercher] Auto: freezing %s from buying for %d min (abort count %d — %s)',
+                            slot.itemName, Math.round(freezeMs / 60000), newCount, reason);
+                    }
                 }
             }
             loop.activeAbortFlow = new AbortOfferFlow({
@@ -1639,10 +1771,14 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     // Check for empty slots and merchable items to buy.
     const emptyBuySlot = findEmptyOfferSlot();
 
-    // --- Cross-account buy dedup ---
-    // Prevent multiple accounts from buying the same item and competing
-    // on price. Up to MAX_ACCOUNTS_PER_ITEM (2) accounts can buy the same
-    // item. With a 2-account roster, the threshold is 1 (no overlap).
+    // --- Cross-account dedup ---
+    // Prevent multiple accounts from merching the same item. An item is
+    // "cross-account saturated" if enough other accounts have an active
+    // offer (buy OR sell) for it. This prevents both buy-side price
+    // competition and capital concentration in one slow item.
+    // Up to MAX_ACCOUNTS_PER_ITEM (2) accounts can merch the same item.
+    // With a 2-account roster, the threshold is 1 (no overlap — if the
+    // other account is buying OR selling an item, skip it).
     // With 3+ accounts, the threshold is 2 (max 2 accounts per item).
     const MAX_ACCOUNTS_PER_ITEM = 2;
     const roster = getRoster(bot);
@@ -1650,13 +1786,13 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
     const crossAccountSkipNames = new Set<string>();
     if (roster.length >= 2) {
         const currentAccount = bot.currentPlayerName || '';
-        const buyingCounts = getCrossAccountBuyingItemCount(bot, currentAccount);
-        for (const [name, count] of buyingCounts) {
+        const activeCounts = getCrossAccountActiveItemCount(bot, currentAccount);
+        for (const [name, count] of activeCounts) {
             if (count >= crossAccountThreshold) {
                 crossAccountSkipNames.add(name);
             }
         }
-        if (crossAccountSkipNames.size > 0) {
+        if (crossAccountSkipNames.size >  0) {
             debugLog(bot, `Auto: ${crossAccountSkipNames.size} item(s) cross-account saturated (threshold ${crossAccountThreshold}) — skipping: ${[...crossAccountSkipNames].join(', ')}`);
         }
     }
@@ -1711,6 +1847,30 @@ export const autoLoopTick = (bot: StarkMercher, tick: number): boolean => {
         if (freezeRemoved) saveBuyFreeze(bot, loop.buyFreezeUntil);
         if (frozenNames.size > 0) {
             debugLog(bot, `Auto: ${frozenNames.size} item(s) buy-frozen — skipping: ${[...frozenNames].join(', ')}`);
+        }
+
+        // Hard-skip items with too many recent ETA aborts — the market price
+        // estimate is systematically wrong for them, and re-listing at the
+        // same price just wastes another GE slot cycle. These are added to
+        // buyLimitedNames so they're skipped by all scan tiers (primary,
+        // frozen fallback, partial fallback, and swap candidate).
+        let hardSkipRemoved = false;
+        for (const [name, entry] of loop.itemAbortCounts) {
+            if (entry.count >= ITEM_ABORT_HARD_SKIP_THRESHOLD) {
+                buyLimitedNames.add(name);
+            } else if (Date.now() - entry.lastAbortAt >= ITEM_ABORT_COUNT_RESET_MS) {
+                loop.itemAbortCounts.delete(name);
+                hardSkipRemoved = true;
+            }
+        }
+        if (hardSkipRemoved) saveItemAbortCounts(bot, loop.itemAbortCounts);
+        let hardSkipNames = 0;
+        for (const name of buyLimitedNames) {
+            const entry = loop.itemAbortCounts.get(name);
+            if (entry && entry.count >= ITEM_ABORT_HARD_SKIP_THRESHOLD) hardSkipNames++;
+        }
+        if (hardSkipNames > 0) {
+            debugLog(bot, `Auto: ${hardSkipNames} item(s) hard-skipped (abort count >= ${ITEM_ABORT_HARD_SKIP_THRESHOLD})`);
         }
 
         // --- Buy scan with lowball tiering (cash-stack-aware) ---
@@ -2016,6 +2176,7 @@ export const resetAutoLoop = (bot: StarkMercher): void => {
     // during load. The freeze map is global (not account-keyed) — freezes
     // represent market/item-level signals, not account-specific state.
     loop.buyFreezeUntil = loadBuyFreeze(bot);
+    loop.itemAbortCounts = loadItemAbortCounts(bot);
     loop.failureCounters = {};
     loop.lastGeOpenDispatchMs = 0;
     loop.lastCollectDispatchMs = 0;

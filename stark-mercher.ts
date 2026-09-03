@@ -286,6 +286,20 @@ export class StarkMercher extends titan.Plugin {
         hidden: true,
     });
 
+    // --- Item abort count setting (hidden) ---
+    // Tracks how many times each item has had a buy offer aborted for ETA
+    // reasons recently. Used to progressively increase the freeze duration
+    // and eventually hard-skip items that consistently don't fill at the
+    // offered price. Format: { "itemname": { count: N, lastAbortAt: ms } }.
+    // Counts decay after ITEM_ABORT_COUNT_RESET_MS (1 hour) of no aborts.
+    // Global (not account-keyed) — same rationale as buyFreezeSetting.
+    itemAbortCountSetting: titan.Setting<string> = this.stringSetting({
+        key: 'itemAbortCount',
+        name: 'Item abort count (hidden)',
+        default: '{}',
+        hidden: true,
+    });
+
     // --- Abort history setting (hidden) ---
     // Stores per-account abort history as JSON. Each entry records an
     // aborted buy or sell offer: item, type, requested/filled qty, reason,

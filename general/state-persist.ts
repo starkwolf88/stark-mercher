@@ -156,18 +156,25 @@ export const clearOfferCache = (bot: StarkMercher, accountName: string): void =>
 
 /**
  * Returns a map from lowercased item name to the number of OTHER accounts
- * (excluding `excludeAccount`) that currently have an active buy offer for
- * that item (mode === 'buy'). Used by the buy scan to avoid multiple
- * accounts buying the same item and competing on price.
+ * (excluding `excludeAccount`) that currently have an active offer (buy OR
+ * sell) for that item. Used by the buy scan to avoid multiple accounts
+ * merching the same item — both to prevent buy-side price competition and
+ * to avoid both accounts having capital tied up in the same slow item.
+ *
+ * Counts both `mode === 'buy'` and `mode === 'sell'` entries. An item in
+ * sell mode means the other account already bought it and is waiting to
+ * sell — the current account should pick a different item to diversify
+ * capital allocation and avoid sell-side price competition when both
+ * accounts eventually list sell offers for the same item.
  */
-export const getCrossAccountBuyingItemCount = (bot: StarkMercher, excludeAccount: string): Map<string, number> => {
+export const getCrossAccountActiveItemCount = (bot: StarkMercher, excludeAccount: string): Map<string, number> => {
     const state = loadPersistedState(bot);
     const counts = new Map<string, number>();
     for (const [accountName, cache] of Object.entries(state)) {
         if (accountName === excludeAccount) continue;
         if (!cache || typeof cache !== 'object') continue;
         for (const [itemName, entry] of Object.entries(cache)) {
-            if (entry && entry.mode === 'buy') {
+            if (entry && (entry.mode === 'buy' || entry.mode === 'sell')) {
                 const lower = itemName.trim().toLowerCase();
                 counts.set(lower, (counts.get(lower) ?? 0) + 1);
             }

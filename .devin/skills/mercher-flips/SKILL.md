@@ -148,7 +148,7 @@ Instead of buying at the 5m average low (instant-buy price), the script applies 
 
 **Actual applied percent**: After the margin cap and 24h floor are applied, `lowballPercent` and `lowballAmount` are recomputed to reflect the actual reduction from `basePrice`. This ensures the ETA volume factor is accurate.
 
-**ETA adjustment**: Effective buy volume is reduced by `1.5x lowball%` (e.g., 2% lowball → 97% of volume fills the offer). This is conservative.
+**ETA adjustment**: Effective buy volume is reduced by `2.0x lowball%` (e.g., 2% lowball → 96% of volume fills the offer). This is conservative — the 1.5x factor was too optimistic and caused offers to sit at 0% progress well past their predicted ETA.
 
 **Idempotency**: `applyLowball` stores `lowballBasePrice` (the pre-lowball price) so the second pass can reset and re-apply without stacking.
 
@@ -452,7 +452,7 @@ item (100k/hr) when the player has 15m and multiple empty slots. The absolute pr
 filter (≥ 20k) ensures cheap low-quality items aren't picked.
 
 Lowball items (`lowballPercent > 0`) buy below market price and fill slower; their
-ETA is adjusted by a `1.5x lowball%` volume factor heuristic, but the real fill rate
+ETA is adjusted by a `2.0x lowball%` volume factor heuristic, but the real fill rate
 depends on the price distribution below the lowballed price, making profit-per-hour
 less reliable than non-lowball items. The partial-quantity fallback and frozen
 swap-out follow the same non-lowball-first tiering.

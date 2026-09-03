@@ -778,8 +778,11 @@ const computeQuantityForAllocation = (itemData, cashAllocation) => {
 const computeEtasForQuantity = (itemData, quantity) => {
     // Lowball reduces the effective buy volume: a buy offer below market
     // only captures the portion of trades that happen at or below the
-    // lowballed price. Conservative factor: 1.5x the lowball %.
-    const lowballVolumeFactor = 1 - ((itemData.lowballPercent || 0) * 1.5 / 100);
+    // lowballed price. Conservative factor: 2.0x the lowball %.
+    // Increased from 1.5x to 2.0x — the 1.5x factor was too optimistic,
+    // producing ETAs that were too short and causing offers to sit at 0%
+    // progress well past their predicted ETA.
+    const lowballVolumeFactor = 1 - ((itemData.lowballPercent || 0) * 2.0 / 100);
     const effectivePurchaseVolume = Math.min(
         itemData.twoHourAverageHourlyPurchaseVolume * (1 - TWO_HOUR_VOLUME_BUFFER_PERCENTAGE / 100),
         itemData.oneHourPurchaseVolume
