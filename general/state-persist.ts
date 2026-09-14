@@ -3,16 +3,20 @@
 // ============================================================================
 // The Titan SDK has no file-system API, so we persist the offer cache in a
 // hidden string setting (JSON-encoded). This survives hot reloads (plugin
-// off/on within the same client session) but NOT client restarts — Titan's
-// host app does not persist hidden settings to plugin_settings.json, and
-// plugin-side .value writes are not marked dirty for disk persistence.
-// On client restart, the cache is empty and must be reconstructed from live
-// GE state (reverse reconciliation in auto-loop.ts Step 2b — TODO).
+// off/on within the same client session).
 //
 // The cache is keyed by in-game player name so each account has its own
 // offer history. On login / plugin enable, loadOfferCache() reads the
-// hidden setting, parses the JSON, and returns the cache for the current
+// setting, parses the JSON, and returns the cache for the current
 // account. saveOfferCache() stringifies and writes it back.
+//
+// Duplicate account-key migration: keys that differ only by invisible
+// whitespace characters (e.g. non-breaking space U+00A0 vs regular space
+// U+0020) are merged on load under a canonical key (roster match preferred,
+// else first-seen raw key). For items present in multiple duplicate keys,
+// the entry with the highest offerPlacedAt timestamp (most recent) wins.
+// Write paths also use the existing canonical key to prevent re-creating
+// duplicates.
 //
 // Usage:
 //   import { loadOfferCache, saveOfferCache, type OfferCacheData } from '../general/state-persist.js';
@@ -22,6 +26,7 @@
 // ============================================================================
 
 import type { StarkMercher } from '../stark-mercher.js';
+import { getRoster } from '../antiban/account-rotation.js';
 
 // --- Types -----------------------------------------------------------------
 
@@ -71,13 +76,17 @@ export interface OfferCacheEntry {
      *  offer was aborted/re-listed or completed. Cleared when the sell
      *  cycle completes and the summary is recorded to merch history. */
     partialSales?: { price: number; qty: number; timestamp: number }[];
-    /** Estimated time to fill the buy offer, in minutes. Cached from
-     *  merchableItems.json at buy time so staleness checks still work
-     *  if the item is later removed from the merchable list. */
+    /** Estimated time to fill the buy offer, in minutes. Stores the runtime
+     *  ETA (based on the actual affordable quantity at placement time), not
+     *  the simulation ETA from merchableItems.json (which is based on a 50m
+     *  cash stack). Falls back to the simulation ETA if no runtime value
+     *  was provided at placement time. Used by the stale checker and cache
+     *  dump. */
     purchaseEtaMinutes?: number;
-    /** Estimated time to fill the sell offer, in minutes. Cached from
-     *  merchableItems.json at buy time so staleness checks still work
-     *  if the item is later removed from the merchable list. */
+    /** Estimated time to fill the sell offer, in minutes. Stores the runtime
+     *  ETA (based on the actual quantity being sold), not the simulation
+     *  ETA. Updated by recordSellOffer when a runtime sell ETA is provided.
+     *  Used by the stale checker and cache dump. */
     saleEtaMinutes?: number;
     /** Timestamp (ms) of the FIRST purchase in the current 4-hour buy
      *  limit window. The GE resets the buy limit 4 hours after the first
@@ -93,13 +102,152 @@ export interface OfferCacheEntry {
      *  never "failed to sell"). Backward compat: undefined (existing entries)
      *  is treated as true. */
     sellConfirmed?: boolean;
+    /** Last observed buy progress (0-1) for the no-progress abort rule.
+     *  Updated by the stale-check loop in auto-loop.ts each tick when the
+     *  live slot progress differs from this stored value. */
+    lastBuyProgress?: number;
+    /** Timestamp (ms) when lastBuyProgress last changed. Used by the
+     *  no-progress abort rule to detect partial-fill buys that have stalled
+     *  (progress > 0 but hasn't increased for the ETA-scaled threshold). */
+    lastBuyProgressAt?: number;
+    /** Last observed sell progress (0-1) for the progress-since-revision
+     *  extension in the sell stale checker. Updated by the stale-check loop
+     *  each tick when the live slot progress differs from this stored value.
+     *  Reset to 0 on revision/re-list/confirm so the window starts fresh
+     *  with each new offer. */
+    lastSellProgress?: number;
+    /** Timestamp (ms) when lastSellProgress last changed. Used by the
+     *  progress-since-revision extension to detect sells that are actively
+     *  filling but haven't completed within the original ETA — these get
+     *  extra time before being revised (up to 2x ETA). */
+    lastSellProgressAt?: number;
+    /** Number of consecutive floor-hit revisions (price couldn't be reduced
+     *  further because it was already at the tax break-even floor). After
+     *  FLOOR_HIT_ABANDON_THRESHOLD (2) consecutive floor-hits, the item
+     *  abandons early instead of cycling for the full 6-revision schedule.
+     *  Reset to 0 whenever a price revision actually changes the price. */
+    floorHitCount?: number;
+    /** True if this entry was created by reverse reconciliation (cache loss
+     *  after client restart) rather than by a normal buy/sell offer placement.
+     *  Used by the stale checker to immediately abort zero-profit or very
+     *  low profit/hr reconstructed sells — these are pre-existing offers from
+     *  a previous session whose prices may be stale or no longer profitable,
+     *  and the slot is better used for a fresh merchable item. Cleared on
+     *  re-list (recordSellOffer/confirmSellOffer) to prevent infinite abort
+     *  cycles — see reconstructedBuyPrice for the surviving flag. */
+    reconstructed?: boolean;
+    /** True if the buy price on this entry came from priceHistory's 1h
+     *  average (via reconstructEntry) rather than from a real buy offer.
+     *  Unlike `reconstructed`, this flag is NOT cleared on re-list — it
+     *  survives sell abort + re-list cycles so that the completed-sell
+     *  sweep can skip recording phantom losses from uncertain buy prices.
+     *  Cleared only when the bot places a new buy offer (recordBuyOffer)
+     *  with a known price. */
+    reconstructedBuyPrice?: boolean;
+    /** Quantity the buy flow intends to type into the GE config screen.
+     *  Set by recordBuyOffer() so a BuyOfferFlow can be reconstructed after
+     *  a plugin reload mid-flow (stateless recovery). Cleared when the buy
+     *  completes or is aborted. Optional for backward compat with existing
+     *  persisted entries (undefined = recompute from merchableItems.json). */
+    buyQuantity?: number;
 }
 
 // --- Load / Save -----------------------------------------------------------
 
+/** Normalize an account name for duplicate-key detection.
+ *  Replaces ALL whitespace characters (including invisible ones like
+ *  non-breaking spaces U+00A0, zero-width spaces, ideographic spaces, etc.)
+ *  with a regular space, collapses multiple spaces to one, trims, and
+ *  lowercases. This catches "hc\u00A0fruitz" vs "hc fruitz" which look
+ *  identical visually but are different JSON keys. */
+const normalizeAccountKey = (name: string): string => {
+    if (!name) return '';
+    return name
+        .replace(/[\s\u00A0\u2000-\u200B\u202F\u205F\u3000\uFEFF]+/g, ' ')
+        .trim()
+        .toLowerCase();
+};
+
 /**
- * Loads the full persisted state from the hidden setting.
+ * Merges duplicate account keys that are equivalent under whitespace + casing
+ * normalization (e.g. "hc\u00A0fruitz" and "hc fruitz"). For each normalized
+ * name with multiple raw keys, the per-item caches are merged: for items
+ * present in multiple keys, the entry with the highest offerPlacedAt (most
+ * recent) wins. The merged result is stored under a single canonical key
+ * (roster match preferred, else first-seen raw key) and written back only
+ * if a merge occurred. Idempotent.
+ */
+const migrateDuplicateKeys = (
+    bot: StarkMercher,
+    state: PersistedState,
+): PersistedState => {
+    const rawKeys = Object.keys(state);
+    if (rawKeys.length < 2) return state;
+
+    const groups = new Map<string, string[]>();
+    for (const key of rawKeys) {
+        const norm = normalizeAccountKey(key);
+        if (!norm) continue;
+        const arr = groups.get(norm);
+        if (arr) arr.push(key);
+        else groups.set(norm, [key]);
+    }
+
+    let needsMerge = false;
+    for (const arr of groups.values()) {
+        if (arr.length > 1) { needsMerge = true; break; }
+    }
+    if (!needsMerge) return state;
+
+    const roster = getRoster(bot);
+    const rosterByNorm = new Map<string, string>();
+    for (const name of roster) {
+        const norm = normalizeAccountKey(name);
+        if (norm && !rosterByNorm.has(norm)) rosterByNorm.set(norm, name);
+    }
+
+    const merged: PersistedState = {};
+    for (const [norm, keys] of groups) {
+        if (keys.length === 1) {
+            merged[keys[0]] = state[keys[0]];
+            continue;
+        }
+        const canonical = rosterByNorm.get(norm) ?? keys[0];
+        // Merge per-item caches: for each item, keep the entry with the
+        // highest offerPlacedAt (most recently placed/updated offer).
+        const itemMap = new Map<string, { entry: OfferCacheEntry; placedAt: number }>();
+        for (const key of keys) {
+            const cache = state[key];
+            if (!cache) continue;
+            for (const [itemName, entry] of Object.entries(cache)) {
+                if (!entry) continue;
+                const placedAt = entry.offerPlacedAt ?? 0;
+                const existing = itemMap.get(itemName);
+                if (!existing || placedAt > existing.placedAt) {
+                    itemMap.set(itemName, { entry, placedAt });
+                }
+            }
+        }
+        const mergedCache: OfferCacheData = {};
+        for (const [itemName, { entry }] of itemMap) {
+            mergedCache[itemName] = entry;
+        }
+        merged[canonical] = mergedCache;
+
+        titan.logf(
+            '[Stark Mercher] Offer cache: merged %d duplicate account keys into "%s" (%d items).',
+            keys.length, canonical, Object.keys(mergedCache).length,
+        );
+    }
+
+    savePersistedState(bot, merged);
+    return merged;
+};
+
+/**
+ * Loads the full persisted state from the setting.
  * Returns an empty object if the setting is empty or unparseable.
+ * Runs duplicate account-key migration on load.
  */
 export const loadPersistedState = (bot: StarkMercher): PersistedState => {
     const raw = bot.offerCacheSetting.value;
@@ -107,7 +255,8 @@ export const loadPersistedState = (bot: StarkMercher): PersistedState => {
     try {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
-            return parsed as PersistedState;
+            const state = parsed as PersistedState;
+            return migrateDuplicateKeys(bot, state);
         }
     } catch (e) {
         titan.logf('[Stark Mercher] Failed to parse offer cache: %s', String(e));
@@ -116,7 +265,7 @@ export const loadPersistedState = (bot: StarkMercher): PersistedState => {
 };
 
 /**
- * Saves the full persisted state to the hidden setting.
+ * Saves the full persisted state to the setting.
  */
 export const savePersistedState = (bot: StarkMercher, state: PersistedState): void => {
     try {
@@ -129,56 +278,54 @@ export const savePersistedState = (bot: StarkMercher, state: PersistedState): vo
 /**
  * Loads the offer cache for a specific account.
  * Returns an empty object if the account has no cached data.
+ * Falls back to a normalized key match if the exact key isn't found —
+ * defensive measure for casing/whitespace differences between the game's
+ * localPlayer.name and the roster entry.
  */
 export const loadOfferCache = (bot: StarkMercher, accountName: string): OfferCacheData => {
     const state = loadPersistedState(bot);
-    return state[accountName] ?? {};
+    if (state[accountName]) return state[accountName];
+    // Normalized fallback (handles invisible whitespace differences).
+    const norm = normalizeAccountKey(accountName);
+    if (!norm) return {};
+    for (const [key, cache] of Object.entries(state)) {
+        if (normalizeAccountKey(key) === norm) return cache;
+    }
+    return {};
 };
 
 /**
  * Saves the offer cache for a specific account.
  * Merges into the full persisted state and writes back.
+ * Uses the existing key if one matches under normalization, to avoid
+ * re-creating duplicate keys with different invisible whitespace.
  */
 export const saveOfferCache = (bot: StarkMercher, accountName: string, cache: OfferCacheData): void => {
     const state = loadPersistedState(bot);
-    state[accountName] = cache;
+    let key = accountName;
+    if (!state[key]) {
+        const norm = normalizeAccountKey(accountName);
+        if (norm) {
+            for (const existingKey of Object.keys(state)) {
+                if (normalizeAccountKey(existingKey) === norm) { key = existingKey; break; }
+            }
+        }
+    }
+    state[key] = cache;
     savePersistedState(bot, state);
 };
 
 /**
  * Clears the offer cache for a specific account (e.g. on full reset).
+ * Also removes any keys that match under normalization.
  */
 export const clearOfferCache = (bot: StarkMercher, accountName: string): void => {
     const state = loadPersistedState(bot);
-    delete state[accountName];
-    savePersistedState(bot, state);
-};
-
-/**
- * Returns a map from lowercased item name to the number of OTHER accounts
- * (excluding `excludeAccount`) that currently have an active offer (buy OR
- * sell) for that item. Used by the buy scan to avoid multiple accounts
- * merching the same item — both to prevent buy-side price competition and
- * to avoid both accounts having capital tied up in the same slow item.
- *
- * Counts both `mode === 'buy'` and `mode === 'sell'` entries. An item in
- * sell mode means the other account already bought it and is waiting to
- * sell — the current account should pick a different item to diversify
- * capital allocation and avoid sell-side price competition when both
- * accounts eventually list sell offers for the same item.
- */
-export const getCrossAccountActiveItemCount = (bot: StarkMercher, excludeAccount: string): Map<string, number> => {
-    const state = loadPersistedState(bot);
-    const counts = new Map<string, number>();
-    for (const [accountName, cache] of Object.entries(state)) {
-        if (accountName === excludeAccount) continue;
-        if (!cache || typeof cache !== 'object') continue;
-        for (const [itemName, entry] of Object.entries(cache)) {
-            if (entry && (entry.mode === 'buy' || entry.mode === 'sell')) {
-                const lower = itemName.trim().toLowerCase();
-                counts.set(lower, (counts.get(lower) ?? 0) + 1);
-            }
+    const norm = normalizeAccountKey(accountName);
+    for (const key of Object.keys(state)) {
+        if (key === accountName || normalizeAccountKey(key) === norm) {
+            delete state[key];
         }
     }
-    return counts;
+    savePersistedState(bot, state);
 };

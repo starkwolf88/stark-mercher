@@ -9,6 +9,7 @@ export const setAction = (bot: StarkMercher, action: string, delayTicks: number)
     bot.actionDelay = Math.max(0, delayTicks);
     bot.lastAction = action;
     bot.lastActionTime = titan.state.client.tick;
+    bot.delayLogShown = false;
 };
 
 // canPerformAction()

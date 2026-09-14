@@ -4,7 +4,7 @@
 // Each account gets its own deterministic profile seeded from the player
 // name, persisted in a hidden JSON setting. The profile controls:
 //
-//   - Nightly sleep duration (3.5–6.5h base, per-account)
+//   - Nightly sleep duration (4.5–7.5h base, per-account)
 //   - Nightly wake time (06:30–07:30 base, per-account)
 //   - Wake variance, late-wake chance, weekend late-wake shift
 //   - Short logout break duration (2–5 min base + 10%/1% long tail)
@@ -24,7 +24,7 @@ import type { StarkMercher } from '../stark-mercher.js';
 // --- Types ------------------------------------------------------------------
 
 export interface SessionProfile {
-    /** Nightly sleep base in minutes (210–390 = 3.5–6.5h). */
+    /** Nightly sleep base in minutes (270–450 = 4.5–7.5h). */
     nightlySleepLengthBase: number;
     /** Nightly sleep variance in minutes (15–90, positive-only). */
     nightlySleepLengthVariance: number;
@@ -123,8 +123,8 @@ export function generateSessionProfile(accountName: string): SessionProfile {
     const rng = mulberry32(hashString(accountName));
 
     return {
-        // Nightly sleep: 3.5–6.5h base (210–390 min), 15–90 min variance
-        nightlySleepLengthBase: sampleInt(rng, 210, 390),
+        // Nightly sleep: 4.5–7.5h base (270–450 min), 15–90 min variance
+        nightlySleepLengthBase: sampleInt(rng, 270, 450),
         nightlySleepLengthVariance: sampleInt(rng, 15, 90),
 
         // Nightly wake: 06:30–07:30 base (390–450 min), 15–60 min variance
@@ -174,38 +174,63 @@ export function generateSessionProfile(accountName: string): SessionProfile {
 
 const PROFILE_KEY_PREFIX = 'sessionProfile:';
 
+// --- Parsed-JSON cache -----------------------------------------------------
+// loadOrCreateSessionProfile reads bot.sessionProfileSetting.value (crossing
+// the JS<->native boundary) and JSON.parses the result on every call.
+// isAccountSleeping calls it per account during roster iteration, so with N
+// accounts a single selectNextAccount call does N native reads + N parses
+// just for profile lookup. The parsed profiles are cached at module level
+// and invalidated on writes (saveSessionProfile) and on onDisable.
+let cachedProfiles: Record<string, SessionProfile> | null = null;
+
+/** Invalidates the session-profile cache. Called from onDisable. */
+export const invalidateSessionProfileCache = (): void => {
+    cachedProfiles = null;
+};
+
+/** Returns the cached parsed-profiles map, populating it from the setting
+ *  on first access. Returns null if the setting is empty/unparseable. */
+const ensureProfilesCache = (bot: StarkMercher): Record<string, SessionProfile> => {
+    if (cachedProfiles) return cachedProfiles;
+    try {
+        const raw = bot.sessionProfileSetting.value;
+        if (raw && raw !== '{}') {
+            const all = JSON.parse(raw);
+            if (all && typeof all === 'object') {
+                cachedProfiles = all as Record<string, SessionProfile>;
+                return cachedProfiles;
+            }
+        }
+    } catch (e) {
+        titan.logf('[Stark Mercher] Failed to parse session profiles: %s', String(e));
+    }
+    cachedProfiles = {};
+    return cachedProfiles;
+};
+
 /**
  * Loads the session profile for a specific account from the hidden setting.
  * If no profile is saved, generates one from the account name, saves it,
  * and returns it.
  */
 export function loadOrCreateSessionProfile(bot: StarkMercher, accountName: string): SessionProfile {
-    const raw = bot.sessionProfileSetting.value;
-    if (raw && raw !== '{}') {
-        try {
-            const all = JSON.parse(raw);
-            if (all && typeof all === 'object') {
-                const key = PROFILE_KEY_PREFIX + accountName;
-                const saved = all[key];
-                if (saved && typeof saved === 'object' && typeof saved.nightlySleepLengthBase === 'number') {
-                    // Migrate old profiles that lack the hopping sub-profile.
-                    if (!saved.hopping) {
-                        saved.hopping = generateSessionProfile(accountName).hopping;
-                        saveSessionProfile(bot, accountName, saved as SessionProfile);
-                    }
-                    return saved as SessionProfile;
-                }
-            }
-        } catch (e) {
-            titan.logf('[Stark Mercher] Failed to parse session profiles: %s', String(e));
+    const all = ensureProfilesCache(bot);
+    const key = PROFILE_KEY_PREFIX + accountName;
+    const saved = all[key];
+    if (saved && typeof saved === 'object' && typeof saved.nightlySleepLengthBase === 'number') {
+        // Migrate old profiles that lack the hopping sub-profile.
+        if (!saved.hopping) {
+            saved.hopping = generateSessionProfile(accountName).hopping;
+            saveSessionProfile(bot, accountName, saved as SessionProfile);
         }
+        return saved as SessionProfile;
     }
     // Generate and persist
     const profile = generateSessionProfile(accountName);
     saveSessionProfile(bot, accountName, profile);
-    titan.logf('[Stark Mercher] Generated session profile for %s: sleep=%.1fh, wake=%s, weekendLate=%s',
+    if (bot.logInfoValue) titan.logf('[Stark Mercher] Generated session profile for %s: sleep=%sh, wake=%s, weekendLate=%s',
         accountName,
-        profile.nightlySleepLengthBase / 60,
+        (profile.nightlySleepLengthBase / 60).toFixed(1),
         formatTime(profile.nightlyWakeBase),
         String(profile.nightlyWeekendLate));
     return profile;
@@ -213,14 +238,12 @@ export function loadOrCreateSessionProfile(bot: StarkMercher, accountName: strin
 
 /**
  * Saves the session profile for a specific account into the hidden setting.
+ * Updates the in-memory cache in place so the next read sees the new value
+ * without a native read + parse.
  */
 export function saveSessionProfile(bot: StarkMercher, accountName: string, profile: SessionProfile): void {
     try {
-        let all: Record<string, unknown> = {};
-        const raw = bot.sessionProfileSetting.value;
-        if (raw && raw !== '{}') {
-            try { all = JSON.parse(raw) ?? {}; } catch { all = {}; }
-        }
+        const all = ensureProfilesCache(bot);
         all[PROFILE_KEY_PREFIX + accountName] = profile;
         bot.sessionProfileSetting.value = JSON.stringify(all);
     } catch (e) {

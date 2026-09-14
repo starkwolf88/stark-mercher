@@ -1,15 +1,16 @@
 import { promises as fs } from 'fs';
 
 const debug = false;
+const F2P_MODE = process.argv.includes('--f2p');
 const MAX_RESULTS = 100; // Maximum number of merchable items to output after sorting by profitability
 const GE_TAX_PERCENTAGE = 2; // Grand Exchange sale tax percentage deducted from sell price
 const CASH_STACK_MILLIONS = 50; // Total flipping cash in millions for readability
 const CASH_STACK = CASH_STACK_MILLIONS * 1000000; // Total GP available for flipping
-const SALE_BUFFER_PERCENTAGE = 0.01; // Extra safety margin removed from sell price to protect against price movement
+const SALE_BUFFER_RATIO = 0.05; // Sell undercut: 5% of post-tax margin (margin after 2% GE tax). Makes the initial sell price competitive so items sell in 1-2 attempts instead of cycling through revisions. Can never filter items by itself (buffer <= post-tax margin). Thin-margin items (post-tax < 20gp) get 0.
 const AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO = 0.125; // Percentage of total cash assumed to be used per GE slot (~8 slots)
 const AVERAGE_SLOT_CASH_STACK_ALLOCATION = CASH_STACK * AVERAGE_SLOT_CASH_STACK_ALLOCATION_RATIO; // Average GP allocated per GE slot
-const MARKET_SHARE_ASSUMPTION_PERCENTAGE = 35; // calculateEtas() Assume 35% market share to estimate ETA's better
-const MAX_TURNOVER_HOURS = 2.5; // calculateEtas() Maximum allowed time for a full flip cycle (purchase + sale)
+const MARKET_SHARE_ASSUMPTION_PERCENTAGE = 50; // calculateEtas() Assume 50% market share to estimate ETAs and profit/hr. Raised from 35% — the 35% assumption understated profit/hr by ~2×, filtering out items that genuinely earn 30-40k/hr at realistic capture rates. 50% is still conservative (the 15% volume buffer on top gives effective 42.5% assumed capture).
+const MAX_TURNOVER_HOURS = 6; // calculateEtas() Maximum allowed turnover ETA at 50m allocation (secondary sanity check — primary gate is actualProfitPerSlotHour)
 const TWO_HOUR_VOLUME_BUFFER_PERCENTAGE = 15;
 
 // Item specific variables
@@ -46,6 +47,43 @@ let filteredItemsWithFullData = [];
 let filteredItemsBeforeCashAllocation = [];
 let merchableItems = [];
 
+// --- F2P curated flip list --------------------------------------------------
+// High-volume F2P items that are merchable with a fixed 1gp margin. These
+// bypass the normal filter pipeline entirely — the pipeline uses the same
+// API data but applies a simple formula: buy at (sell - tax - 1), capped at
+// (5m low - 1) to avoid buying at market when the 1h avgHigh lags a downward
+// move. Sell at the 1h avgHigh. Output goes to f2pMerchableItems.json
+// (separate from merchableItems.json) so the runtime can switch between P2P
+// and F2P pools. Items are chosen by 1h volume (all >100k/hr) and price range
+// (25-200gp where a 1gp margin is viable after 2% GE tax).
+const F2P_CURATED_ITEM_IDS = new Set([
+    562,    // Chaos rune   — ~934k vol/hr, 18k limit
+    560,    // Death rune   — ~811k vol/hr, 25k limit
+    561,    // Nature rune  — ~446k vol/hr, 18k limit
+    453,    // Coal         — ~387k vol/hr, 13k limit
+    564,    // Cosmic rune  — ~315k vol/hr, 18k limit
+    563,    // Law rune     — ~269k vol/hr, 18k limit
+    444,    // Gold ore     — ~256k vol/hr, 30k limit
+    890,    // Adamant arrow— ~148k vol/hr, 11k limit (no tax, <50gp)
+    1987,   // Grapes       — ~116k vol/hr, 20k limit
+    1515,   // Yew logs     — ~115k vol/hr, 12k limit
+]);
+const F2P_FIXED_MARGIN = 1; // 1gp profit per unit after tax
+const F2P_SPIKE_DEVIATION_THRESHOLD = 0.10; // Skip if 5m avgHigh deviates >10% from 1h avgHigh
+let f2pMerchableItems = [];
+
+// F2P pre-filter items — collected before any filters apply, used only when
+// --f2p flag is passed. Captures every F2P item with valid 5m/1h prices so we
+// can see the raw after-tax margin distribution and build a curated F2P list.
+let f2pPreFilterItems = [];
+
+// F2P filter reason tracking — records which pipeline filter removed each F2P
+// item. Used to populate the "Filtered By" column in the F2P CSV output.
+const f2pFilterReason = new Map();
+const recordF2pFilter = (itemData, reason) => {
+    if (F2P_MODE && !itemData.members) f2pFilterReason.set(itemData.itemId, reason);
+};
+
 // Filter variables
 let mappingEntryFiltered = 0;
 let twentyFourHourEntryFiltered = 0;
@@ -63,6 +101,7 @@ let salePriceNotAvailableFiltered = 0; // validateSalePrice()
 let irregularVolumesFiltered = 0; // determineIrregularVolumes()
 let trendSlopeFiltered = 0; // determineTrendSlope()
 let salePriceSpikeFiltered = 0; // determineSalePriceSpike()
+let purchasePriceSpikeFiltered = 0; // determinePurchasePriceSpike()
 let purchasePriceDropFiltered = 0; // determinePurchasePriceDrop()
 let profitPerSlotHourFiltered = 0; // calculateMaxProfitPerSlotHour()
 let quantityToPurchaseFiltered = 0 // calculateQuantityToPurchase()
@@ -70,6 +109,7 @@ let etaVolumeLowFiltered = 0; // calculateEtas()
 let etaTurnoverFiltered = 0; // calculateEtas()
 let actualProfitPerSlotHourFiltered = 0; // calculateProfitability()
 let returnOnInvestmentFiltered = 0; // calculateProfitability()
+let taxAwareMarginFiltered = 0; // calculateProfitability() — high-value items failing tax floor or ETA-scaled margin % guard
 let longTermCrashFiltered = 0; // determineLongTermCrash()
 
 try {
@@ -169,6 +209,7 @@ const excludeNameStrings = (itemData) => {
     const itemNameLower = itemData.itemName.toLowerCase();
     if (EXCLUDED_NAME_STRINGS.some(nameString => itemNameLower.includes(nameString)) && !INCLUDED_NAME_STRINGS.some(nameString => itemNameLower.includes(nameString))) {
         itemNameFiltered++;
+        recordF2pFilter(itemData, 'Name exclusion');
         return false;
     }
     return true;
@@ -186,6 +227,7 @@ const determinePurchaseAndSalePrices = (itemData) => {
     // based on the player's actual coins.
     if (itemData.purchasePrice > CASH_STACK) {
         purchasePriceExceedsCashStackFiltered++;
+        recordF2pFilter(itemData, 'Price > 50m cash stack');
         return false;
     }
     return true;
@@ -265,7 +307,13 @@ const GE_TAX_EXEMPTION_THRESHOLD = 50; // Items with a sale price below 50gp are
 
 const calculateSalePrice = (itemData) => {
     itemData.saleTaxAmount = itemData.rawSalePrice < GE_TAX_EXEMPTION_THRESHOLD ? 0 : Math.floor((itemData.rawSalePrice / 100) * GE_TAX_PERCENTAGE);
-    itemData.saleBufferAmount = Math.floor((itemData.rawSalePrice / 100) * SALE_BUFFER_PERCENTAGE);
+    // Sell buffer: 5% of post-tax margin (margin remaining after 2% GE tax).
+    // This directly measures what's available and can never make an item
+    // negative by itself. Thin-margin items (post-tax margin < 20gp) get 0
+    // buffer (same as before); thick-margin items get a meaningful undercut
+    // so they sell in 1-2 attempts instead of cycling through revisions.
+    const postTaxMargin = Math.max(0, (itemData.rawSalePrice || 0) - itemData.saleTaxAmount - (itemData.purchasePrice || 0));
+    itemData.saleBufferAmount = Math.floor(postTaxMargin * SALE_BUFFER_RATIO);
     itemData.salePriceExcludingTax = Math.floor(itemData.rawSalePrice - itemData.saleTaxAmount);
     itemData.salePriceExcludingTaxAndBuffer = Math.floor(itemData.salePriceExcludingTax - itemData.saleBufferAmount);
     itemData.salePrice = Math.floor(itemData.rawSalePrice - itemData.saleBufferAmount);
@@ -275,10 +323,12 @@ const calculateProfitMargin = (itemData) => {
     itemData.profitMargin = Math.floor(itemData.salePriceExcludingTaxAndBuffer - itemData.purchasePrice);
     if (itemData.profitMargin < 1) {
         profitMarginFiltered++;
+        recordF2pFilter(itemData, 'Profit margin < 1gp');
         return false;
     }
     if ((itemData.profitMargin * itemData.limit) < 10000) {
         limitProfitPerFlipFiltered++
+        recordF2pFilter(itemData, 'Limit × profit < 10k');
         return false;
     }
     return true;
@@ -325,6 +375,7 @@ async function getTimeSeriesData() {
             const timeSeriesData = await fetchFromAPI(`timeseries?timestep=1h&id=${itemData.itemId}`);
             if (!timeSeriesData) {
                 timeSeriesDataFiltered++;
+                recordF2pFilter(itemData, 'Time series fetch failed');
                 continue;
             }
 
@@ -459,6 +510,7 @@ const convertTimeSeriesData = () => {
         // Three hour data filter.
         if (!itemData.threeHourAverageHourlyPurchasePrice || !itemData.threeHourAverageHourlySalePrice || !itemData.threeHourAverageHourlyPurchaseVolume || !itemData.threeHourAverageHourlySaleVolume) {
             threeHourDataFiltered++;
+            recordF2pFilter(itemData, 'No 3h average data');
             continue;
         }
 
@@ -476,6 +528,7 @@ const validatePurchasePrice = (itemData) => {
                 itemData.purchasePrice = itemData.threeHourAverageHourlyPurchasePrice;
             } else {
                 purchasePriceNotAvailableFiltered++;
+                recordF2pFilter(itemData, 'No 2h/3h purchase price');
                 return false;
             }
         }
@@ -484,6 +537,7 @@ const validatePurchasePrice = (itemData) => {
     // (pool width dial — see determinePurchaseAndSalePrices).
     if (itemData.purchasePrice > CASH_STACK) {
         validatedPurchasePriceExceedsCashStack++;
+        recordF2pFilter(itemData, 'Validated price > 50m cash stack');
         return false;
     }
     return true;
@@ -498,6 +552,7 @@ const validateSalePrice = (itemData) => {
                 itemData.rawSalePrice = itemData.threeHourAverageHourlySalePrice;
             } else {
                 salePriceNotAvailableFiltered++;
+                recordF2pFilter(itemData, 'No 2h/3h sale price');
                 return false;
             }
         }
@@ -628,6 +683,40 @@ const applyLowball = (itemData) => {
     itemData.purchasePrice = finalPrice;
 };
 
+// --- Competitive buffer (non-lowball items only) ---------------------------
+// Non-lowball items buy at the 5m average low price (market price). Adding a
+// small competitive buffer on top of the buy price ensures the offer fills
+// reliably even if the market ticks up slightly between data refresh (every
+// 3 min) and offer placement. The buffer is 5% of the gross margin, floored
+// (no minimum), so thin-margin items (<20gp) are unaffected (0gp buffer) while
+// thicker-margin items get a small upward nudge that costs ~5% of profit but
+// significantly improves fill rates.
+//
+// Only applies to non-lowball items (lowballPercent === 0) — lowball items
+// already buy below market by design and have their own fill-rate tradeoff.
+//
+// No idempotency concern: applyLowball() resets purchasePrice to
+// lowballBasePrice before this runs in each pass, so the buffer always
+// starts from the pre-buffer base price. The buffer is applied once per
+// pass and does not stack.
+const COMPETITIVE_BUFFER_RATIO = 0.05; // 5% of gross margin
+const applyCompetitiveBuffer = (itemData) => {
+    // Only apply to non-lowball items.
+    if ((itemData.lowballPercent || 0) > 0) {
+        itemData.competitiveBuffer = 0;
+        return;
+    }
+    const basePrice = itemData.purchasePrice;
+    const rawMargin = (itemData.rawSalePrice || 0) - basePrice;
+    if (rawMargin <= 0) {
+        itemData.competitiveBuffer = 0;
+        return;
+    }
+    const buffer = Math.max(1, Math.floor(rawMargin * COMPETITIVE_BUFFER_RATIO));
+    itemData.competitiveBuffer = buffer;
+    itemData.purchasePrice = basePrice + buffer;
+};
+
 const determineIrregularVolumes = (itemData) => {
     if (itemData.sevenDayAverageHourlyVolume < 5) return true; // Ignore low volume items
 
@@ -640,6 +729,7 @@ const determineIrregularVolumes = (itemData) => {
     itemData.threeHourVsSevenDayVolumeRatio = threeHourVsSevenDayVolumeRatio;
     if (threeHourVsSevenDayVolumeRatio < dynamicDropThreshold || threeHourVsSevenDayVolumeRatio > dynamicSpikeThreshold) {
         irregularVolumesFiltered++;
+        recordF2pFilter(itemData, 'Irregular volumes');
         return false;
     }
     return true;
@@ -675,6 +765,7 @@ const determineTrendSlope = (itemData) => {
     // 3+ drops, or 2+ drops and 1+ flats
     if (drops > 2 || (drops > 1 && flats > 0)) {
         trendSlopeFiltered++;
+        recordF2pFilter(itemData, 'Trend slope (crashing)');
         return false;
     }
 
@@ -734,9 +825,73 @@ const determineSalePriceSpike = (itemData) => {
 
     if (itemData.oneHourSalePrice && itemData.oneHourSalePrice > (itemData.sevenDayAverageHourlySalePrice * maxMultiplier1h)) {
         salePriceSpikeFiltered++;
+        recordF2pFilter(itemData, 'Sale price spike (1h vs 7d)');
         return false;
     } else if (itemData.threeHourAverageHourlySalePrice > (itemData.sevenDayAverageHourlySalePrice * maxMultiplier3h)) {
         salePriceSpikeFiltered++;
+        recordF2pFilter(itemData, 'Sale price spike (3h vs 7d)');
+        return false;
+    }
+    return true;
+};
+
+// --- Purchase price spike filter (1h/3h vs 7d) -------------------------------
+// Mirrors the sell-side spike filter but for the buy price. Catches sustained
+// uptrends where the 1h or 3h average buy price is significantly above the
+// 7-day baseline. Protects against buying at the top of a manipulation spike
+// or a transient pump that is likely to revert (e.g. Ham robe at 69.83% above
+// 7-day average, Dark kebbit fur at 22.10%, Antipoison(3) at 18.24%).
+//
+// Uses higher minimum thresholds than the sell-side spike filter (15% vs 10%
+// for 1h, 12% vs 8% for 3h) because:
+// (1) Normal market fluctuation regularly produces 5-10% moves above the
+// 7-day average — these are often legitimate trends that continue and produce
+// profit (e.g. Twinflame staff at 7.41% spike sold for +78,581gp profit).
+// (2) The 5m-vs-1h clamp already handles transient 5-minute spikes.
+// (3) Genuine manipulation spikes (Ham robe 69%, Dark kebbit fur 22%,
+// Antipoison 18%) are well above 15% and are reliably caught.
+// (4) Empirical analysis of merch history showed zero losses caused by
+// purchase-price spikes — all losses were sell-side (price drops during
+// holding, thin margins + GE tax).
+//
+//   maxSpikePct = clamp(marginPct * 0.5, 15, 25)
+//
+// Examples:
+//   1% margin:   maxSpikePct = max(15, 0.5)  = 15%
+//   20% margin:  maxSpikePct = max(15, 10)   = 15%
+//   40% margin:  maxSpikePct = max(15, 20)   = 20%
+//   50%+ margin: maxSpikePct = min(25, 25)   = 25%
+const ONE_HOUR_PURCHASE_SPIKE_MARGIN_SCALE = 0.5;
+const ONE_HOUR_PURCHASE_SPIKE_MIN_PCT = 15;
+const ONE_HOUR_PURCHASE_SPIKE_MAX_PCT = 25;
+const THREE_HOUR_PURCHASE_SPIKE_MARGIN_SCALE = 0.4;
+const THREE_HOUR_PURCHASE_SPIKE_MIN_PCT = 12;
+const THREE_HOUR_PURCHASE_SPIKE_MAX_PCT = 20;
+
+const determinePurchasePriceSpike = (itemData) => {
+    const marginPct = itemData.purchasePrice > 0
+        ? (itemData.profitMargin / itemData.purchasePrice) * 100
+        : 0;
+
+    const maxSpikePct1h = Math.min(
+        ONE_HOUR_PURCHASE_SPIKE_MAX_PCT,
+        Math.max(ONE_HOUR_PURCHASE_SPIKE_MIN_PCT, marginPct * ONE_HOUR_PURCHASE_SPIKE_MARGIN_SCALE)
+    );
+    const maxSpikePct3h = Math.min(
+        THREE_HOUR_PURCHASE_SPIKE_MAX_PCT,
+        Math.max(THREE_HOUR_PURCHASE_SPIKE_MIN_PCT, marginPct * THREE_HOUR_PURCHASE_SPIKE_MARGIN_SCALE)
+    );
+
+    const maxMultiplier1h = 1 + (maxSpikePct1h / 100);
+    const maxMultiplier3h = 1 + (maxSpikePct3h / 100);
+
+    if (itemData.oneHourPurchasePrice && itemData.oneHourPurchasePrice > (itemData.sevenDayAverageHourlyPurchasePrice * maxMultiplier1h)) {
+        purchasePriceSpikeFiltered++;
+        recordF2pFilter(itemData, 'Purchase price spike (1h vs 7d)');
+        return false;
+    } else if (itemData.threeHourAverageHourlyPurchasePrice > (itemData.sevenDayAverageHourlyPurchasePrice * maxMultiplier3h)) {
+        purchasePriceSpikeFiltered++;
+        recordF2pFilter(itemData, 'Purchase price spike (3h vs 7d)');
         return false;
     }
     return true;
@@ -747,18 +902,28 @@ const THREE_HOUR_PRICE_DROP_MIN_MULTIPLIER = 0.9; //
 const determinePurchasePriceDrop = (itemData) => {
     if (itemData.oneHourPurchasePrice && itemData.oneHourPurchasePrice < (itemData.sevenDayAverageHourlyPurchasePrice * ONE_HOUR_VS_SEVEN_DAY_PRICE_DROP_MIN_MULTIPLIER)) {
         purchasePriceDropFiltered++;
+        recordF2pFilter(itemData, 'Purchase price drop (1h vs 7d)');
         return false;
     } else if (itemData.threeHourAverageHourlyPurchasePrice < (itemData.sevenDayAverageHourlyPurchasePrice * THREE_HOUR_PRICE_DROP_MIN_MULTIPLIER)) {
         purchasePriceDropFiltered++;
+        recordF2pFilter(itemData, 'Purchase price drop (3h vs 7d)');
         return false;
     }
     return true;
 };
 
 const calculateMaxProfitPerSlotHour = (itemData) => {
-    itemData.maxProfitPerSlotHour = Math.min(itemData.threeHourAverageHourlyVolume, itemData.limit) * itemData.profitMargin;
+    // Apply the lowball volume factor so lowballed items (which fill slower)
+    // are correctly filtered and ranked. Without this, lowballed items appear
+    // as profitable as their non-lowballed counterparts despite filling slower,
+    // inflating their flipScore and passing the profit-per-slot-hour filter
+    // when they shouldn't. Uses the same 4.0x factor as computeEtasForQuantity.
+    const lowballVolumeFactor = 1 - ((itemData.lowballPercent || 0) * 4.0 / 100);
+    const effectiveVolume = Math.min(itemData.threeHourAverageHourlyVolume, itemData.limit) * lowballVolumeFactor;
+    itemData.maxProfitPerSlotHour = effectiveVolume * itemData.profitMargin;
     if (itemData.maxProfitPerSlotHour < PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD) {
         profitPerSlotHourFiltered++;
+        recordF2pFilter(itemData, 'Profit/slot-hr < 20k');
         return false;
     }
     return true;
@@ -778,11 +943,11 @@ const computeQuantityForAllocation = (itemData, cashAllocation) => {
 const computeEtasForQuantity = (itemData, quantity) => {
     // Lowball reduces the effective buy volume: a buy offer below market
     // only captures the portion of trades that happen at or below the
-    // lowballed price. Conservative factor: 2.0x the lowball %.
-    // Increased from 1.5x to 2.0x — the 1.5x factor was too optimistic,
-    // producing ETAs that were too short and causing offers to sit at 0%
-    // progress well past their predicted ETA.
-    const lowballVolumeFactor = 1 - ((itemData.lowballPercent || 0) * 2.0 / 100);
+    // lowballed price. Factor: 4.0x the lowball % (e.g. 2% lowball → 8%
+    // volume reduction). Increased from 2.0x — lowball offers fill
+    // significantly slower than the 2.0x factor predicted, causing offers
+    // to sit at 0% progress well past their predicted ETA.
+    const lowballVolumeFactor = 1 - ((itemData.lowballPercent || 0) * 4.0 / 100);
     const effectivePurchaseVolume = Math.min(
         itemData.twoHourAverageHourlyPurchaseVolume * (1 - TWO_HOUR_VOLUME_BUFFER_PERCENTAGE / 100),
         itemData.oneHourPurchaseVolume
@@ -858,6 +1023,7 @@ const calculateQuantityToPurchase = (itemData) => {
 
     if (itemData.quantityToPurchase < 1) {
         quantityToPurchaseFiltered++;
+        recordF2pFilter(itemData, 'Quantity < 1');
         return false;
     }
     return true;
@@ -867,38 +1033,105 @@ const calculateEtas = (itemData) => {
     const etas = computeEtasForQuantity(itemData, itemData.quantityToPurchase);
     if (!etas) {
         etaVolumeLowFiltered++;
+        recordF2pFilter(itemData, 'ETA volume too low');
         return false;
     }
 
     itemData.purchaseEtaMinutes = etas.purchaseEtaMinutes;
     itemData.saleEtaMinutes = etas.saleEtaMinutes;
     itemData.turnoverEtaMinutes = etas.turnoverEtaMinutes;
-    // The MAX_TURNOVER_HOURS filter was removed — the turnover ETA at the
-    // 50m allocation is not meaningful for a player with fewer coins. The
-    // plugin computes a runtime ETA based on the player's actual available
-    // coins and filters there instead. The 50m-allocation ETA is still
-    // written to the JSON for diagnostic reference.
+    // Secondary sanity check: reject items with absurdly long turnover ETAs
+    // at the 50m allocation. The primary quality gate is the
+    // actualProfitPerSlotHour filter in calculateProfitability(), which is
+    // quantity-independent and catches items like Games necklace(8) at
+    // 2,749gp/hr. This turnover cap is a backstop for edge cases where the
+    // profit/hr calculation might not catch a pathologically slow item.
+    // At 6h (360 min), this doesn't filter any legitimate items — the
+    // maximum turnover for an item passing the 20k profit/hr filter is
+    // ~4h (quantity capped at 1h volume, 50% market share assumption).
+    if (etas.turnoverEtaMinutes > MAX_TURNOVER_HOURS * 60) {
+        etaTurnoverFiltered++;
+        recordF2pFilter(itemData, 'Turnover ETA > 6h');
+        return false;
+    }
     return true;
 };
 
 const PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD = 20000 // Minimum profit per hour an item could make before being filtered
 const ROI_MINIMUM_PERCENTAGE_THRESHOLD = 0.5; // Minimum R.O.I % — lowered from 1% so high-volume thin-margin items (e.g. Steel cannonball) that pass the profit-per-slot-hour gate aren't rejected by a proxy metric
+// Tax-aware margin filter: for high-value items (> TAX_AWARE_PRICE_THRESHOLD),
+// two independent conditions must pass:
+//   1. Hard floor: margin >= tax (margin/tax >= 1.0). Blocks guaranteed-loss
+//      items like Contract of Glyphic Attenuation (270k buy, 5.2k margin, 5.4k
+//      tax, M/T 0.96x).
+//   2. Price-movement guard: margin as a % of purchase price must exceed a
+//      threshold scaled by expected sell time. This directly measures how much
+//      the market can drift before the margin is wiped — unlike the old M/T
+//      ratio which conflated tax coverage with price-movement buffer and
+//      unfairly penalised high-priced items (a 20m item with 500k margin has
+//      M/T 1.23x but M/P 2.5%, a healthy buffer). The ETA tiers are:
+//        sell ETA < 30 min  → 0.5% (fast sale, minimal market exposure)
+//        sell ETA 30-90 min → 1.0% (moderate exposure)
+//        sell ETA > 90 min  → 1.5% (long exposure, more drift risk)
+// Low-value items are exempt because their 1gp minimum price movement makes
+// thin margins viable at high volume (e.g. Revenant ether at 1gp margin, 3gp
+// tax, 143k gp/hr).
+const TAX_AWARE_PRICE_THRESHOLD = 10000; // Only apply tax-aware filter to items above this price
+const TAX_AWARE_MARGIN_TO_TAX_FLOOR = 1.0; // Hard floor: margin must cover tax (M/T >= 1.0)
+const TAX_AWARE_MARGIN_PCT_SHORT_ETA = 0.5; // Min margin % for sell ETA < 30 min
+const TAX_AWARE_MARGIN_PCT_MEDIUM_ETA = 1.0; // Min margin % for sell ETA 30-90 min
+const TAX_AWARE_MARGIN_PCT_LONG_ETA = 1.5; // Min margin % for sell ETA > 90 min
 const calculateProfitability = (itemData) => {
     if (!itemData.turnoverEtaMinutes || itemData.turnoverEtaMinutes <= 0) {
         actualProfitPerSlotHourFiltered++;
+        recordF2pFilter(itemData, 'No turnover ETA');
         return false;
     }
     itemData.actualProfitPerSlotHour = (itemData.quantityToPurchase * itemData.profitMargin) * (60 / itemData.turnoverEtaMinutes);
-    // The actualProfitPerSlotHour < 20000 filter was removed — this value
-    // is computed at the 50m allocation and doesn't reflect what a player
-    // with fewer coins would achieve. The intrinsic quality gate
-    // (maxProfitPerSlotHour >= 20000, calculated earlier) is the real
-    // filter. The plugin recomputes actualProfitPerSlotHour at runtime
-    // based on the player's actual coin count and filters there.
+    // Filter: actualProfitPerSlotHour must meet the minimum threshold.
+    // This value is quantity-independent — the formula simplifies to
+    // margin / (1/buyVol + 1/sellVol), so the quantity (and thus the cash
+    // stack) cancels out. An item at 2,749gp/hr at 50m is also 2,749gp/hr
+    // at 500k. The runtime plugin's RUNTIME_PROFIT_PER_SLOT_HOUR_MINIMUM
+    // (20,000gp/hr) would reject this item at every cash stack, so it
+    // should never be in merchableItems.json. Filtering here at the same
+    // threshold ensures the list only contains items the plugin would
+    // actually buy under some cash-stack scenario.
+    if (itemData.actualProfitPerSlotHour < PROFIT_PER_SLOT_HOUR_MINIMUM_THRESHOLD) {
+        actualProfitPerSlotHourFiltered++;
+        recordF2pFilter(itemData, 'Actual profit/hr < 20k');
+        return false;
+    }
     itemData.returnOnInvestmentPercentage = (itemData.profitMargin / itemData.purchasePrice) * 100;
     if (itemData.returnOnInvestmentPercentage < ROI_MINIMUM_PERCENTAGE_THRESHOLD) {
         returnOnInvestmentFiltered++;
+        recordF2pFilter(itemData, 'ROI < 0.5%');
         return false;
+    }
+    // Tax-aware margin filter: high-value items must pass two independent
+    // conditions — (1) margin covers tax (hard floor), and (2) margin as a
+    // percentage of purchase price meets an ETA-scaled threshold (price-
+    // movement guard). See the constant definitions above for full rationale.
+    if (itemData.purchasePrice > TAX_AWARE_PRICE_THRESHOLD && itemData.saleTaxAmount > 0) {
+        // Hard floor: margin must cover tax
+        if (itemData.profitMargin < itemData.saleTaxAmount) {
+            taxAwareMarginFiltered++;
+            recordF2pFilter(itemData, 'Margin < GE tax');
+            return false;
+        }
+        // Price-movement guard: margin % scaled by sell ETA
+        const marginPct = (itemData.profitMargin / itemData.purchasePrice) * 100;
+        const sellEtaMin = itemData.saleEtaMinutes || 60;
+        const minMarginPct = sellEtaMin < 30
+            ? TAX_AWARE_MARGIN_PCT_SHORT_ETA
+            : sellEtaMin < 90
+                ? TAX_AWARE_MARGIN_PCT_MEDIUM_ETA
+                : TAX_AWARE_MARGIN_PCT_LONG_ETA;
+        if (marginPct < minMarginPct) {
+            taxAwareMarginFiltered++;
+            recordF2pFilter(itemData, 'Margin % too low for ETA');
+            return false;
+        }
     }
     itemData.totalProfit = itemData.profitMargin * itemData.quantityToPurchase;
     return true;
@@ -920,6 +1153,7 @@ const determineLongTermCrash = async (itemData) => {
             await sleep(LONG_TERM_CRASH_FETCH_DELAY_MS);
             if (!response || !response.data || response.data.length === 0) {
                 longTermCrashFiltered++;
+                recordF2pFilter(itemData, 'Long-term crash (fetch failed)');
                 return false;
             }
             data = response.data;
@@ -928,6 +1162,7 @@ const determineLongTermCrash = async (itemData) => {
 
         if (!data || data.length === 0) {
             longTermCrashFiltered++;
+            recordF2pFilter(itemData, 'Long-term crash (no data)');
             return false;
         }
 
@@ -935,6 +1170,7 @@ const determineLongTermCrash = async (itemData) => {
 
         if (prices.length < 10) {
             longTermCrashFiltered++;
+            recordF2pFilter(itemData, 'Long-term crash (insufficient prices)');
             return false;
         }
 
@@ -954,10 +1190,12 @@ const determineLongTermCrash = async (itemData) => {
         const MAX_ALLOWED_DROP = 0.10; 
         if ((highBaseline - recentPrice) / highBaseline > MAX_ALLOWED_DROP) {
             longTermCrashFiltered++;
+            recordF2pFilter(itemData, 'Long-term crash (>10% drop)');
             return false;
         }
     } catch (err) {
         longTermCrashFiltered++;
+        recordF2pFilter(itemData, 'Long-term crash (error)');
         return false;
     }
     return true;
@@ -1009,6 +1247,25 @@ async function getMerchableItems() {
         // Add data from all API calls.
         if (!buildItemDataObject(itemData)) continue;
 
+        // F2P pre-filter capture: collect every F2P item with valid prices
+        // before any filters apply. Used only when --f2p flag is passed.
+        if (F2P_MODE && !itemData.members) {
+            const f2pBuy = itemData.fiveMinutePurchasePrice || itemData.purchasePrice;
+            const f2pSell = itemData.fiveMinuteSalePrice || itemData.rawSalePrice;
+            if (f2pBuy && f2pSell) {
+                const f2pTax = f2pSell < GE_TAX_EXEMPTION_THRESHOLD ? 0 : Math.floor((f2pSell / 100) * GE_TAX_PERCENTAGE);
+                f2pPreFilterItems.push({
+                    itemName: itemData.itemName,
+                    itemId: itemData.itemId,
+                    buyPrice: f2pBuy,
+                    sellPrice: f2pSell,
+                    margin: f2pSell - f2pTax - f2pBuy,
+                    limit: itemData.limit,
+                    oneHourVolume: (itemData.oneHourPurchaseVolume || 0) + (itemData.oneHourSaleVolume || 0),
+                });
+            }
+        }
+
         // Exclude name strings.
         if (!excludeNameStrings(itemData)) continue;
 
@@ -1024,18 +1281,27 @@ async function getMerchableItems() {
         // Calculate price data if it exists.
         if (itemData.rawSalePrice && itemData.purchasePrice) {
 
-            // Apply volume-scaled lowball to the buy price (first pass).
-            // Uses 1h purchase volume as a proxy since 3h data isn't
-            // available yet. This lets thin-margin high-volume items
-            // survive the first-pass profit filter and reach the second
-            // pass where the accurate 3h volume is used.
-            applyLowball(itemData);
-
-            // Calculate sale price.
+            // Calculate sale price at market buy price (no lowball yet).
             calculateSalePrice(itemData);
 
-            // Calculate profitability.
-            if (!calculateProfitMargin(itemData)) continue;
+            // Try profit margin at market price first.
+            if (calculateProfitMargin(itemData)) {
+                // Passed at market price — apply competitive buffer to
+                // improve fill rates (5% of margin, floored).
+                applyCompetitiveBuffer(itemData);
+                // Recalculate profit margin with the buffered buy price.
+                calculateProfitMargin(itemData);
+            } else {
+                // Failed at market price — try lowball as a fallback to
+                // create margin. Uses 1h purchase volume as a proxy since
+                // 3h data isn't available yet. Only high-volume items with
+                // thick enough spreads will get a lowball; the rest are
+                // filtered out here.
+                applyLowball(itemData);
+                if (!calculateProfitMargin(itemData)) continue;
+                // No competitive buffer on lowball items — they already
+                // buy below market by design.
+            }
         }
 
         // Push to merchable items results.
@@ -1057,19 +1323,31 @@ async function getMerchableItems() {
         // Validate sale price.
         if (!validateSalePrice(itemData)) continue;
 
-        // Clamp prices 3 hour averages.
+        // Clamp prices to 2h averages.
         clampPrices(itemData);
 
-        // Apply volume-scaled lowball to the buy price (after clamping,
-        // before tax/margin calculation so margins reflect the lowballed
-        // buy price).
-        applyLowball(itemData);
+        // Reset purchase price to the pre-lowball market price so we can
+        // try at market price first. clampPrices already clamped
+        // lowballBasePrice to the 2h average, so this is the clamped
+        // market price.
+        itemData.purchasePrice = itemData.lowballBasePrice ?? itemData.purchasePrice;
 
-        // Calculate tax and sale buffer amount.
+        // Calculate tax and sale buffer amount at market buy price.
         calculateSalePrice(itemData);
 
-        // Calculate profitability.
-        if (!calculateProfitMargin(itemData)) continue;
+        // Try profit margin at market price first.
+        if (calculateProfitMargin(itemData)) {
+            // Passed at market price — apply competitive buffer to
+            // improve fill rates (5% of margin, floored).
+            applyCompetitiveBuffer(itemData);
+            // Recalculate profit margin with the buffered buy price.
+            calculateProfitMargin(itemData);
+        } else {
+            // Failed at market price — try lowball as a fallback to
+            // create margin. Uses accurate 3h volume now available.
+            applyLowball(itemData);
+            if (!calculateProfitMargin(itemData)) continue;
+        }
 
         // Determine irregular volumes.
         if (!determineIrregularVolumes(itemData)) continue;
@@ -1079,6 +1357,9 @@ async function getMerchableItems() {
 
         // Determine price spike.
         if (!determineSalePriceSpike(itemData)) continue;
+
+        // Determine purchase price spike (sustained uptrend on buy side).
+        if (!determinePurchasePriceSpike(itemData)) continue;
 
         // Determine price drop.
         if (!determinePurchasePriceDrop(itemData)) continue;
@@ -1142,6 +1423,133 @@ async function getMerchableItems() {
     // survived to merchableItems, since the cache work is valuable either way.
     await fs.writeFile('item_long_term_crash_data.json', JSON.stringify(itemLongTermCrashData, null, 2), 'utf-8');
 
+    // --- F2P curated flip processing ----------------------------------------
+    // Uses the same API data fetched above. For each curated F2P item:
+    //   sellPrice = 1h avgHigh
+    //   buyPrice  = sellPrice - tax - 1gp (fixed margin), capped at (5m low - 1)
+    // The 5m cap prevents buying at or above the current market when the 1h
+    // avgHigh lags a downward market move (would cause an instant fill at
+    // market price instead of a lowball). Bypasses the normal filter pipeline
+    // entirely. Output goes to a separate f2pMerchableItems.json so the
+    // runtime can switch pools.
+    f2pMerchableItems = [];
+    for (const itemId of F2P_CURATED_ITEM_IDS) {
+        const oneHourEntry = oneHourPriceData[itemId];
+        if (!oneHourEntry || !oneHourEntry.avgHighPrice) continue;
+        const mapping = mappingItemData.get(itemId);
+        if (!mapping || !mapping.name) continue;
+
+        const sellPrice = oneHourEntry.avgHighPrice;
+        const oneHourPurchaseVolume = oneHourEntry.lowPriceVolume || 0;
+        const oneHourSaleVolume = oneHourEntry.highPriceVolume || 0;
+
+        // 5m sanity check — skip if 5m avgHigh deviates >10% from 1h (spiking).
+        const fiveMinuteEntry = fiveMinuteDataMap.get(itemId);
+        const fiveMinuteSalePrice = fiveMinuteEntry?.avgHighPrice;
+        if (fiveMinuteSalePrice && Math.abs(fiveMinuteSalePrice - sellPrice) / sellPrice > F2P_SPIKE_DEVIATION_THRESHOLD) {
+            continue;
+        }
+
+        const tax = sellPrice < GE_TAX_EXEMPTION_THRESHOLD ? 0 : Math.floor((sellPrice / 100) * GE_TAX_PERCENTAGE);
+        let purchasePrice = sellPrice - tax - F2P_FIXED_MARGIN;
+
+        // 5m market check — don't buy at or above the current market low.
+        // The 1h avgHigh can lag the current market: when the market has
+        // moved down since the 1h average was computed, the formula above
+        // produces a buy price at or above the current 5m low, causing an
+        // instant fill at market price (not a lowball). Cap the buy price
+        // at (5m low - 1) so the bot always lowballs below the current
+        // market. If the capped price leaves no margin, skip the item.
+        const fiveMinuteMarketLow = fiveMinuteEntry?.avgLowPrice;
+        if (fiveMinuteMarketLow && purchasePrice >= fiveMinuteMarketLow) {
+            purchasePrice = fiveMinuteMarketLow - 1;
+        }
+        if (purchasePrice < 1) continue;
+
+        const oneHourPurchasePrice = oneHourEntry.avgLowPrice;
+        const fiveMinutePurchasePrice = fiveMinuteEntry?.avgLowPrice;
+        const fiveMinutePurchaseVolume = fiveMinuteEntry?.lowPriceVolume || 0;
+        const fiveMinuteSaleVolume = fiveMinuteEntry?.highPriceVolume || 0;
+        const twentyFourHourEntry = twentyFourHourDataMap.get(itemId);
+        const twentyFourHourAvgLowPrice = twentyFourHourEntry?.avgLowPrice;
+
+        const limit = mapping.limit || 0;
+        const quantityToPurchase = limit;
+        const totalPurchasePrice = purchasePrice * quantityToPurchase;
+        const profitMargin = (sellPrice - tax) - purchasePrice;
+        const totalProfit = profitMargin * quantityToPurchase;
+
+        // Build the full item object with all fields the runtime expects.
+        // Volume fields use 1h data as a proxy for 2h/3h (no time series fetch).
+        const item = {
+            itemId,
+            itemName: mapping.name,
+            members: false,
+            limit,
+            purchasePrice,
+            rawSalePrice: sellPrice,
+            salePrice: sellPrice,
+            saleTaxAmount: tax,
+            saleBufferAmount: 0,
+            salePriceExcludingTax: sellPrice - tax,
+            salePriceExcludingTaxAndBuffer: sellPrice - tax,
+            profitMargin,
+            competitiveBuffer: 0,
+            lowballPercent: 0,
+            lowballAmount: 0,
+            lowballBasePrice: purchasePrice,
+            oneHourPurchasePrice,
+            oneHourSalePrice: sellPrice,
+            oneHourPurchaseVolume,
+            oneHourSaleVolume,
+            oneHourAverageVolume: (oneHourPurchaseVolume + oneHourSaleVolume) / 2,
+            fiveMinutePurchasePrice,
+            fiveMinuteSalePrice,
+            fiveMinutePurchaseVolume,
+            fiveMinuteSaleVolume,
+            twentyFourHourAvgLowPrice,
+            // No time series — use 1h as proxy for 2h/3h.
+            twoHourAverageHourlyPurchaseVolume: oneHourPurchaseVolume,
+            twoHourAverageHourlySaleVolume: oneHourSaleVolume,
+            twoHourAverageHourlyVolume: (oneHourPurchaseVolume + oneHourSaleVolume) / 2,
+            threeHourAverageHourlyPurchaseVolume: oneHourPurchaseVolume,
+            threeHourAverageHourlySaleVolume: oneHourSaleVolume,
+            threeHourAverageHourlyVolume: (oneHourPurchaseVolume + oneHourSaleVolume) / 2,
+            quantityToPurchase,
+            cashAllocation: totalPurchasePrice,
+            totalPurchasePrice,
+            totalProfit,
+            dataFetchedAt,
+            dataFetchedAtIso,
+        };
+
+        // Calculate ETAs using the same formula as the main pipeline.
+        const etas = computeEtasForQuantity(item, quantityToPurchase);
+        if (!etas) continue;
+        item.purchaseEtaMinutes = etas.purchaseEtaMinutes;
+        item.saleEtaMinutes = etas.saleEtaMinutes;
+        item.turnoverEtaMinutes = etas.turnoverEtaMinutes;
+
+        // Profit metrics.
+        item.maxProfitPerSlotHour = Math.min(item.threeHourAverageHourlyVolume, limit) * profitMargin;
+        item.actualProfitPerSlotHour = (quantityToPurchase * profitMargin) * (60 / etas.turnoverEtaMinutes);
+        item.returnOnInvestmentPercentage = (profitMargin / purchasePrice) * 100;
+        item.flipScore = item.maxProfitPerSlotHour * Math.log1p(item.returnOnInvestmentPercentage);
+
+        f2pMerchableItems.push(item);
+    }
+
+    // Sort by flipScore descending (highest volume × ROI first).
+    f2pMerchableItems.sort((a, b) => b.flipScore - a.flipScore);
+
+    // Write f2pMerchableItems.json. Preserve existing file if 0 items (API down).
+    if (f2pMerchableItems.length > 0) {
+        await fs.writeFile('f2pMerchableItems.json', JSON.stringify(f2pMerchableItems, null, 2), 'utf-8');
+        console.log(`F2P merchable items: ${f2pMerchableItems.length} written to f2pMerchableItems.json`);
+    } else {
+        console.log(`${'\x1b[33m'}WARNING: 0 F2P merchable items — preserving existing f2pMerchableItems.json${'\x1b[0m'}`);
+    }
+
     // If no items were found, preserve the existing file rather than wiping
     // it. This handles cases where the wiki API is down or the game is
     // updating — the plugin can still use the previous run's data (subject
@@ -1170,6 +1578,8 @@ async function getMerchableItems() {
             name: mapping.name,
             buy: oneHourEntry.avgLowPrice,
             sell: oneHourEntry.avgHighPrice,
+            buyVolume: oneHourEntry.lowPriceVolume || 0,
+            sellVolume: oneHourEntry.highPriceVolume || 0,
             fetchedAt: dataFetchedAt,
         };
     }
@@ -1189,6 +1599,7 @@ async function getMerchableItems() {
         console.log('threeHourDataFiltered', threeHourDataFiltered);
         console.log('trendSlopeFiltered', trendSlopeFiltered);
         console.log('salePriceSpikeFiltered', salePriceSpikeFiltered);
+        console.log('purchasePriceSpikeFiltered', purchasePriceSpikeFiltered);
         console.log('purchasePriceDropFiltered', purchasePriceDropFiltered);
         console.log('purchasePriceNotAvailableFiltered', purchasePriceNotAvailableFiltered);
         console.log('validatedPurchasePriceExceedsCashStack', validatedPurchasePriceExceedsCashStack);
@@ -1200,6 +1611,7 @@ async function getMerchableItems() {
         console.log('etaTurnoverFiltered', etaTurnoverFiltered);
         console.log('actualProfitPerSlotHourFiltered', actualProfitPerSlotHourFiltered);
         console.log('returnOnInvestmentFiltered', returnOnInvestmentFiltered);
+        console.log('taxAwareMarginFiltered', taxAwareMarginFiltered);
         console.log('longTermCrashFiltered', longTermCrashFiltered);
     }
     console.log('Ending Result Count:', merchableItems.length);
@@ -1207,6 +1619,7 @@ async function getMerchableItems() {
     const bold = `\x1b[1m`;
     const normal = `\x1b[0m`;
     const green = `\x1b[32m`;
+    const red = `\x1b[31m`;
     const yellow = `\x1b[33m`;
     const magenta = `\x1b[35m`;
     const cyan = `\x1b[36m`;
@@ -1215,6 +1628,10 @@ async function getMerchableItems() {
     console.log('-------------------------------------------------------------------------------------------------------------------------------------------------------------');
     for (const itemData of merchableItems.slice(0, MAX_RESULTS)) {
         // console.log(JSON.stringify(itemData))
+        const lowballPct = itemData.lowballPercent || 0;
+        const lowballStr = lowballPct > 0
+            ? `${yellow}[${lowballPct.toFixed(1)}%]${normal}`
+            : `${green}[no]${normal}`;
         console.log(
             `${white}[${itemData.itemName.toUpperCase()}]${normal} | ` +
             // `${white}[${itemData.itemName.toUpperCase()}]${normal} ${yellow}[${itemData.itemId}]${normal} | ${bold}LIMIT:${normal} ${green}[${itemData.limit}]${normal} | ` +
@@ -1226,11 +1643,60 @@ async function getMerchableItems() {
             `${bold}ROI:${normal} ${green}[${Number(itemData.returnOnInvestmentPercentage.toFixed(2))}%]${normal} | ` +
             `${bold}BUY ETA:${normal} ${green}[${formatEta(itemData.purchaseEtaMinutes)}]${normal} | ` +
             `${bold}SELL ETA:${normal} ${green}[${formatEta(itemData.saleEtaMinutes)}]${normal} | ` +
-            `${bold}TURNOVER ETA:${normal} ${green}[${formatEta(itemData.turnoverEtaMinutes)}]${normal}`
+            `${bold}TURNOVER ETA:${normal} ${green}[${formatEta(itemData.turnoverEtaMinutes)}]${normal} | ` +
+            `${bold}LOWBALL:${normal} ${lowballStr}`
         );
     }
     console.log('-------------------------------------------------------------------------------------------------------------------------------------------------------------');
     console.log(`Last run: ${new Date().toLocaleString()}`);
+
+    // F2P pre-filter table — only printed when --f2p flag is passed.
+    // Shows every F2P item with valid 5m/1h prices, sorted by after-tax
+    // margin descending. Green = positive margin, red = zero/negative.
+    if (F2P_MODE) {
+        f2pPreFilterItems.sort((a, b) => b.margin - a.margin);
+        const profitable = f2pPreFilterItems.filter(i => i.margin > 0).length;
+        const unprofitable = f2pPreFilterItems.length - profitable;
+
+        console.log('\n' + '='.repeat(120));
+        console.log(`${bold}F2P PRE-FILTER MARGIN TABLE${normal} — ${f2pPreFilterItems.length} items (${green}${profitable} profitable${normal}, ${red}${unprofitable} zero/negative${normal})`);
+        console.log('='.repeat(120));
+        console.log(
+            `${bold}Item Name`.padEnd(40) + ' | ' +
+            'Buy Price'.padStart(10) + ' | ' +
+            'Sell Price'.padStart(10) + ' | ' +
+            'Margin'.padStart(10) + ' | ' +
+            'Limit'.padStart(8) + `${normal}`
+        );
+        console.log('-'.repeat(120));
+        for (const item of f2pPreFilterItems) {
+            const marginColor = item.margin > 0 ? green : red;
+            const marginStr = (item.margin >= 0 ? '+' : '') + item.margin + 'gp';
+            console.log(
+                `${white}${item.itemName}`.padEnd(40) + ' | ' +
+                `${cyan}${item.buyPrice.toLocaleString()}gp${normal}`.padStart(14) + ' | ' +
+                `${cyan}${item.sellPrice.toLocaleString()}gp${normal}`.padStart(14) + ' | ' +
+                `${marginColor}${marginStr}${normal}`.padStart(14) + ' | ' +
+                `${yellow}${item.limit}${normal}`.padStart(8)
+            );
+        }
+        console.log('='.repeat(120));
+        console.log(`F2P items: ${f2pPreFilterItems.length} total | ${profitable} profitable | ${unprofitable} zero/negative\n`);
+
+        // Write CSV file for easy external viewing.
+        // Column G "Filtered By" shows which pipeline filter removed each item,
+        // or "Passed all filters" if the item survived the entire pipeline.
+        const merchableItemIds = new Set(merchableItems.map(i => i.itemId));
+        const csvLines = ['Item Name,Buy Price,Sell Price,Margin,Limit,1h Volume,Item ID,Filtered By'];
+        for (const item of f2pPreFilterItems) {
+            const name = item.itemName.includes(',') ? `"${item.itemName}"` : item.itemName;
+            const filteredBy = f2pFilterReason.get(item.itemId)
+                ?? (merchableItemIds.has(item.itemId) ? 'Passed all filters' : 'Unknown (no time series)');
+            csvLines.push(`${name},${item.buyPrice},${item.sellPrice},${item.margin},${item.limit},${item.oneHourVolume},${item.itemId},${filteredBy}`);
+        }
+        await fs.writeFile('f2p_margins.csv', csvLines.join('\n'), 'utf-8');
+        console.log(`F2P CSV written to f2p_margins.csv (${f2pPreFilterItems.length} rows)`);
+    }
 }
 
 const clampPrice = (price, average, percent = 0.05, absolute = 50000) => {

@@ -1,7 +1,7 @@
 const ITEM_ID = 2;
 const GE_TAX_PERCENTAGE = 2;
 const GE_TAX_EXEMPTION_THRESHOLD = 50; // Items with a sale price below 50gp are exempt from GE sales tax
-const SALE_BUFFER_PERCENTAGE = 0.01;
+const SALE_BUFFER_RATIO = 0.05; // 5% of post-tax margin
 
 // Price data variables
 let mappingItemData = {};
@@ -159,7 +159,9 @@ const determineCurrentSalePrice = () => {
 
     itemData.calculatedData.rawCurrentSalePrice = liveHighPrice;
     itemData.calculatedData.saleTaxAmount = liveHighPrice < GE_TAX_EXEMPTION_THRESHOLD ? 0 : Math.floor((liveHighPrice / 100) * GE_TAX_PERCENTAGE);
-    itemData.calculatedData.saleBufferAmount = Math.floor((liveHighPrice / 100) * SALE_BUFFER_PERCENTAGE);
+    const liveLowPrice = itemData.fiveMinuteData.fiveMinutePurchasePrice || itemData.oneHourData.oneHourPurchasePrice || 0;
+    const postTaxMargin = Math.max(0, liveHighPrice - itemData.calculatedData.saleTaxAmount - liveLowPrice);
+    itemData.calculatedData.saleBufferAmount = Math.floor(postTaxMargin * SALE_BUFFER_RATIO);
     
     // Recommended price to put into the GE slot to sell instantly/safely without unnecessary lag
     itemData.calculatedData.recommendedListingPrice = Math.floor(liveHighPrice - itemData.calculatedData.saleBufferAmount);
@@ -180,6 +182,6 @@ console.log(itemData);
 
 console.log('-------------------------------------------------------------------------------------------------------------------------------------------------------------');
 console.log(`${magenta}[REENTRY CHECK: ${itemData.itemName.toUpperCase()}]${normal}`);
-console.log(`${bold}RECOMMENDED GE LISTING PRICE:${normal} ${green}[${itemData.calculatedData.recommendedListingPrice?.toLocaleString()}gp]${normal} (Accounts for 1% safety buffer)`);
+console.log(`${bold}RECOMMENDED GE LISTING PRICE:${normal} ${green}[${itemData.calculatedData.recommendedListingPrice?.toLocaleString()}gp]${normal} (Accounts for 5% post-tax margin undercut)`);
 console.log(`${bold}RAW LIVE MARKET HIGH:${normal} [${itemData.calculatedData.rawCurrentSalePrice?.toLocaleString()}gp] | ${bold}ESTIMATED GE TAX:${normal} [${itemData.calculatedData.saleTaxAmount?.toLocaleString()}gp]`);
 console.log('-------------------------------------------------------------------------------------------------------------------------------------------------------------');

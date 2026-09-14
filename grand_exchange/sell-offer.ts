@@ -22,22 +22,31 @@
 //   2:  Wait for offer config screen to open
 //   3:  Find the item in inventory and click it
 //   4:  Wait for item to load in the config screen and validate name
-//   5:  Check current price — if it matches target, skip to validate (step 11)
-//   6:  Click "Enter price" button
-//   7:  Wait for price prompt
-//   8:  Type price
-//   9:  Wait for typing to complete
-//   10: Press Enter to submit price
-//   11: Validate offer (item name, price)
-//   12: Click confirm
-//   13: Wait for config screen to close and verify slot is occupied
+//   5:  Check quantity — if item spans multiple inv slots, proceed to "All";
+//       otherwise skip to price check (step 8)
+//   6:  Click the "All" quantity button (only when item spans multiple inv slots)
+//   7:  Wait for quantity to update to the full inventory total
+//   8:  Check current price — if it matches target, skip to validate (step 14)
+//   9:  Click "Enter price" button
+//   10: Wait for price prompt
+//   11: Type price
+//   12: Wait for typing to complete
+//   13: Press Enter to submit price
+//   14: Validate offer (item name, price, quantity)
+//   15: Click confirm
+//   16: Wait for config screen to close and verify slot is occupied
 //
-// Note: Quantity is NOT set — the GE defaults to the full inventory stack
-// when selling, so we skip the quantity entry steps entirely.
+// Note: Quantity is only set explicitly when the same item spans multiple
+// inventory slots (e.g. a noted stack + unnoted singles). In that case,
+// clicking a single inventory slot only selects that slot's quantity, so
+// the "All" button must be clicked to combine all matching slots into one
+// offer. When the item is in a single inventory slot, the GE already defaults
+// to the full stack quantity, so the quantity steps are skipped.
 // ============================================================================
 
 import {
     clickSellSlot,
+    clickQtyAll,
     typeString,
     pressEnter,
     clickPriceEnter,
@@ -50,6 +59,7 @@ import {
     isPricePromptShown,
     readOfferItemName,
     readOfferPrice,
+    readOfferQuantity,
     findEmptyOfferSlot,
     isSlotOccupied,
     offerSlotCount,
@@ -69,10 +79,11 @@ export interface SellOfferOptions {
     /** Price per item. */
     price: number;
     /**
-     * Optional humanised delay function. Called as delayFn(base, triggerChance, max?)
-     * after each dispatching step. Returns the tick count to wait.
+     * Optional humanised delay function. Called as
+     * delayFn(base, triggerChance, max?, suppressDistractions?) after each
+     * dispatching step. Returns the tick count to wait.
      */
-    delayFn?: (base: number, triggerChance: number, max?: number) => number;
+    delayFn?: (base: number, triggerChance: number, max?: number, suppressDistractions?: boolean) => number;
     /**
      * Optional debug log callback.
      */
@@ -99,13 +110,19 @@ export class SellOfferFlow {
     get itemName(): string { return this._itemName; }
     readonly quantity: number;
     readonly price: number;
-    private readonly delayFn: (base: number, triggerChance: number, max?: number) => number;
+    private readonly delayFn: (base: number, triggerChance: number, max?: number, suppressDistractions?: boolean) => number;
     private readonly debugLog: (msg: string) => void;
 
     private step = 0;
     private waitTicks = 0;
     private typingStarted = false;
     private reattempts = 0;
+    // True when the item spans multiple inventory slots (e.g. noted stack +
+    // unnoted singles). In that case clicking one inv slot only selects that
+    // slot's quantity, so we must click the "All" button to combine all
+    // matching slots into one offer. When false (single inv slot), the GE
+    // already defaults to the full stack and no quantity step is needed.
+    private needsQtyAll = false;
 
     constructor(opts: SellOfferOptions) {
         this._itemName = opts.itemName;
@@ -128,15 +145,18 @@ export class SellOfferFlow {
             case 2:  return this.waitForConfigScreen();
             case 3:  return this.clickInventoryItem();
             case 4:  return this.waitForItemLoad();
-            case 5:  return this.checkPriceStep();
-            case 6:  return this.clickPriceEnterStep();
-            case 7:  return this.waitForPricePrompt();
-            case 8:  return this.startTypingPrice();
-            case 9:  return this.waitForPriceTyping();
-            case 10: return this.submitPrice();
-            case 11: return this.validateOffer();
-            case 12: return this.clickConfirmStep();
-            case 13: return this.waitForConfirm();
+            case 5:  return this.checkQtyStep();
+            case 6:  return this.clickQtyAllStep();
+            case 7:  return this.waitForQtyUpdate();
+            case 8:  return this.checkPriceStep();
+            case 9:  return this.clickPriceEnterStep();
+            case 10: return this.waitForPricePrompt();
+            case 11: return this.startTypingPrice();
+            case 12: return this.waitForPriceTyping();
+            case 13: return this.submitPrice();
+            case 14: return this.validateOffer();
+            case 15: return this.clickConfirmStep();
+            case 16: return this.waitForConfirm();
             default:
                 this.status = 'done';
                 return false;
@@ -161,8 +181,9 @@ export class SellOfferFlow {
     }
 
     private computeDelay(base: number = 1, triggerChance: number = 100, max?: number): void {
-        this.lastDelay = this.delayFn(base, triggerChance, max);
-        this.log(`Step ${this.step}: Delaying ${this.lastDelay} tick${this.lastDelay === 1 ? '' : 's'}`);
+        // suppressDistractions=true — these are mid-flow steps in a connected
+        // sequence of clicks where a 6-60s distraction pause is non-human.
+        this.lastDelay = this.delayFn(base, triggerChance, max, true);
     }
 
     private log(msg: string): void {
@@ -231,8 +252,12 @@ export class SellOfferFlow {
             this.fail(`Not enough "${this._itemName}" in inventory: have ${totalQty}, need ${this.quantity}`);
             return false;
         }
+        // If the item spans multiple inventory slots, clicking one slot only
+        // selects that slot's quantity. We'll need to click the "All" button
+        // to combine all matching slots into one offer.
+        this.needsQtyAll = matches.length > 1;
         const item = matches[0];
-        this.log(`Found ${totalQty}x ${this._itemName} in inventory (slot ${item.slot})`);
+        this.log(`Found ${totalQty}x ${this._itemName} in inventory (slot ${item.slot})${this.needsQtyAll ? ' — multi-slot, will click All' : ''}`);
         this.computeDelay(1, 30, 4);
         this.advance();
         return true;
@@ -244,7 +269,7 @@ export class SellOfferFlow {
         if (!clickSellSlot(this.slotIndex)) {
             return this.waitTick();
         }
-        this.computeDelay(2, 30, 4);
+        this.computeDelay(1, 25, 4);
         this.advance();
         return true;
     }
@@ -289,7 +314,7 @@ export class SellOfferFlow {
         if (!ok) {
             return this.waitTick();
         }
-        this.computeDelay(2, 30, 4);
+        this.computeDelay(1, 25, 4);
         this.advance();
         return true;
     }
@@ -321,15 +346,81 @@ export class SellOfferFlow {
         return true;
     }
 
-    // Step 5: Check the current price. The GE defaults to the market price
+    // Step 5: Check whether we need to set the quantity via the "All" button.
+    // When the item spans multiple inventory slots (e.g. a noted stack +
+    // unnoted singles), clicking one inventory slot only selects that slot's
+    // quantity. The "All" button must be clicked to combine all matching
+    // slots into one offer. When the item is in a single inventory slot, the
+    // GE already defaults to the full stack, so we skip to the price check.
+    private checkQtyStep(): boolean {
+        if (!this.needsQtyAll) {
+            this.log('Step 5: Single inventory slot — GE defaults to full qty, skipping "All"');
+            this.step = 8; // skip to price check
+            this.waitTicks = 0;
+            this.reattempts = 0;
+            this.computeDelay(1, 30, 4);
+            this.advance();
+            return true;
+        }
+        // Multi-slot: check if the GE already shows the full quantity (e.g.
+        // it auto-combined on click). If so, skip the "All" click.
+        const currentQty = readOfferQuantity();
+        if (currentQty !== null && currentQty === this.quantity) {
+            this.log(`Step 5: Qty already ${currentQty} (matches target) — skipping "All"`);
+            this.step = 8; // skip to price check
+            this.waitTicks = 0;
+            this.reattempts = 0;
+            this.computeDelay(1, 30, 4);
+            this.advance();
+            return true;
+        }
+        this.log(`Step 5: Multi-slot item — qty=${currentQty ?? 'unknown'} ≠ target ${this.quantity} — will click "All"`);
+        this.computeDelay(1, 30, 4);
+        this.advance();
+        return true;
+    }
+
+    // Step 6: Click the "All" quantity button to set the quantity to the
+    // full inventory stack. This combines all matching inventory slots
+    // (noted + unnoted) into one sell offer.
+    private clickQtyAllStep(): boolean {
+        this.log('Step 6: Clicking "All" quantity button');
+        if (!clickQtyAll()) {
+            return this.waitTick();
+        }
+        this.computeDelay(1, 25, 4);
+        this.advance();
+        return true;
+    }
+
+    // Step 7: Wait for the quantity to update to the full inventory total.
+    private waitForQtyUpdate(): boolean {
+        if (!isOfferConfigOpen()) {
+            return this.waitTick();
+        }
+        const currentQty = readOfferQuantity();
+        if (currentQty === null) {
+            return this.waitTick();
+        }
+        if (currentQty !== this.quantity) {
+            this.log(`Step 7: Qty ${currentQty} ≠ target ${this.quantity} after "All" click`);
+            return this.waitTick();
+        }
+        this.log(`Step 7: Qty confirmed at ${currentQty}`);
+        this.computeDelay(1, 30, 4);
+        this.advance();
+        return true;
+    }
+
+    // Step 8: Check the current price. The GE defaults to the market price
     // when an item is loaded into the sell config screen. If the defaulted
     // price already matches our target price, skip the price entry steps
-    // entirely and go straight to validation (step 11).
+    // entirely and go straight to validation (step 14).
     private checkPriceStep(): boolean {
         const currentPrice = readOfferPrice();
         if (currentPrice !== null && currentPrice === this.price) {
-            this.log(`Step 5: Current price ${currentPrice}gp matches target — skipping price entry`);
-            this.step = 11; // skip to validate
+            this.log(`Step 8: Current price ${currentPrice}gp matches target — skipping price entry`);
+            this.step = 14; // skip to validate
             this.waitTicks = 0;
             this.reattempts = 0;
             // Still set a delay before the next action (validation).
@@ -337,24 +428,24 @@ export class SellOfferFlow {
             this.advance();
             return true;
         }
-        this.log(`Step 5: Current price ${currentPrice ?? 'unknown'}gp ≠ target ${this.price}gp — will set price`);
+        this.log(`Step 8: Current price ${currentPrice ?? 'unknown'}gp ≠ target ${this.price}gp — will set price`);
         this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
 
-    // Step 6: Click the "Enter price" button.
+    // Step 9: Click the "Enter price" button.
     private clickPriceEnterStep(): boolean {
-        this.log('Step 6: Clicking "Enter price"');
+        this.log('Step 9: Clicking "Enter price"');
         if (!clickPriceEnter()) {
             return this.waitTick();
         }
-        this.computeDelay(2, 30, 4);
+        this.computeDelay(1, 25, 4);
         this.advance();
         return true;
     }
 
-    // Step 7: Wait for the price prompt to appear.
+    // Step 10: Wait for the price prompt to appear.
     private waitForPricePrompt(): boolean {
         if (!isPricePromptShown()) {
             return this.waitTick();
@@ -364,15 +455,15 @@ export class SellOfferFlow {
         return true;
     }
 
-    // Step 8: Start typing the price.
+    // Step 11: Start typing the price.
     private startTypingPrice(): boolean {
-        this.log(`Step 8: Typing price "${formatGeInput(this.price)}"`);
+        this.log(`Step 11: Typing price "${formatGeInput(this.price)}"`);
         if (!this.typingStarted) {
             if (!typeString(formatGeInput(this.price), 'price')) {
                 return this.waitTick();
             }
             this.typingStarted = true;
-            this.computeDelay(2, 30, 4);
+            this.computeDelay(1, 25, 4);
             return true;
         }
         this.computeDelay(1, 30, 4);
@@ -380,7 +471,7 @@ export class SellOfferFlow {
         return true;
     }
 
-    // Step 9: Wait for price typing to complete.
+    // Step 12: Wait for price typing to complete.
     private waitForPriceTyping(): boolean {
         if (isTyping()) {
             return this.waitTick();
@@ -390,9 +481,9 @@ export class SellOfferFlow {
         return true;
     }
 
-    // Step 10: Press Enter to submit the price.
+    // Step 13: Press Enter to submit the price.
     private submitPrice(): boolean {
-        this.log('Step 10: Pressing Enter to submit price');
+        this.log('Step 13: Pressing Enter to submit price');
         if (!pressEnter()) {
             return this.waitTick();
         }
@@ -401,9 +492,8 @@ export class SellOfferFlow {
         return true;
     }
 
-    // Step 11: Validate the offer before confirming.
-    // Only validates item name and price — quantity is not set (GE defaults
-    // to the full inventory stack when selling).
+    // Step 14: Validate the offer before confirming.
+    // Validates item name, price, and (when applicable) quantity.
     private validateOffer(): boolean {
         if (this.waitTicks < 1) {
             this.waitTicks++;
@@ -411,6 +501,7 @@ export class SellOfferFlow {
         }
         const loadedPrice = readOfferPrice();
         const loadedName = readOfferItemName();
+        const loadedQty = readOfferQuantity();
 
         const errors: string[] = [];
         if (loadedName && loadedName.toLowerCase() !== this._itemName.toLowerCase()) {
@@ -418,6 +509,9 @@ export class SellOfferFlow {
         }
         if (loadedPrice !== null && loadedPrice !== this.price) {
             errors.push(`price: expected ${this.price}, got ${loadedPrice}`);
+        }
+        if (this.needsQtyAll && loadedQty !== null && loadedQty !== this.quantity) {
+            errors.push(`qty: expected ${this.quantity}, got ${loadedQty}`);
         }
 
         if (errors.length > 0) {
@@ -428,30 +522,33 @@ export class SellOfferFlow {
             return false;
         }
 
-        this.log(`Offer validated: ${this._itemName} @ ${this.price}gp each`);
+        this.log(`Offer validated: ${this._itemName} @ ${this.price}gp each${this.needsQtyAll ? ` (qty ${loadedQty ?? this.quantity})` : ''}`);
         this.computeDelay(1, 30, 4);
         this.advance();
         return true;
     }
 
-    // Step 12: Click the confirm button.
+    // Step 15: Click the confirm button.
     private clickConfirmStep(): boolean {
-        this.log('Step 12: Clicking confirm');
+        this.log('Step 15: Clicking confirm');
         if (!clickConfirm()) {
             return this.waitTick();
         }
-        this.computeDelay(2, 30, 4);
+        this.computeDelay(1, 25, 4);
         this.advance();
         return true;
     }
 
-    // Step 13: Wait for the config screen to close and verify the slot.
+    // Step 16: Wait for the config screen to close and verify the slot.
     private waitForConfirm(): boolean {
         if (isOfferConfigOpen()) {
             return this.waitTick();
         }
         if (!isSlotOccupied(this.slotIndex)) {
-            if (this.waitTicks < 3) {
+            // 10 ticks (6s) grace — after a hot reload, the confirm click
+            // can take longer to register. A false failure here would lose
+            // the sell and leave the inventory item unlisted.
+            if (this.waitTicks < 10) {
                 this.waitTicks++;
                 return false;
             }

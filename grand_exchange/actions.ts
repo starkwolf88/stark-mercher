@@ -11,6 +11,7 @@ import {
     GE_COLLECT_TO_INVENTORY,
     GE_COLLECT_TO_BANK,
     GE_QTY_ENTER_SLOT,
+    GE_QTY_ALL_SLOT,
     GE_PRICE_ENTER_SLOT,
     GE_SLOT_CREATE_BUY,
     GE_SLOT_CREATE_SELL,
@@ -37,6 +38,13 @@ import {
 // found (the click will be dispatched) and false if the widget was not found.
 // The actual interact() result is delivered via the onAccepted/onRejected
 // callbacks.
+
+// Module-level debug log setter — wired up from auto-loop.ts so clickWidget
+// can emit per-click traces only when debug logging is enabled.
+let clickWidgetDebugLog: ((msg: string) => void) | null = null;
+export function setClickWidgetDebugLog(fn: ((msg: string) => void) | null): void {
+    clickWidgetDebugLog = fn;
+}
 export const clickWidget = (
     packedId: number,
     childSlot: number = -1,
@@ -66,7 +74,7 @@ export const clickWidget = (
             const ok = childSlot >= 0
                 ? live.interact(57, identifier, childSlot)
                 : live.interact(57, identifier);
-            titan.logf('[Stark Mercher] Click %s: %s -> %s (packedId=%d)', reason, callDesc, ok, packedId);
+            if (clickWidgetDebugLog) clickWidgetDebugLog(`Click ${reason}: ${callDesc} -> ${ok} (packedId=${packedId})`);
             return ok;
         },
         {
@@ -126,6 +134,15 @@ export const clickSellSlot = (slotIndex: number): boolean => {
 // Click the "Enter quantity" button on the offer configuration screen.
 export const clickQtyEnter = (): boolean =>
     clickWidget(GE_AMOUNT_WIDGET, GE_QTY_ENTER_SLOT, 1, { reason: 'enter quantity' });
+
+// clickQtyAll()
+// Click the "All" button on the offer configuration screen. This sets the
+// quantity to the full inventory stack. Needed when the same item spans
+// multiple inventory slots (e.g. noted stack + unnoted singles) — clicking
+// a single inventory slot only selects that slot's quantity, so "All" must
+// be clicked to combine all matching slots into one offer.
+export const clickQtyAll = (): boolean =>
+    clickWidget(GE_AMOUNT_WIDGET, GE_QTY_ALL_SLOT, 1, { reason: 'quantity all' });
 
 // clickPriceEnter()
 // Click the "Enter price" button on the offer configuration screen.

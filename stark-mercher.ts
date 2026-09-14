@@ -3,18 +3,29 @@ import { debug } from './general/debug.js';
 import { onEnable, terminate } from './general/lifecycle.js';
 import { shouldWait } from './general/timing.js';
 import { sanityCheckState } from './general/state.js';
-import { auditGeState } from './grand_exchange/widgets.js';
-import { autoLoopTick, createAutoLoopState, resetAutoLoop, type AutoLoopState } from './grand_exchange/auto-loop.js';
-import { breakStep, wallClockStep, resetBreakState, saveBreakState, initSessionProfile, markNightlyBreakFinished, resetHop, forceHop, shouldPauseForHopBoundary } from './antiban/session.js';
-import { resetLoginState, loginStep } from './antiban/login.js';
+import { auditGeState, invalidateMembersWorldCache, invalidateGeWidgetCache, invalidateBooleanStateCache, isOfferConfigOpen, isSearchPromptShown, isPricePromptShown, isQuantityPromptShown, isGeOpen, isBankOpen, isInventoryOpen, isWorldSwitcherOpenCached } from './grand_exchange/widgets.js';
+import { autoLoopTick, createAutoLoopState, resetAutoLoop, invalidateInvCache, type AutoLoopState } from './grand_exchange/auto-loop.js';
+import { sendKeyWithJitter, resetClickJitter } from './antiban/click-jitter.js';
+import { ensureInventoryOpen, resetLocalPlayerCache } from './general/helpers.js';
+import { breakStep, wallClockStep, resetBreakState, saveBreakState, initSessionProfile, markNightlyBreakFinished, resetHop, forceHop, shouldPauseForHopBoundary, resetLoginSnapshotCache, formatUKTime } from './antiban/session.js';
+import { resetLoginState, loginStep, isTitleScreenVisible, resetLoginThrottle } from './antiban/login.js';
 import { resetLogoutState } from './antiban/logout.js';
 import { hopStep, completeHop, onChatMessage as onHopChatMessage } from './antiban/hopper.js';
 import { renderBotOverlay } from './widgets/bot-overlay.js';
-import { loadOfferCache } from './general/state-persist.js';
-import { getMerchHistory } from './data/merch-history.js';
-import { getAbortHistory } from './data/abort-history.js';
-import { getDailyProfit } from './data/daily-profit.js';
+import { invalidateNearGeCache, invalidateEntityQueryCache } from './grand_exchange/clerk.js';
+import { invalidateRotationCaches } from './antiban/account-rotation.js';
+import { invalidateSessionProfileCache } from './antiban/session-profile.js';
+import { invalidateLogoutDoorCache } from './antiban/logout.js';
+import { invalidateWorldListCache } from './antiban/hopper.js';
+import { dumpOfferCache, dumpMerchHistory, dumpAbortHistory, dumpBuyFreezes } from './general/dump.js';
 import type { SessionProfile } from './antiban/session-profile.js';
+
+/** Map autoMode value to the short label shown on the overlay. */
+const modeLabel = (v: number): string =>
+    v === 3 ? 'F2P'
+    : v === 2 ? 'Slow'
+    : v === 1 ? 'Normal'
+    : 'Paused';
 
 export class StarkMercher extends titan.Plugin {
     id = "stark-mercher";
@@ -31,25 +42,67 @@ export class StarkMercher extends titan.Plugin {
     // isHudActive gates the overlay render callback. Set true on enable,
     // false on disable.
     isHudActive = false;
-    // statusText is the human-readable top-level action string shown in the
-    // overlay's Status field. Updated by the auto-loop and test flows.
+    // Cached plain-JS mirrors of autoMode.value, showHud.value, and
+    // hopWorlds.value. Setting.value reads cross the JS<->native boundary;
+    // reading them every frame from onMainLoop (which fires at the client's
+    // main-loop rate, far higher on the login/title screen where no 3D world
+    // is rendered) and from the overlay render callback exhausts the native
+    // handle table within a few minutes, dropping FPS to 0 after login.
+    // These mirrors are refreshed in onEnable and onSettingChanged, then
+    // read as plain fields in the per-frame paths. Matches the mixology
+    // plugin's pattern of reading only plain booleans in onMainLoop.
+    autoModeValue = 0;
+    showHudValue = true;
+    hopWorldsValue = true;
+    // Additional cached plain-JS mirrors of settings read from per-tick
+    // callbacks (onGameTick -> breakStep + autoLoopTick). Each Setting.value
+    // read crosses the JS<->native boundary; reading them every tick
+    // (~100 ticks/min) gradually exhausts the native handle table over
+    // 4-8 hours, causing FPS to drop to 0. Same root cause as the per-frame
+    // reads above, just slower accumulation. These mirrors are refreshed
+    // in onEnable and onSettingChanged, then read as plain fields in the
+    // per-tick paths.
+    idleActivityValue = 0;
+    doNotSleepValue = false;
+    logInfoValue = true;
+    logDebugValue = false;
+    // statusText is the human-readable top-level action string. Updated by
+    // the auto-loop and test flows. No longer displayed on the overlay (the
+    // overlay now shows only the mode label); kept for log diagnostics.
     statusText = 'Stopped';
-
-    // --- Cached values for overlay (avoid per-frame native queries) ---
-    // The overlay renders every frame (30-60 FPS). Calling
-    // titan.utils.inventory.count(995) or getDailyProfit() every frame
-    // creates native query handles that accumulate and exhaust the finite
-    // handle table over hours, causing FPS to drop to 0. These fields are
-    // refreshed by the auto-loop (which already reads the coin count) and
-    // by a fallback timer in onGameTick when the auto-loop isn't running.
-    // -1 = not yet cached (overlay shows '-' until first refresh).
-    cachedCoinCount = -1;
-    cachedDailyProfit = 0;
-    cachedDailyProfitAccount = '';
-    /** Tick of the last overlay cache refresh. Used by the fallback timer
-     *  in onGameTick to refresh every 30 ticks when the auto-loop isn't
-     *  running (e.g. Paused mode, logged out, GE not open). */
-    lastOverlayCacheRefreshTick = -999;
+    // overlayStatusText is the single string drawn by the minimal overlay.
+    // Updated only in onEnable / onDisable / onSettingChanged — never
+    // per-frame. The overlay render callback reads this plain field and
+    // draws one rect + one text line, with no allocations or native reads.
+    overlayStatusText = 'Stopped';
+    // UK-formatted (HH:MM) time when the script first started in this client
+    // session. Set once per client session (survives plugin toggles via the
+    // module-level sessionStartUKTimeCache). Read by the overlay render
+    // callback as a plain-JS string — no per-frame native reads or allocations.
+    sessionStartUKTime = '';
+    // Cached plain-JS mirror of titan.state.login.isLoggedIn. Updated in
+    // onEnable (one native read), onGameStateChanged (on login/logout
+    // transitions), and onGameTick (defensive — onGameTick only fires when
+    // logged in, so setting it to true there is always correct). Read in
+    // onMainLoop (which fires at frame rate) to skip wallClockStep entirely
+    // when logged in — wallClockStep is all logged-out logic (break
+    // transitions, rotation, login step, account detection) and does
+    // nothing useful when logged in. Without this cache, onMainLoop would
+    // either call wallClockStep every frame (wasteful function call) or
+    // read titan.state.login.isLoggedIn every frame (native scalar read
+    // per frame). The cached field avoids both.
+    cachedIsLoggedIn = false;
+    // Render-loop diagnostic: logs titan.state.client.tick every 30s from
+    // onMainLoop. If the tick counter freezes when FPS hits 0, the client's
+    // main loop is stalled (native handle exhaustion). If it keeps
+    // advancing, the loop is running but slow (GC pressure). Per Titan
+    // dev recommendation.
+    lastDiagLogMs = 0;
+    // Wall-clock timestamp when the script was first enabled (onEnable).
+    // Used by the overlay to show a running script timer in the title.
+    // Persisted in scriptStartSetting so it survives hot reloads; cleared
+    // on terminate() so a manual stop + restart starts a fresh timer.
+    scriptStartMs = 0;
 
     // Action throttle state
     lastActionTick = -1;
@@ -58,25 +111,32 @@ export class StarkMercher extends titan.Plugin {
     currentAction: string | null = null;
     lastAction: string | null = null;
     lastActionTime = 0;
+    /** Tracks whether the "Delaying X ticks" debug log has been shown for the
+     *  current action. Reset to false in setAction, set to true after logging. */
+    delayLogShown = false;
 
     // --- Startup audit ---
     // On script start (onEnable), we audit the GE state to determine if
     // a buy-offer flow was in progress. If recoverable, we resume it.
     // The audit runs once on the first tick after enable, not every tick.
     startupAuditDone = false;
+    // Tracks whether we've logged the title-screen deferral message, to
+    // avoid spamming the log every tick while waiting for the title screen
+    // to clear.
+    startupAuditDeferredLogged = false;
 
     // --- Auto-merch loop state ---
-    // When autoMode is enabled (Auto Merch), the bot runs the automated
-    // merching loop: collect → stale → sell → buy. When disabled (Manual
-    // Test), the bot idles and only responds to the test buttons.
+    // When autoMode is enabled (Normal or Slow), the bot runs the automated
+    // merching loop: collect → stale → sell → buy. When disabled (Paused),
+    // the bot idles and only responds to the test buttons.
     autoLoop: AutoLoopState = createAutoLoopState();
 
     // --- Break / login / logout state ---
     // The mercher takes short logout breaks (2-5 min) when the auto-loop
-    // has nothing to do, plus a nightly sleep (3.5-6.5h). Both log the
+    // has nothing to do, plus a nightly sleep (4.5-7.5h). Both log the
     // player out; GE offers continue filling while logged out.
     breakPhase: 'none' | 'logging_out' | 'logged_out' | 'logging_in' = 'none';
-    breakType: 'none' | 'short' | 'nightly' = 'none';
+    breakType: 'none' | 'short' | 'nightly' | 'hour_pause' = 'none';
     breakStartMs = 0;
     breakTargetEndMs = 0;
     nightlyBreakTargetTime = -1;
@@ -109,8 +169,18 @@ export class StarkMercher extends titan.Plugin {
      *  uses 90% of the remaining ETA instead of 50%, since we already
      *  checked at 50% and found nothing ready. This prevents rapid
      *  login/nothing-to-do/logout cycling when all slots are occupied
-     *  with slow-filling offers. */
+     *  with slow-filling offers.
+     *  IMPORTANT: This flag is NOT cleared on login, hop, break, or
+     *  disconnect transitions — it survives logout/login cycles because
+     *  "we already checked at 50% and found nothing" is still true after
+     *  a logout. It is cleared only when an actual GE action is performed
+     *  (buy/sell/abort/collect/completed-sell) in auto-loop.ts. */
     checkedAtHalfEta = false;
+    /** Tick of the last idle diagnostic log (GE slots, stale check, sell/buy
+     *  scan, ETA). Throttles the "nothing to do" auto-loop diagnostic to every
+     *  ~5 seconds instead of every tick, preventing log spam during idle
+     *  periods. -1 = not yet logged. */
+    lastIdleDiagTick = -1;
     // Login state
     currentPlayerName = '';
     sessionProfile: SessionProfile | null = null;
@@ -125,6 +195,28 @@ export class StarkMercher extends titan.Plugin {
     // another account has become eligible and rotate immediately if so.
     // Timestamp of the last check; 0 = never checked.
     lastIdleRotationCheckMs = 0;
+    // Throttle for the logged-in rotation check. While the current account
+    // is logged in and performing an idle activity, we periodically check
+    // if a DIFFERENT account has become eligible. If so, the idle activity
+    // cleans up (banks items) and yields so the break system logs out and
+    // rotates to the eligible account. Timestamp of the last check;
+    // 0 = never checked.
+    lastLoggedInRotationCheckMs = 0;
+    // Set by onChatMessage when a GE offer completes ("Grand Exchange:
+    // Finished buying/selling X") while an idle activity is active. The
+    // idle-activity dispatch checks this flag and yields to GE operations
+    // immediately instead of waiting for the ETA-based timer to expire.
+    // 0 = no pending completion. Only set when idleActivityPhase !== 'none'
+    // so normal GE operations (where completions are handled by the
+    // collect/sweep flows) are unaffected.
+    geOfferCompletedChatMs = 0;
+    // wallClockStep 1-second throttle — onMainLoop fires at frame rate
+    // (30-60 FPS), so without throttling wallClockStep makes 90-300 native
+    // SDK calls per second (localPlayer, login.state, login.isLoggedIn,
+    // widgets.find via loginStep, login.snapshot via loginStep). Over hours
+    // this exhausts the native handle table, causing 2000ms+ dispatches,
+    // frame anomalies, and 0 FPS. Mirrors the mixology wallClockStep throttle.
+    lastWallClockMs = 0;
     // Login FSM fields
     titleNextClickAt = 0;
     titleFirstSeenAtMs = 0;
@@ -138,6 +230,11 @@ export class StarkMercher extends titan.Plugin {
     loginSubmitAttemptTimes: number[] = [];
     loginFirstAttemptAtMs = 0;
     loginTotalSubmitAttempts = 0;
+    /** Timestamp until which we wait before the first stageCredentials attempt
+     *  on a fresh client launch. The native account profile system needs time
+     *  to initialize after client start; calling stageCredentials() before it's
+     *  ready returns false indefinitely. Set to now + grace on script start. */
+    loginStartupGraceUntil = 0;
     // Logout FSM fields
     logoutStep = 0;
     logoutAttemptCount = 0;
@@ -176,6 +273,17 @@ export class StarkMercher extends titan.Plugin {
     hopJustCompleted = false;
     hopJustCompletedAtMs = -1;
     hopCount = 0;
+    /** Tracks whether the inventory tab has been confirmed open after the
+     *  most recent hop or login. Reset to false in completeHop() and on
+     *  post-login settle so the inventory-open guard runs once per
+     *  transition. The world switcher can stay open after hopIngame()
+     *  completes; without this guard the auto-loop would try to interact
+     *  with widgets while the switcher is still visible. */
+    inventoryOpenEnsured = false;
+    /** True if the most recent hop was a "burst" hop (short interval). The
+     *  next interval is more likely to also be short, simulating the human
+     *  pattern of hopping 2-3 times in quick succession when annoyed. */
+    lastHopWasBurst = false;
 
     // --- Hidden session profile setting ---
     // Stores per-account session profiles as JSON (sleep/wake/break timing).
@@ -187,16 +295,13 @@ export class StarkMercher extends titan.Plugin {
         hidden: true,
     });
 
-    // --- Offer cache setting (visible for manual backup) ---
-    // Stores the per-account offer cache as JSON. Survives hot reloads
-    // (plugin off/on within the same client session) but NOT client
-    // restarts — Titan's host app does not persist hidden settings to
-    // plugin_settings.json, and plugin-side .value writes are not marked
-    // dirty for disk persistence. On client restart, the cache is empty
-    // and must be reconstructed from live GE state (reverse reconciliation
-    // in auto-loop.ts Step 2b). Hidden because the Titan settings UI truncates
-    // string fields at 4095 chars and manual backup via the settings panel is
-    // unreliable for larger caches.
+    // --- Offer cache setting (hidden) ---
+    // Stores the per-account offer cache as JSON. Hidden because the Titan
+    // settings UI truncates string fields at 4095 chars, making the field
+    // uneditable for large caches. The full value is read/written correctly
+    // by the plugin via .value. Includes duplicate account-key migration on
+    // load (keys differing by invisible whitespace characters like
+    // non-breaking spaces are merged under a canonical key).
     offerCacheSetting: titan.Setting<string> = this.stringSetting({
         key: 'offerCache',
         name: 'Offer cache (hidden)',
@@ -208,7 +313,7 @@ export class StarkMercher extends titan.Plugin {
     // Stores per-account daily profit as JSON. Keyed by account name.
     // Each entry has { dayStartedAt, profit }. Day rollover is handled by
     // comparing dayStartedAt to the current day's midnight on read/write.
-    // Same persistence limitation as offerCacheSetting — hot reload only.
+    // Includes duplicate account-key migration on load.
     dailyProfitSetting: titan.Setting<string> = this.stringSetting({
         key: 'dailyProfit',
         name: 'Daily profit (hidden)',
@@ -217,12 +322,28 @@ export class StarkMercher extends titan.Plugin {
     });
 
     // --- Hidden hop state setting ---
-    // Stores per-account hop timer state as JSON (nextHopAtMs, hopCount, etc.).
-    // Same persistence limitation as offerCacheSetting — hot reload only.
+    // Stores the global hop timer state as JSON (nextHopAtMs, hopCount).
+    // The hop timer is global (not per-account) since account rotation
+    // means only one account is active at a time. Restored on script reload
+    // by loadHopState() in lifecycle.ts.
     hopStateSetting: titan.Setting<string> = this.stringSetting({
         key: 'hopState',
         name: 'Hop state (hidden)',
         default: '{}',
+        hidden: true,
+    });
+
+    // --- Hidden script start timestamp setting ---
+    // Stores the wall-clock timestamp (ms) when the script was first enabled
+    // so the overlay's running timer survives hot reloads. On hot reload,
+    // resetState() restores scriptStartMs from this setting instead of
+    // resetting to Date.now(). On terminate() the setting is cleared so a
+    // manual stop + restart starts a fresh timer. Same persistence
+    // limitation as offerCacheSetting — hot reload only, not client restart.
+    scriptStartSetting: titan.Setting<string> = this.stringSetting({
+        key: 'scriptStart',
+        name: 'Script start timestamp (hidden)',
+        default: '0',
         hidden: true,
     });
 
@@ -252,15 +373,12 @@ export class StarkMercher extends titan.Plugin {
         hidden: true,
     });
 
-    // --- Hidden merch history setting ---
+    // --- Merch history setting (hidden) ---
     // Stores per-account merch history (profits and losses) as JSON.
     // Each entry records item, qty, profit/loss, date, buy price, avg sold
     // price, and revision count for a completed merch cycle.
-    // Same persistence limitation as offerCacheSetting — hot reload only.
     // Hidden because the Titan settings UI truncates string fields at 4095
-    // chars, and merch history exceeds that at ~60 entries — the UI field
-    // can't display or edit the full value, so manual backup via the
-    // settings panel doesn't work for this setting.
+    // chars. Includes duplicate account-key migration on load.
     merchHistorySetting: titan.Setting<string> = this.stringSetting({
         key: 'merchHistory',
         name: 'Merch history (hidden)',
@@ -307,7 +425,7 @@ export class StarkMercher extends titan.Plugin {
     // price, and timestamp. This is the key diagnostic for low overnight
     // profit — aborted 0-fill buys represent wasted time and slot occupancy
     // that merch history doesn't capture.
-    // Same persistence limitation as offerCacheSetting — hot reload only.
+    // Hidden. Includes duplicate account-key migration on load.
     abortHistorySetting: titan.Setting<string> = this.stringSetting({
         key: 'abortHistory',
         name: 'Abort history (hidden)',
@@ -328,6 +446,24 @@ export class StarkMercher extends titan.Plugin {
         default: '',
         tooltip: 'Comma-separated character names to rotate through. Each account runs until idle, then the next eligible account logs in. Leave empty for single-account mode.',
         position: -1,
+    });
+
+    // --- Profit display setting (visible, read-only) ---
+    // Shows each account's net profit (sum of all completed merch cycles'
+    // profits minus losses) as a human-readable string. Updated after each
+    // completed sale (via updateProfitDisplay() in general/dump.ts) and on
+    // logout — never per-tick, so there is no performance impact. This
+    // ensures the display stays current when idle activity keeps the bot
+    // logged in for long periods without a logout. The setting is written
+    // by the bot and read by the user; editing it has no effect (the bot
+    // overwrites it on the next completed sale or logout). Format:
+    // "Name1: +1,234gp, Name2: -567gp".
+    profitDisplaySetting: titan.Setting<string> = this.stringSetting({
+        key: 'profitDisplay',
+        name: 'Profit (all accounts)',
+        default: '',
+        tooltip: 'Net profit per account (profits minus losses across all completed merch cycles). Updated automatically on each logout.',
+        position: -0.5,
     });
 
     // --- Hidden rotation index setting ---
@@ -354,12 +490,18 @@ export class StarkMercher extends titan.Plugin {
     });
 
     // --- Overlay HUD registration ---
-    // The overlay renders every frame while isHudActive is true. It draws
-    // the Status, Inventory Coins, and Daily Profit fields.
+    // Minimal overlay: draws one rect + one text line showing the current
+    // autoMode label (Paused / Normal / Slow / F2P). The render callback
+    // fires every frame but does no allocations, no Date.now(), no native
+    // SDK reads — it reads the plain-JS overlayStatusText field (updated
+    // only in onEnable / onDisable / onSettingChanged) and makes two
+    // overlay draw calls. The showHud toggle lets the user hide the HUD
+    // without disabling the plugin; the render callback returns early
+    // when showHudValue is false.
     hud = this.overlay({
         layer: 'AboveWidgets',
         render: () => {
-            if (!this.isHudActive) return;
+            if (!this.isHudActive || !this.showHudValue) return;
             renderBotOverlay(this);
         },
     });
@@ -377,63 +519,83 @@ export class StarkMercher extends titan.Plugin {
             if (this.breakPhase === 'logged_out' || this.breakPhase === 'logging_out') {
                 this.breakTargetEndMs = Date.now();
                 saveBreakState(this);
-                titan.log('[Stark Mercher] End Logout clicked — break timer forwarded to now, logging back in next tick.');
+                if (this.logInfoValue) titan.log('[Stark Mercher] End Logout clicked — break timer forwarded to now, logging back in next tick.');
             } else {
-                titan.logf('[Stark Mercher] End Logout clicked — not in a break (phase=%s), nothing to do.', this.breakPhase);
+                if (this.logInfoValue) titan.logf('[Stark Mercher] End Logout clicked — not in a break (phase=%s), nothing to do.', this.breakPhase);
             }
         },
     });
 
-    // --- Paused / Auto Merch mode toggle ---
+    // --- Paused / Normal / Slow / F2P mode toggle ---
     // 0 = Paused (no script logic runs at all — no login, breaks, hops, or
     //   merching. The overlay still renders so the user can switch modes.)
-    // 1 = Auto Merch (run the full automated merching loop: login, breaks,
-    //   hops, GE actions.)
+    // 1 = Normal (run the full automated merching loop: login, breaks,
+    //   hops, GE actions. Buy scan uses the default non-lowball-first
+    //   tier order.)
+    // 2 = Slow (same loop as Normal, but the buy scan prefers lowball
+    //   items with ~30-60 minute buy ETAs ahead of the normal tier order.
+    //   Login/logout/break/rotation/hop timing is unchanged — only buy-
+    //   offer item selection is affected.)
+    // 3 = F2P (same loop as Normal, but reads f2pMerchableItems.json
+    //   instead of merchableItems.json. Uses a curated list of high-volume
+    //   F2P items with a fixed 1gp margin. Runtime thresholds are relaxed
+    //   so thin-margin items pass. Slot count still uses isMembersWorld()
+    //   — 3 slots on F2P worlds, 8 on P2P.)
     // Persists across hot reloads. New clients default to Paused so the bot
-    // doesn't start merching until the user explicitly switches to Auto Merch.
+    // doesn't start merching until the user explicitly switches to Normal,
+    // Slow, or F2P.
     autoMode: titan.Setting<number> = this.comboSetting({
         key: 'autoMode',
         name: 'Mode',
         default: 0,
         choices: [
             { value: 0, label: 'Paused' },
-            { value: 1, label: 'Auto Merch' },
+            { value: 1, label: 'Normal' },
+            { value: 2, label: 'Slow' },
+            { value: 3, label: 'F2P' },
+        ],
+    });
+
+    // --- Idle Activity dropdown ---
+    // When the bot has no GE actions to process and would normally log out
+    // for a short break, it instead performs an idle activity to stay logged
+    // in productively. The bot banks any idle-activity items and resumes GE
+    // mode as soon as the next GE action is due. If the bank runs out of
+    // idle-activity items, the bot resumes normal logout behavior.
+    // 0 = None (normal logout-on-idle behavior)
+    // 1 = Chocolate Dust (grind chocolate bars into chocolate dust with a knife)
+    // 2 = Ultra Compost (use volcanic ash on supercompost to make ultracompost)
+    // 3 = Goat Horn Dust (grind desert goat horns into goat horn dust with a pestle and mortar)
+    // 4 = Any (search the bank for ingredients of all three activities and randomly pick one)
+    idleActivity: titan.Setting<number> = this.comboSetting({
+        key: 'idleActivity',
+        name: 'Idle Activity',
+        default: 0,
+        choices: [
+            { value: 0, label: 'None' },
+            { value: 1, label: 'Chocolate Dust' },
+            { value: 2, label: 'Ultra Compost' },
+            { value: 3, label: 'Goat Horn Dust' },
+            { value: 4, label: 'Any' },
         ],
     });
 
     // --- Log cache data button ---
-    // Click to dump the current account's offer cache to the log. Useful for
-    // debugging cached buy/sell prices, revision history, and buy-limit state.
+    // Click to dump the current account's offer cache to the log. Shows
+    // cached buy/sell prices, revision history, buy-limit state, net profit
+    // projection after GE tax, cached ETAs, sell confirmation status,
+    // partial sales summary, and elapsed time since placement.
     logCacheData: titan.Setting<void> = this.buttonSetting({
         key: 'logCacheData',
         name: 'Log Cache Data',
         position: -1,
         onClick: () => {
-            const accountName = this.currentPlayerName || titan.state.client.localPlayer?.name || '';
+            const accountName = this.currentPlayerName || '';
             if (!accountName) {
                 titan.log('[Stark Mercher] Cannot log cache — no account name available.');
                 return;
             }
-            const cache = loadOfferCache(this, accountName);
-            const keys = Object.keys(cache);
-            if (keys.length === 0) {
-                titan.logf('[Stark Mercher] Offer cache for %s is empty.', accountName);
-                return;
-            }
-            titan.logf('[Stark Mercher] Offer cache for %s (%d entries):', accountName, keys.length);
-            for (const key of keys) {
-                const e = cache[key];
-                const placed = new Date(e.offerPlacedAt).toISOString();
-                const revisions = e.revisedPrices.join(' -> ');
-                const totalBought = e.totalBought !== undefined ? `, totalBought=${e.totalBought}` : '';
-                const firstBought = e.firstBoughtAt !== undefined ? `, firstBought=${new Date(e.firstBoughtAt).toISOString()}` : '';
-                const limitReached = e.limitReachedAt !== undefined ? `, limitReachedAt=${new Date(e.limitReachedAt).toISOString()}` : '';
-                const sellQty = e.sellQuantity !== undefined ? `, sellQty=${e.sellQuantity}` : '';
-                titan.logf('[Stark Mercher]   %s: mode=%s, buy=%d, sell=%d (orig=%d), placed=%s, revisions=[%s]%s%s%s%s',
-                    key, e.mode, e.buyPrice, e.sellPrice, e.originalSellPrice, placed, revisions,
-                    totalBought, firstBought, limitReached, sellQty);
-            }
-            titan.logf('[Stark Mercher] Cache dump complete (%d entries).', keys.length);
+            dumpOfferCache(this, accountName);
         },
     });
 
@@ -448,57 +610,13 @@ export class StarkMercher extends titan.Plugin {
         name: 'Log Merch & Abort History',
         position: -1,
         onClick: () => {
-            const accountName = this.currentPlayerName || titan.state.client.localPlayer?.name || '';
+            const accountName = this.currentPlayerName || '';
             if (!accountName) {
                 titan.log('[Stark Mercher] Cannot log history — no account name available.');
                 return;
             }
-            const history = getMerchHistory(this, accountName);
-            if (history.profits.length === 0 && history.losses.length === 0) {
-                titan.logf('[Stark Mercher] No merch history for %s.', accountName);
-            } else {
-                titan.logf('[Stark Mercher] Merch history for %s:', accountName);
-                if (history.profits.length > 0) {
-                    titan.logf('[Stark Mercher] === PROFITS (%d) ===', history.profits.length);
-                    let totalProfit = 0;
-                    for (const e of history.profits) {
-                        const revPrices = e.revisionPrices ? `, revPrices=[${e.revisionPrices.join(',')}]` : '';
-                        const sellTime = e.sellElapsedMin !== undefined ? `, sellElapsed=${e.sellElapsedMin}min` : '';
-                        const reqVsActual = e.requestedBuyQty !== undefined ? `, reqBuy=${e.requestedBuyQty}` : '';
-                        titan.logf('[Stark Mercher]   %s: qty=%d, profit=+%dgp, buy=%d, avgSold=%d, revisions=%d%s%s%s, date=%s',
-                            e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, reqVsActual, revPrices, sellTime, e.date);
-                        totalProfit += e.profit;
-                    }
-                    titan.logf('[Stark Mercher]   Total profit: +%dgp', totalProfit);
-                }
-                if (history.losses.length > 0) {
-                    titan.logf('[Stark Mercher] === LOSSES (%d) ===', history.losses.length);
-                    let totalLoss = 0;
-                    for (const e of history.losses) {
-                        const revPrices = e.revisionPrices ? `, revPrices=[${e.revisionPrices.join(',')}]` : '';
-                        const sellTime = e.sellElapsedMin !== undefined ? `, sellElapsed=${e.sellElapsedMin}min` : '';
-                        const reqVsActual = e.requestedBuyQty !== undefined ? `, reqBuy=${e.requestedBuyQty}` : '';
-                        titan.logf('[Stark Mercher]   %s: qty=%d, loss=%dgp, buy=%d, avgSold=%d, revisions=%d%s%s%s, date=%s',
-                            e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, reqVsActual, revPrices, sellTime, e.date);
-                        totalLoss += e.profit;
-                    }
-                    titan.logf('[Stark Mercher]   Total loss: %dgp', totalLoss);
-                }
-                titan.logf('[Stark Mercher] Merch history dump complete.');
-            }
-            // Abort history
-            const aborts = getAbortHistory(this, accountName);
-            if (aborts.aborts.length === 0) {
-                titan.logf('[Stark Mercher] No abort history for %s.', accountName);
-            } else {
-                titan.logf('[Stark Mercher] Abort history for %s (%d entries):', accountName, aborts.aborts.length);
-                for (const a of aborts.aborts) {
-                    const cat = a.category ?? 'unknown';
-                    titan.logf('[Stark Mercher]   [%s] %s: %s req=%d filled=%d, elapsed=%s eta=%s, price=%d, reason="%s", date=%s',
-                        cat, a.item, a.type, a.requestedQty, a.filledQty, a.elapsedMin.toFixed(1) + 'min', a.etaMin.toFixed(1) + 'min', a.price, a.reason, a.date);
-                }
-                titan.logf('[Stark Mercher] Abort history dump complete.');
-            }
+            dumpMerchHistory(this, accountName);
+            dumpAbortHistory(this, accountName);
         },
     });
 
@@ -512,57 +630,16 @@ export class StarkMercher extends titan.Plugin {
         name: 'Log Buy Freezes',
         position: -1,
         onClick: () => {
-            const raw = this.buyFreezeSetting.value;
-            if (!raw || raw === '{}') {
-                titan.logf('[Stark Mercher] No buy freezes active.');
-                return;
-            }
-            let parsed: Record<string, unknown>;
-            try {
-                parsed = JSON.parse(raw);
-            } catch (e) {
-                titan.logf('[Stark Mercher] Failed to parse buy-freeze data: %s', String(e));
-                return;
-            }
-            if (!parsed || typeof parsed !== 'object') {
-                titan.logf('[Stark Mercher] No buy freezes active.');
-                return;
-            }
-            const now = Date.now();
-            // Support both flat ({ item: until }) and legacy nested
-            // ({ account: { item: until } }) formats for diagnostics.
-            const values = Object.values(parsed);
-            const isNested = values.length > 0 && values.every(v => v !== null && typeof v === 'object');
-            let flat: Record<string, number>;
-            if (isNested) {
-                // Flatten legacy nested format for display.
-                flat = {};
-                for (const accountMap of values as Record<string, number>[]) {
-                    if (!accountMap || typeof accountMap !== 'object') continue;
-                    for (const [name, until] of Object.entries(accountMap)) {
-                        if (typeof until !== 'number') continue;
-                        const existing = flat[name];
-                        if (!existing || until > existing) flat[name] = until;
-                    }
-                }
-            } else {
-                flat = parsed as Record<string, number>;
-            }
-            const items = Object.keys(flat);
-            if (items.length === 0) {
-                titan.logf('[Stark Mercher] No buy freezes active.');
-                return;
-            }
-            const active = items.filter(name => flat[name] > now);
-            const expired = items.length - active.length;
-            titan.logf('[Stark Mercher] Buy freezes (%d active, %d expired):', active.length, expired);
-            for (const name of active) {
-                const until = flat[name];
-                const minsLeft = Math.max(0, Math.ceil((until - now) / 60000));
-                titan.logf('[Stark Mercher]   %s: expires in %d min (at %s)', name, minsLeft, new Date(until).toISOString());
-            }
-            titan.logf('[Stark Mercher] Buy freeze dump complete.');
+            dumpBuyFreezes(this);
         },
+    });
+
+    // --- Overlay HUD toggle ---
+    showHud: titan.Setting<boolean> = this.boolSetting({
+        key: 'showHud',
+        name: 'Show HUD',
+        default: true,
+        tooltip: 'Toggle the on-screen overlay panel. Disable to test if the overlay is causing FPS drops.',
     });
 
     // --- Debug logging toggle ---
@@ -570,6 +647,18 @@ export class StarkMercher extends titan.Plugin {
         key: 'logDebug',
         name: 'Debug logging',
         default: false,
+    });
+
+    // --- Info logging toggle ---
+    // Important, uncommon events: account rotation, break start/end, login/logout,
+    // world hops, offer placement/failure, cache reconciliation, item freezing,
+    // repricing, startup audit, mode switched, termination. When off, only errors
+    // and manual button-triggered dumps are logged. When on, these events are
+    // logged regardless of the Debug logging toggle.
+    logInfo: titan.Setting<boolean> = this.boolSetting({
+        key: 'logInfo',
+        name: 'Info logging',
+        default: true,
     });
 
     // --- World hop settings ---
@@ -623,13 +712,17 @@ export class StarkMercher extends titan.Plugin {
 
     // runStartupAudit()
     // Called on the first tick after enable (or after a tick-reset), but only
-    // when in Auto Merch mode (Paused mode returns before the audit runs).
+    // when in Normal or Slow mode (Paused mode returns before the audit runs).
     // Audits the GE state and logs active slots for visibility. If a GE
-    // sub-screen (offer config / search / price prompt) is open, the auto-loop
-    // will close it with Escape on the next tick.
+    // sub-screen (offer config / search / quantity / price prompt) is open
+    // after a hot-reload, sends a one-time Escape to close it — the auto-loop
+    // then reopens the GE and starts fresh flows. This is simpler and more
+    // robust than reconstructing in-flight flow state from cache entries,
+    // which was prone to stuck loops when the post-Escape widget state didn't
+    // match the reconstructed flow's expectations.
     runStartupAudit() {
         const audit = auditGeState();
-        titan.logf('[Stark Mercher] Startup audit: screen=%s, geOpen=%s, slots=%s',
+        if (this.logInfoValue) titan.logf('[Stark Mercher] Startup audit: screen=%s, geOpen=%s, slots=%s',
             audit.screen, audit.geOpen, audit.slots.map(s => s.type).join(','));
 
         if (!audit.geOpen) {
@@ -641,44 +734,124 @@ export class StarkMercher extends titan.Plugin {
         for (let i = 0; i < audit.slots.length; i++) {
             const s = audit.slots[i];
             if (s.type === 'buy' || s.type === 'sell') {
-                titan.logf('[Stark Mercher] Slot %d: %s %s (qty %d, %s)',
+                if (this.logInfoValue) titan.logf('[Stark Mercher] Slot %d: %s %s (qty %d, %s)',
                     i + 1, s.type, s.itemName ?? 'unknown', s.itemQuantity, s.priceText ?? 'no price');
             }
         }
 
-        // If a GE sub-screen is open (offer config / search / price prompt),
-        // the auto-loop will close it with Escape on the next tick. No flow
-        // resume is attempted — the auto-loop reconciles from cache state.
-        if (audit.screen === 'offer_config' || audit.screen === 'search_prompt' || audit.screen === 'price_prompt') {
-            titan.log('[Stark Mercher] Startup audit: GE sub-screen open — auto-loop will close it');
+        // If a GE sub-screen is open (offer config / search / quantity /
+        // price prompt), send a one-time Escape to close it. The auto-loop
+        // will then reopen the GE and start fresh flows. Interrupted buys
+        // lost nothing (no items spent); interrupted sells still have their
+        // items in inventory (the sell scan re-lists them); already-placed
+        // offers in GE slots are unaffected.
+        if (isOfferConfigOpen() || isSearchPromptShown() || isQuantityPromptShown() || isPricePromptShown()) {
+            if (this.logInfoValue) titan.log('[Stark Mercher] Startup audit: GE sub-screen open — sending Escape to close (auto-loop will start fresh)');
+            sendKeyWithJitter(() => titan.keyboard.sendKey(titan.keyboard.Key.Escape), { reason: 'startup close GE sub-screen' });
         }
     }
 
     onEnable() {
         onEnable(this);
         this.isHudActive = true;
-        this.statusText = this.autoMode.value === 0 ? 'Paused' : 'Idle';
+        // Cache the setting values so per-frame callbacks (onMainLoop, overlay
+        // render) read plain JS fields instead of crossing the JS<->native
+        // boundary via Setting.value every frame.
+        this.autoModeValue = this.autoMode.value;
+        this.showHudValue = this.showHud.value;
+        this.hopWorldsValue = this.hopWorlds.value;
+        this.idleActivityValue = this.idleActivity?.value ?? 0;
+        this.doNotSleepValue = !!this.doNotSleep?.value;
+        this.logInfoValue = !!this.logInfo.value;
+        this.logDebugValue = !!this.logDebug.value;
+        this.statusText = this.autoModeValue === 0 ? 'Paused' : 'Idle';
+        this.overlayStatusText = modeLabel(this.autoModeValue);
+        // Derive the UK-formatted start time from scriptStartMs, which is
+        // already persisted via scriptStartSetting (hidden, hot-reload only).
+        // This survives hot reloads (setting persists → same time) and resets
+        // on full client restart (hidden setting doesn't persist → fresh time)
+        // and on terminate() (setting cleared → fresh time). formatUKTime is
+        // pure JS — one call per onEnable is negligible.
+        this.sessionStartUKTime = formatUKTime(this.scriptStartMs);
+        // Cache the login state so onMainLoop (frame-rate) can skip wallClockStep
+        // entirely when logged in without reading titan.state.login.isLoggedIn
+        // every frame. One native scalar read on enable is negligible.
+        this.cachedIsLoggedIn = titan.state.login.isLoggedIn;
     }
     onDisable() {
         this.isHudActive = false;
         this.statusText = 'Stopped';
+        this.overlayStatusText = 'Stopped';
         if (this.terminated && this.terminationReason) {
-            titan.logf("[Stark Mercher] Stopped: %s", this.terminationReason);
+            if (this.logInfoValue) titan.logf("[Stark Mercher] Stopped: %s", this.terminationReason);
         }
+        // Release native handles held in module-level caches. The JS module
+        // is NOT re-evaluated on a toggle off/on (only on hot reload), so
+        // module-level state — including cached native WidgetState/Item/Player
+        // handles — survives the toggle. Without invalidation here, stale
+        // handles from the previous run accumulate alongside new handles
+        // created by the next onEnable, gradually exhausting the finite
+        // native handle table over many toggle cycles.
+        invalidateGeWidgetCache();
+        invalidateInvCache();
+        invalidateBooleanStateCache();
+        invalidateMembersWorldCache();
+        invalidateNearGeCache();
+        // Invalidate the cached entity queries (GE clerks, GE booths, logout
+        // door) and the cached world list — the scene may change on the next
+        // enable (e.g. after a hop or login on a different world).
+        invalidateEntityQueryCache();
+        invalidateLogoutDoorCache();
+        invalidateWorldListCache();
+        // Reset module-level throttles and caches so the next onEnable starts
+        // fresh — no stale throttle timestamps, no stale login snapshots,
+        // no retained local-player handle.
+        resetLoginThrottle();
+        resetLoginSnapshotCache();
+        resetClickJitter();
+        resetLocalPlayerCache();
+        // Invalidate the rotation and session-profile caches so the next
+        // onEnable re-reads the settings fresh (the JS module is not
+        // re-evaluated on toggle, so cached parsed-JSON survives otherwise).
+        invalidateRotationCaches();
+        invalidateSessionProfileCache();
     }
     onSettingChanged(key: string) {
+        // Keep the per-frame cached mirrors in sync with the underlying
+        // settings. Both autoMode and showHud are read from high-frequency
+        // callbacks (onMainLoop, overlay render); the cached plain fields
+        // avoid crossing the JS<->native boundary via Setting.value every
+        // frame.
+        if (key === 'autoMode') {
+            this.autoModeValue = this.autoMode.value;
+            this.overlayStatusText = modeLabel(this.autoModeValue);
+        } else if (key === 'showHud') {
+            this.showHudValue = this.showHud.value;
+        } else if (key === 'hopWorlds') {
+            this.hopWorldsValue = this.hopWorlds.value;
+        } else if (key === 'idleActivity') {
+            this.idleActivityValue = this.idleActivity?.value ?? 0;
+        } else if (key === 'doNotSleep') {
+            this.doNotSleepValue = !!this.doNotSleep?.value;
+        } else if (key === 'logInfo') {
+            this.logInfoValue = !!this.logInfo.value;
+        } else if (key === 'logDebug') {
+            this.logDebugValue = !!this.logDebug.value;
+        }
         // When Mode is switched, update the status text and re-run the startup
         // audit on the next tick so the auto-loop reconciles from current GE
-        // state (the audit is skipped while Paused, so switching to Auto Merch
-        // needs it to run).
+        // state (the audit is skipped while Paused, so switching to Normal or
+        // Slow needs it to run).
         if (key === 'autoMode') {
-            if (this.autoMode.value === 0) {
+            if (this.autoModeValue === 0) {
                 this.statusText = 'Paused';
-                titan.log('[Stark Mercher] Mode switched to Paused — all script logic stopped.');
+                if (this.logInfoValue) titan.log('[Stark Mercher] Mode switched to Paused — all script logic stopped.');
             } else {
                 this.statusText = 'Idle';
                 this.startupAuditDone = false;
-                titan.log('[Stark Mercher] Mode switched to Auto Merch — resuming on next tick.');
+                this.startupAuditDeferredLogged = false;
+                const modeLabel = this.autoModeValue === 3 ? 'F2P' : this.autoModeValue === 2 ? 'Slow' : 'Normal';
+                if (this.logInfoValue) titan.logf('[Stark Mercher] Mode switched to %s — resuming on next tick.', modeLabel);
             }
         }
         // When Do Not Sleep is toggled ON, clear any pre-sampled nightly break
@@ -686,43 +859,43 @@ export class StarkMercher extends titan.Plugin {
         // nightly break with a stale duration. The breakStep() and logged-out
         // paths in session.ts also check doNotSleep to abort an already-started
         // nightly break.
-        if (key === 'doNotSleep' && this.doNotSleep?.value) {
+        if (key === 'doNotSleep' && this.doNotSleepValue) {
             this.nightlyBreakTargetTime = -1;
             this.nightlySleepMinutes = -1;
         }
+        // Invalidate the roster cache when the user edits the roster setting.
+        // The break-state and session-profile caches are invalidated on writes
+        // (save/clear) and on onDisable, so they don't need onSettingChanged.
+        if (key === 'accountRoster') {
+            invalidateRotationCaches();
+        }
     }
     onMenuOptionClicked = (event: titan.MenuOptionClicked) => {
+        // Diagnostic-only click logging. Gated by terminated/autoMode/logDebug
+        // to avoid an unconditional titan.logf native call per click — the
+        // bot's own synthetic clicks (interact()) fire this handler too, so
+        // during active merching this would otherwise emit dozens of native
+        // log calls per minute. Mixology has no equivalent handler.
+        if (this.terminated) return;
+        if (this.autoModeValue === 0) return;
+        if (!this.logDebugValue) return;
         titan.logf("[Stark Mercher] Click: opcode=%d id=%d p0=%d p1=%d text=%s",
             event.opcode, event.identifier, event.param0, event.param1, event.actionText);
     }
     onGameTick = (tick: number) => {
         if (this.terminated) return;
 
-        // --- Overlay cache refresh (fallback) ---
-        // The overlay reads bot.cachedCoinCount and bot.cachedDailyProfit
-        // instead of calling titan.utils.inventory.count(995) and
-        // getDailyProfit() every frame (which exhausts native handles over
-        // hours). The auto-loop refreshes these when it runs, but when it's
-        // not running (Paused mode, logged out, GE not open, action delay
-        // pending), we refresh here every 30 ticks (~18 seconds) as a
-        // fallback. This is at most 1 native query per 18 seconds, not per
-        // frame — negligible handle creation.
-        if (tick - this.lastOverlayCacheRefreshTick >= 30) {
-            this.lastOverlayCacheRefreshTick = tick;
-            this.cachedCoinCount = titan.utils.inventory.count(995);
-            const playerName = this.currentPlayerName || titan.state.client.localPlayer?.name || '';
-            if (playerName) {
-                if (this.cachedDailyProfitAccount !== playerName) {
-                    this.cachedDailyProfitAccount = playerName;
-                }
-                this.cachedDailyProfit = getDailyProfit(this, playerName);
-            }
-        }
+        // onGameTick only fires when logged in — defensively cache the login
+        // state so onMainLoop can skip wallClockStep without a per-frame
+        // native read. onGameStateChanged also sets this, but this covers
+        // the case where the plugin starts while already logged in (no
+        // state change event fires).
+        this.cachedIsLoggedIn = true;
 
         // Paused mode: no script logic runs at all. The overlay still renders
         // (it's a separate render callback) so the user can see the status and
-        // switch to Auto Merch.
-        if (this.autoMode.value === 0) return;
+        // switch to Normal or Slow.
+        if (this.autoModeValue === 0) return;
         // Duplicate-tick guard: the SDK can fire onGameTick more than once
         // per tick in some edge cases.
         if (this.lastActionTick === tick) return;
@@ -731,7 +904,7 @@ export class StarkMercher extends titan.Plugin {
         // that involved a logout/login cycle). Reset stale action state so
         // canPerformAction doesn't lock forever on a negative ticksSinceAction.
         if (this.lastActionTick > tick && this.lastActionTick !== -1) {
-            titan.log('[Stark Mercher] Tick counter reset — resetting stale action state');
+            if (this.logInfoValue) titan.log('[Stark Mercher] Tick counter reset — resetting stale action state');
             this.currentAction = 'idle';
             this.actionStartTime = tick;
             this.actionDelay = 0;
@@ -739,6 +912,7 @@ export class StarkMercher extends titan.Plugin {
             this.lastActionTime = tick;
             // Re-run the startup audit since the flow may have been interrupted.
             this.startupAuditDone = false;
+            this.startupAuditDeferredLogged = false;
             // Clear any in-flight auto-loop flows (they hold tick-based state
             // that is now stale). The cache handle is preserved — it reads
             // from the hidden setting which is not tick-based.
@@ -762,19 +936,47 @@ export class StarkMercher extends titan.Plugin {
             this.loopIdleSinceTick = -1;
             this.shortBreakDelayTicks = -1;
             this.nextActionEtaMin = -1;
-            this.checkedAtHalfEta = false;
+            this.lastIdleDiagTick = -1;
+            // NOTE: checkedAtHalfEta is NOT reset here — it survives
+            // disconnects (see resetInFlightActionState in state.ts).
+            // Invalidate cross-tick caches — the tick counter reset means
+            // all cached widget/inventory state is from a previous session.
+            invalidateGeWidgetCache();
+            invalidateInvCache();
+            // Invalidate the cached entity queries and world list — the
+            // scene reloaded on the disconnect/relogin/world hop.
+            invalidateEntityQueryCache();
+            invalidateLogoutDoorCache();
+            invalidateWorldListCache();
         }
 
         // --- Startup audit ---
         // On the first tick after enable (or after a tick-reset), audit the
         // GE state to determine if a buy-offer flow was in progress. If the
         // audit finds a recoverable state, resume the flow.
+        // Defer the audit if the player is on the title screen or settling
+        // after login — the GE state is not meaningful until the player is
+        // in-world. We check the title widget directly (via isTitleScreenVisible)
+        // because the login FSM may not have set titleFirstSeenAtMs yet on the
+        // very first tick after a reload. We also check the login FSM state
+        // variables (titleWaitingForGone, postLoginResumeAtMs) for the settle
+        // phase after the title click. The audit runs on the first tick after
+        // all of these clear.
         if (!this.startupAuditDone) {
-            this.startupAuditDone = true;
-            this.runStartupAudit();
+            if (isTitleScreenVisible(this) || this.titleWaitingForGone || this.postLoginResumeAtMs > 0) {
+                // Player is on title screen or settling — defer audit to next tick.
+                // Logged only once to avoid spam.
+                if (!this.startupAuditDeferredLogged) {
+                    this.startupAuditDeferredLogged = true;
+                    if (this.logInfoValue) titan.log('[Stark Mercher] Startup audit deferred — title screen / login settle in progress');
+                }
+            } else {
+                this.startupAuditDone = true;
+                this.runStartupAudit();
+            }
         }
 
-        // Run the auto-merch tick logic. (Only reached in Auto Merch mode —
+        // Run the auto-merch tick logic. (Only reached in Normal or Slow mode —
         // Paused mode returns at the top of onGameTick.)
         try {
             gameTick(this, tick);
@@ -789,9 +991,27 @@ export class StarkMercher extends titan.Plugin {
     // in Paused mode (no login, no break timer, no logout).
     onMainLoop = () => {
         if (this.terminated) return;
-        if (this.autoMode.value === 0) return;
+        if (this.autoModeValue === 0) return;
         try {
-            wallClockStep(this);
+            // Render-loop diagnostic (per Titan dev recommendation): log the
+            // client tick every 30s. If the tick freezes when FPS hits 0, the
+            // client's main loop is stalled (native handle exhaustion). If it
+            // keeps advancing, the loop is running but slow (GC pressure).
+            // Date.now() is pure JS (no native call); the tick read is one
+            // native call per 30s — negligible.
+            const now = Date.now();
+            if (this.logInfoValue && now - this.lastDiagLogMs >= 30000) {
+                this.lastDiagLogMs = now;
+                titan.logf('[Stark Mercher] diag: clientTick=%d', titan.state.client.tick);
+            }
+            // wallClockStep is all logged-out logic (break transitions, rotation,
+            // login step, account detection). When logged in, onGameTick handles
+            // everything — skip the function call entirely. Uses the cached
+            // plain-JS cachedIsLoggedIn field (no per-frame native read) updated
+            // in onEnable, onGameStateChanged, and onGameTick.
+            if (!this.cachedIsLoggedIn) {
+                wallClockStep(this);
+            }
         } catch (e) {
             titan.logf('[Stark Mercher] onMainLoop error: %s', String(e));
         }
@@ -801,14 +1021,36 @@ export class StarkMercher extends titan.Plugin {
     // Skipped in Paused mode — no logout detection, no nightly wake, no hop completion.
     onGameStateChanged = (event: titan.GameStateChangedEvent) => {
         if (this.terminated) return;
-        if (this.autoMode.value === 0) return;
+        if (this.autoModeValue === 0) return;
+        // Cache the login state so onMainLoop can skip wallClockStep when
+        // logged in without a per-frame native read.
+        this.cachedIsLoggedIn = event.newState === titan.LoginGameState.LoggedIn;
+        // Invalidate the cached isMembersWorld() result on any login state
+        // change — covers hop, break logout/login, unexpected logout/login,
+        // and account rotation. The world may have changed (or the player
+        // may be on a different world after logging back in).
+        invalidateMembersWorldCache();
+        // Invalidate cross-tick caches on any login state change — covers
+        // hop, break logout/login, unexpected logout/login, and account
+        // rotation. Widget and inventory state from the previous world/session
+        // is no longer valid.
+        invalidateGeWidgetCache();
+        invalidateBooleanStateCache();
+        invalidateInvCache();
+        // Invalidate the cached entity queries (GE clerks, GE booths, logout
+        // door) and the cached world list — the scene reloaded on the login
+        // state change (hop, break logout/login, unexpected logout/login,
+        // account rotation).
+        invalidateEntityQueryCache();
+        invalidateLogoutDoorCache();
+        invalidateWorldListCache();
         // Detect unexpected logout (not a bot-initiated break)
         if (event.newState !== titan.LoginGameState.LoggedIn &&
             event.newState !== titan.LoginGameState.HoppingWorld &&
             this.breakPhase === 'none') {
             if (this.unexpectedLogoutAtMs === 0) {
                 this.unexpectedLogoutAtMs = Date.now();
-                titan.logf('[Stark Mercher] Unexpected logout detected (gameState=%s)', String(event.newState));
+                if (this.logInfoValue) titan.logf('[Stark Mercher] Unexpected logout detected (gameState=%s)', String(event.newState));
                 saveBreakState(this);
             }
         }
@@ -829,7 +1071,28 @@ export class StarkMercher extends titan.Plugin {
     // Skipped in Paused mode.
     onChatMessage = (event: titan.ChatMessageEvent) => {
         if (this.terminated) return;
-        if (this.autoMode.value === 0) return;
+        if (this.autoModeValue === 0) return;
+        // Strip tags unconditionally so the GE completion check below can
+        // run regardless of the logDebug setting. The debug log also uses
+        // this stripped text.
+        const stripped = (event.message || '').replace(/<[^>]+>/g, '');
+        if (this.logDebugValue) {
+            titan.logf("[Stark Mercher] Chat: type=%d name=%s msg=%s",
+                event.type, event.name || '', stripped);
+        }
+        // Detect GE offer completions while an idle activity is active.
+        // "Grand Exchange: Finished buying X" / "Finished selling X" fires
+        // as a game message (type 0, empty name). When the bot is grinding
+        // an idle activity, the ETA-based timer may not have expired yet,
+        // but the bot should yield to GE operations immediately so it can
+        // collect, sell, and place new offers without delay. The
+        // idleActivityPhase guard prevents stale flags during normal GE
+        // operation (where completions are handled by the collect/sweep
+        // flows).
+        if (this.autoLoop.idleActivityPhase !== 'none'
+            && stripped.startsWith('Grand Exchange: Finished')) {
+            this.geOfferCompletedChatMs = Date.now();
+        }
         onHopChatMessage(this, event);
     };
 }
@@ -888,7 +1151,48 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
         // Reset failure counters — the login transition can cause false
         // strikes (e.g. GE not openable while the world is still loading).
         bot.autoLoop.failureCounters = {};
-        titan.log('[Stark Mercher] Post-login settle complete — resuming');
+        bot.inventoryOpenEnsured = false;
+        if (bot.logInfoValue) titan.log('[Stark Mercher] Post-login settle complete — resuming');
+    }
+
+    // After a hop or login, make sure the inventory tab is open before
+    // running the auto-loop. The world switcher can stay open after
+    // hopIngame() completes, and interacting with widgets (GE slots,
+    // inventory items) while it is still visible can trigger native null
+    // exceptions that auto-disable the plugin. Adapted from stark-mixology.
+    //
+    // CRITICAL: do NOT send Escape or click the inventory tab while the
+    // GE or bank interface is open. Escape closes both, and clicking the
+    // inventory tab also closes the GE. Both interfaces have their own
+    // inventory view, so neither action is needed while they are open.
+    if (!bot.hopInProgress) {
+        if (isGeOpen() || isBankOpen()) {
+            // GE or bank has its own inventory view — nothing to do.
+            bot.inventoryOpenEnsured = true;
+        } else if (isWorldSwitcherOpenCached()) {
+            if (tick % 5 === 0) {
+                if (bot.logDebugValue) titan.log('[Stark Mercher] World switcher still open after hop; closing with Escape');
+            }
+            sendKeyWithJitter(() => titan.keyboard.sendKey(titan.keyboard.Key.Escape), { reason: 'close world switcher' });
+            return;
+        } else {
+            // Send Escape once before opening the inventory to close any
+            // lingering full-screen interface. Gated on !inventoryOpenEnsured
+            // so it only fires once per hop/login.
+            if (!bot.inventoryOpenEnsured && !isInventoryOpen()) {
+                sendKeyWithJitter(() => titan.keyboard.sendKey(titan.keyboard.Key.Escape), { reason: 'open inventory (escape)' });
+            }
+            const opened = ensureInventoryOpen(bot);
+            if (opened) {
+                bot.inventoryOpenEnsured = true;
+                // Skip the rest of this tick so the inventory click is
+                // separated from any action.
+                return;
+            }
+            if (isInventoryOpen()) {
+                bot.inventoryOpenEnsured = true;
+            }
+        }
     }
 
     // Pause new actions while a hop or break is pending (waiting for a safe
@@ -897,11 +1201,26 @@ const tickLogic = (bot: StarkMercher, tick: number) => {
     if (shouldPauseForHopBoundary(bot)) return;
 
     // Throttle: block dispatch while the previous action's delay is pending.
-    if (shouldWait(bot)) return;
+    if (shouldWait(bot)) {
+        // Log "Delaying X ticks" once per action (when debug logging is on).
+        // This helps evaluate humanisation delays from logs — without it, only
+        // the total delay is logged at setAction time, and you can't tell
+        // whether the bot is actually waiting through it or stuck.
+        if (!bot.delayLogShown && bot.logDebugValue && bot.currentAction && bot.currentAction !== 'idle') {
+            const ticksSinceAction = tick - bot.actionStartTime;
+            const remaining = Math.max(0, bot.actionDelay - ticksSinceAction);
+            if (remaining > 0) {
+                titan.logf('[Stark Mercher] Delaying %dt (%s, %dt elapsed of %dt)',
+                    remaining, bot.currentAction, ticksSinceAction, bot.actionDelay);
+            }
+            bot.delayLogShown = true;
+        }
+        return;
+    }
 
     // --- Auto-merch loop ---
     // Run the automated merching loop. The loop handles: GE-open check,
     // collect, stale offers, selling, and buying. (Pausing is handled by the
-    // early return at the top of onGameTick, so we only get here in Auto Merch.)
+    // early return at the top of onGameTick, so we only get here in Normal or Slow.)
     autoLoopTick(bot, tick);
 };

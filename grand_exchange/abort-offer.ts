@@ -47,10 +47,11 @@ export interface AbortOfferOptions {
     /** Slot index 0-7 to abort. */
     slotIndex: number;
     /**
-     * Optional humanised delay function. Called as delayFn(base, triggerChance, max?)
-     * after each dispatching step. Returns the tick count to wait.
+     * Optional humanised delay function. Called as
+     * delayFn(base, triggerChance, max?, suppressDistractions?) after each
+     * dispatching step. Returns the tick count to wait.
      */
-    delayFn?: (base: number, triggerChance: number, max?: number) => number;
+    delayFn?: (base: number, triggerChance: number, max?: number, suppressDistractions?: boolean) => number;
     /**
      * Optional debug log callback.
      */
@@ -72,7 +73,7 @@ export class AbortOfferFlow {
     lastDelay: number = 1;
 
     readonly slotIndex: number;
-    private readonly delayFn: (base: number, triggerChance: number, max?: number) => number;
+    private readonly delayFn: (base: number, triggerChance: number, max?: number, suppressDistractions?: boolean) => number;
     private readonly debugLog: (msg: string) => void;
 
     private step = 0;
@@ -118,8 +119,9 @@ export class AbortOfferFlow {
     }
 
     private computeDelay(base: number = 1, triggerChance: number = 100, max?: number): void {
-        this.lastDelay = this.delayFn(base, triggerChance, max);
-        this.log(`Step ${this.step}: Delaying ${this.lastDelay} tick${this.lastDelay === 1 ? '' : 's'}`);
+        // suppressDistractions=true — these are mid-flow steps in a connected
+        // sequence of clicks where a 6-60s distraction pause is non-human.
+        this.lastDelay = this.delayFn(base, triggerChance, max, true);
     }
 
     private log(msg: string): void {
@@ -168,7 +170,7 @@ export class AbortOfferFlow {
         if (!clickOfferSlot(this.slotIndex)) {
             return this.waitTick();
         }
-        this.computeDelay(2, 30, 4);
+        this.computeDelay(1, 25, 4);
         this.advance();
         return true;
     }
@@ -190,7 +192,7 @@ export class AbortOfferFlow {
         if (!clickAbortOffer()) {
             return this.waitTick();
         }
-        this.computeDelay(2, 30, 4);
+        this.computeDelay(1, 25, 4);
         this.advance();
         return true;
     }
@@ -215,7 +217,7 @@ export class AbortOfferFlow {
             this.step = 6;
             this.waitTicks = 0;
             this.reattempts = 0;
-            this.computeDelay(2, 30, 4);
+            this.computeDelay(1, 25, 4);
             this.advance();
             return true;
         }
@@ -228,7 +230,7 @@ export class AbortOfferFlow {
         if (!clickBack()) {
             return this.waitTick();
         }
-        this.computeDelay(2, 30, 4);
+        this.computeDelay(1, 25, 4);
         this.advance();
         return true;
     }
@@ -250,7 +252,7 @@ export class AbortOfferFlow {
         if (!clickCollectToInventory()) {
             return this.waitTick();
         }
-        this.computeDelay(2, 30, 4);
+        this.computeDelay(1, 25, 4);
         this.advance();
         return true;
     }

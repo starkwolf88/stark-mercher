@@ -40,6 +40,7 @@ export const GE_AMOUNT_WIDGET = 30474266;
 // Dynamic child slots within GE_AMOUNT_WIDGET:
 export const GE_SELECTED_ITEM_SLOT = 27;  // shows the selected item's name
 export const GE_QTY_ENTER_SLOT = 7;       // "Enter quantity" button
+export const GE_QTY_ALL_SLOT = 6;          // "All" quantity button
 export const GE_PRICE_ENTER_SLOT = 12;    // "Enter price" button
 export const GE_PRICE_TEXT_SLOT = 41;     // shows "<n> coins" per-item price
 
@@ -93,7 +94,30 @@ export const GE_CLERK_IDS = [
 // --- GE zone coordinates ---------------------------------------------------
 export const GE_ZONE_CENTER = { x: 3165, y: 3490, plane: 0 };
 export const GE_ZONE_RADIUS = 20;
+/** Fallback walk point used when no stand-tile variation is desired. */
 export const GE_WALK_POINT = { x: 3165, y: 3485, plane: 0 };
+
+/** Plausible standing tiles around the GE area, near different clerks and
+ *  booths. On each walk-to-GE, the bot picks one at random so it doesn't
+ *  always stand on the same tile — a real human moves around the GE between
+ *  sessions and sometimes stands near a different clerk/booth.
+ *
+ *  All tiles are within GE_ZONE_RADIUS of GE_ZONE_CENTER and within
+ *  interaction range of at least one clerk or booth. */
+export const GE_STAND_TILES: { x: number; y: number; plane: number }[] = [
+    { x: 3165, y: 3485, plane: 0 }, // center-north (original default)
+    { x: 3163, y: 3486, plane: 0 }, // near NW clerk
+    { x: 3162, y: 3488, plane: 0 }, // west side
+    { x: 3166, y: 3486, plane: 0 }, // near NE clerk
+    { x: 3167, y: 3488, plane: 0 }, // east side
+    { x: 3165, y: 3488, plane: 0 }, // central
+    { x: 3164, y: 3490, plane: 0 }, // center-south
+    { x: 3166, y: 3490, plane: 0 }, // center-south-east
+    { x: 3163, y: 3492, plane: 0 }, // near SW clerk
+    { x: 3165, y: 3492, plane: 0 }, // south central
+    { x: 3167, y: 3492, plane: 0 }, // near SE clerk
+    { x: 3165, y: 3483, plane: 0 }, // north edge
+];
 
 // --- Slot counts -----------------------------------------------------------
 export const GE_SLOTS_MEMBERS = 8;

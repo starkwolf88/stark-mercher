@@ -2,8 +2,11 @@
 // World hopper — scheduled world hopping for anti-ban
 // ============================================================================
 // Adapted from stark-mixology's hopper. The bot hops to a random safe members
-// world at a profile-scheduled interval (18–45 min base). Hopping pauses the
-// auto-loop while the hop is in progress and for a short resume delay after.
+// world on a bimodal/burst interval (2–150 min). The hop timer is global (not
+// per-account) — it is shared across account rotations and persisted to the
+// hidden hopState setting so script reloads don't reset the schedule.
+// Hopping pauses the auto-loop while the hop is in progress and for a short
+// resume delay after.
 //
 // The hopper is simpler than mixology's: no stations, no levers, no batch
 // tracking. The safe boundary only checks that the player is idle (not
@@ -13,12 +16,40 @@
 import type { StarkMercher } from '../stark-mercher.js';
 import { sampleInt } from './session-profile.js';
 import { isAtSafeBoundary, getSafeBoundaryReason } from './session.js';
+import { invalidateMembersWorldCache, isGeOpen, isBankOpen, invalidateBooleanStateCache } from '../grand_exchange/widgets.js';
+import { invalidateNearGeCache, invalidateEntityQueryCache } from '../grand_exchange/clerk.js';
+import { invalidateLogoutDoorCache } from './logout.js';
 import { resetInFlightActionState } from '../general/state.js';
 import { resetLoginState } from './login.js';
 import { sendKeyWithJitter } from './click-jitter.js';
 
 const TICKS_PER_MINUTE = 100;
 const HOP_MAX_WAIT_MS = 45000;
+
+// --- World list cache -------------------------------------------------------
+// titan.state.world.list() returns the in-game world list (array of WorldInfo).
+// The list only changes on a world hop or login/logout transition (the client
+// re-fetches the list from the server). Caching it eliminates the per-call
+// native array allocation in pickWorld(), which fires when a hop is due.
+//
+// Invalidated via invalidateWorldListCache() on: hop completion,
+// onGameStateChanged (login/logout/hop), tick counter reset, and onDisable.
+let cachedWorldList: titan.World[] | null = null;
+
+/** Invalidates the cached world list. Call on hop completion,
+ *  onGameStateChanged (login/logout/hop), tick counter reset, and onDisable
+ *  so the next pickWorld call re-fetches the live list. */
+export const invalidateWorldListCache = (): void => {
+    cachedWorldList = null;
+};
+
+/** Returns the cached world list, populating it from a single
+ *  titan.state.world.list() call on first access. */
+const getWorldList = (): titan.World[] | null => {
+    if (cachedWorldList) return cachedWorldList;
+    cachedWorldList = titan.state.world.list();
+    return cachedWorldList;
+};
 
 const HOP_REGION_ANY = 0;
 const HOP_REGION_UK = 1;
@@ -59,8 +90,15 @@ function regionMatches(region: string, setting: number): boolean {
     }
 }
 
-function isWorldSafe(world: any, meta: any): { safe: boolean; reason?: string } {
-    if (!world.isMembers) return { safe: false, reason: 'not members (F2P)' };
+function isWorldSafe(world: any, meta: any, f2pMode: boolean): { safe: boolean; reason?: string } {
+    // F2P mode (autoMode === 3) must hop to F2P worlds; members accounts
+    // hop to members worlds. Hopping to a world the account can't access
+    // leaves the client stuck on the login screen after the hop.
+    if (f2pMode) {
+        if (world.isMembers) return { safe: false, reason: 'members world (F2P mode)' };
+    } else {
+        if (!world.isMembers) return { safe: false, reason: 'not members (F2P)' };
+    }
     if (world.isBeta) return { safe: false, reason: 'beta world' };
     if (!meta) return { safe: false, reason: 'no metadata' };
     if (meta.population < 0) return { safe: false, reason: 'population unknown' };
@@ -69,17 +107,17 @@ function isWorldSafe(world: any, meta: any): { safe: boolean; reason?: string } 
 }
 
 function debugLog(bot: StarkMercher, fmt: string, ...args: any[]): void {
-    if (bot.logDebug.value) titan.logf('[Stark Mercher] ' + fmt, ...args);
+    if (bot.logDebugValue) titan.logf('[Stark Mercher] ' + fmt, ...args);
 }
 
 function humanLog(bot: StarkMercher, fmt: string, ...args: any[]): void {
-    titan.logf('[Stark Mercher] ' + fmt, ...args);
+    if (bot.logInfoValue) titan.logf('[Stark Mercher] ' + fmt, ...args);
 }
 
 /** Pick a safe, live world in the chosen region. */
 function pickWorld(bot: StarkMercher): number | null {
     const current = titan.state.world.current();
-    const list = titan.state.world.list();
+    const list = getWorldList();
     if (!list || list.length === 0) {
         debugLog(bot, 'No in-game world list available for hopping');
         return null;
@@ -88,12 +126,13 @@ function pickWorld(bot: StarkMercher): number | null {
     const meta = titan.state.world.metadata() || [];
     const metaById = new Map<number, any>(meta.map((m: any) => [m.id, m]));
     const regionSetting = bot.hopRegion?.value ?? 0;
+    const f2pMode = bot.autoModeValue === 3;
 
     const candidates: number[] = [];
     for (const world of list) {
         if (world.id === current) continue;
         const m = metaById.get(world.id);
-        const safe = isWorldSafe(world, m);
+        const safe = isWorldSafe(world, m, f2pMode);
         if (!safe.safe) continue;
         if (!m) continue;
         if (!regionMatches(m.region, regionSetting)) continue;
@@ -112,24 +151,49 @@ function pickWorld(bot: StarkMercher): number | null {
     return pick;
 }
 
-/** Sample a hop interval in minutes with jitter and outlier. */
-function sampleHopInterval(bot: StarkMercher): number {
-    const h = bot.sessionProfile?.hopping;
-    if (!h) return sampleInt(Math.random, 5, 15);
+/** Sample a hop interval in minutes using a bimodal/burst distribution.
+ *  Global (not per-account) — the hop timer is shared across account
+ *  rotations.
+ *
+ *  Distribution:
+ *    - 70% "normal":  15–60 min (routine hop)
+ *    - 20% "burst":   2–8 min  (annoyed, hopping again soon)
+ *    - 10% "long":    60–150 min (settled in, not hopping for a while)
+ *
+ *  After a burst hop, the next interval has a 50% chance of being another
+ *  burst, simulating the human pattern of hopping 2–3 times in quick
+ *  succession (e.g. crowded world → hop → still bad → hop again → fine).
+ *  This replaces the old flat 5–45 min uniform distribution, which produced
+ *  a statistically uniform hop pattern that doesn't match any human reason
+ *  for hopping. */
+function sampleHopInterval(wasBurst: boolean): number {
+    const r = Math.random();
+    // If the previous hop was a burst, 50% chance of another burst
+    if (wasBurst && r < 0.50) {
+        return sampleInt(Math.random, 2, 8);
+    }
+    if (r < 0.20) {
+        return sampleInt(Math.random, 2, 8);   // burst
+    }
+    if (r < 0.90) {
+        return sampleInt(Math.random, 15, 60); // normal
+    }
+    return sampleInt(Math.random, 60, 150);    // long
+}
 
-    let minutes = sampleInt(Math.random, h.minMinutes, h.maxMinutes);
-    if (h.jitterMinutes > 0) {
-        minutes += sampleInt(Math.random, -h.jitterMinutes, h.jitterMinutes);
+/** Persist the global hop timer to the hidden setting so it survives
+ *  script reloads. Called whenever nextHopAtMs or hopCount changes. */
+function saveHopState(bot: StarkMercher): void {
+    try {
+        const state = {
+            nextHopAtMs: bot.nextHopAtMs,
+            hopCount: bot.hopCount,
+        };
+        bot.hopStateSetting.value = JSON.stringify(state);
+    } catch {
+        // Setting write failures are non-fatal — the in-memory timer
+        // still works; we just lose reload persistence.
     }
-    const outlierRoll = Math.random() * 100;
-    if (outlierRoll < h.outlierChance) {
-        let mult = h.outlierMultiplier;
-        if (Math.random() * 100 < h.outlierNestedChance) {
-            mult *= h.outlierNestedMultiplier;
-        }
-        minutes = Math.max(1, Math.round(minutes * mult));
-    }
-    return Math.max(1, minutes);
 }
 
 function sampleHopCooldown(bot: StarkMercher): number {
@@ -156,7 +220,10 @@ function scheduleNextHop(bot: StarkMercher, tick: number): void {
         bot.nextHopTargetTicks = -1;
         return;
     }
-    const minutes = sampleHopInterval(bot);
+    const minutes = sampleHopInterval(bot.lastHopWasBurst);
+    // Track whether this scheduled interval is a burst, so the next
+    // sampleHopInterval call can bias toward another burst.
+    bot.lastHopWasBurst = minutes <= 8;
     const now = Date.now();
     bot.nextHopTick = tick + minutes * TICKS_PER_MINUTE;
     bot.nextHopAtMs = now + minutes * 60000;
@@ -166,7 +233,9 @@ function scheduleNextHop(bot: StarkMercher, tick: number): void {
     bot.hopInProgress = false;
     bot.hopSawLoggedOut = false;
     bot.forceHopPending = false;
-    debugLog(bot, 'Next world hop scheduled for tick %d (%d minutes from now)', bot.nextHopTick, minutes);
+    saveHopState(bot);
+    debugLog(bot, 'Next world hop scheduled for tick %d (%d minutes from now)%s',
+        bot.nextHopTick, minutes, bot.lastHopWasBurst ? ' [burst]' : '');
 }
 
 /** Complete a world hop that has already been dispatched. */
@@ -202,9 +271,21 @@ export function completeHop(bot: StarkMercher, tick: number): void {
     bot.hopResumeAtMs = Date.now() + resumeMs;
     resetLoginState(bot);
     resetInFlightActionState(bot);
+    bot.inventoryOpenEnsured = false;
     bot.hopJustCompleted = true;
     bot.hopJustCompletedAtMs = Date.now();
+    // Invalidate the cached isMembersWorld() result — the world may have
+    // changed (e.g. hopped from a members to F2P world or vice versa).
+    invalidateMembersWorldCache();
+    invalidateBooleanStateCache();
+    invalidateNearGeCache();
+    // Invalidate the cached entity queries (GE clerks, GE booths, logout
+    // door) and the cached world list — the scene reloaded on the hop.
+    invalidateEntityQueryCache();
+    invalidateLogoutDoorCache();
+    invalidateWorldListCache();
     bot.hopCount++;
+    saveHopState(bot);
     humanLog(bot, 'World hop completed, waiting %d ms before resuming', resumeMs);
 }
 
@@ -219,6 +300,15 @@ export function cancelHop(bot: StarkMercher, tick: number, reason: string): void
     bot.hopCooldownTicks = sampleHopCooldown(bot);
     bot.nextHopTick = tick + bot.hopCooldownTicks;
     bot.nextHopAtMs = Date.now() + bot.hopCooldownTicks * 600;
+    // Safety net: the native hopIngame() call is fire-and-forget — it may
+    // still be executing its door/world-switcher click sequence after we
+    // cancel on the JS side (e.g. when the world switcher is blocked by a
+    // busy action). Pausing the auto-loop for 3s prevents it from
+    // immediately trying to open the GE while those lingering native clicks
+    // are still landing, which caused click spam in logs (door + world
+    // switcher clicks interleaved with GE-open clicks).
+    bot.hopResumeAtMs = Date.now() + 3000;
+    saveHopState(bot);
     humanLog(bot, '%s; next hop in %d ticks', reason, bot.hopCooldownTicks);
 }
 
@@ -240,7 +330,7 @@ export function onChatMessage(bot: StarkMercher, event: titan.ChatMessageEvent):
  * or being dispatched, and the normal action loop should be skipped.
  */
 export function hopStep(bot: StarkMercher, tick: number): boolean {
-    if (!bot.hopWorlds || (!bot.hopWorlds.value && !bot.forceHopPending)) return false;
+    if (!bot.hopWorlds || (!bot.hopWorldsValue && !bot.forceHopPending)) return false;
     if (bot.breakPhase !== 'none') return false;
     if (!bot.sessionProfile) return false;
 
@@ -298,9 +388,18 @@ export function hopStep(bot: StarkMercher, tick: number): boolean {
         return false;
     }
 
-    // Close GE interface before hopping — the world switcher may not open
-    // if a dialog is open. Escape is a safe synchronous close.
-    if (titan.utils.bank.isOpen) {
+    // Close GE interface before hopping — the world switcher is blocked by
+    // a "busy action" if the GE interface is open, causing the hop to fail
+    // and the native hopIngame() sequence to spam door/world-switcher clicks
+    // that conflict with the auto-loop. Escape is a safe synchronous close.
+    if (isGeOpen()) {
+        if (tick % 5 === 0) debugLog(bot, 'Hop safe but GE is open; closing with Escape');
+        sendKeyWithJitter(() => titan.keyboard.sendKey(titan.keyboard.Key.Escape), { reason: 'close GE for hop' });
+        return true;
+    }
+
+    // Close bank interface before hopping — same reason as GE above.
+    if (isBankOpen()) {
         if (tick % 5 === 0) debugLog(bot, 'Hop safe but bank is open; closing with Escape');
         sendKeyWithJitter(() => titan.keyboard.sendKey(titan.keyboard.Key.Escape), { reason: 'close bank for hop' });
         return true;
@@ -315,6 +414,7 @@ export function hopStep(bot: StarkMercher, tick: number): boolean {
         const cooldownMs = bot.hopCooldownTicks * 600;
         bot.nextHopTick = tick + bot.hopCooldownTicks;
         bot.nextHopAtMs = Date.now() + cooldownMs;
+        saveHopState(bot);
         return false;
     }
 

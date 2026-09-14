@@ -198,7 +198,7 @@ function samplePreLogoutDelay(rng) {
 // The mercher's cycle: open GE → check stale offers → abort/sell/buy → idle
 // Each flow has multiple steps with createDelay() calls.
 // When all slots are occupied and nothing to do, idle until short break.
-// Nightly sleep logs out for 3.5-6.5h.
+// Nightly sleep logs out for 4.5-7.5h.
 
 // Buy flow steps (from buy-offer.ts): ~21 steps, each with createDelay
 // base=1 or 2, triggerChance=35, max=5

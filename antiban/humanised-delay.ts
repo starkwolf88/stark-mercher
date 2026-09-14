@@ -42,6 +42,16 @@ export interface DelayProfile {
     jitterAmplifyMinTicks: number;
     /** 15-30 ticks maximum for the amplify pause. */
     jitterAmplifyMaxTicks: number;
+    /** 2-4% chance of a micro-distraction ("glanced at chat/wiki").
+     *  Independent of triggerChance and bypasses max — adds 10-40 ticks
+     *  (6-24s) to the delay. More frequent than the rare distraction event
+     *  but shorter, creating a visible mid-length tail in the reaction-time
+     *  distribution that a tight max cap would otherwise eliminate. */
+    microDistractionChance: number;
+    /** 10-20 ticks minimum for the micro-distraction pause. */
+    microDistractionMinTicks: number;
+    /** 30-40 ticks maximum for the micro-distraction pause. */
+    microDistractionMaxTicks: number;
 }
 
 // --- Deterministic PRNG (same pattern as typing-profile.ts) ----------------
@@ -91,6 +101,12 @@ const AMPLIFY_MIN_TICKS_MIN = 5;
 const AMPLIFY_MIN_TICKS_MAX = 15;
 const AMPLIFY_MAX_TICKS_MIN = 15;
 const AMPLIFY_MAX_TICKS_MAX = 30;
+const MICRO_DISTRACT_CHANCE_MIN = 0.02;
+const MICRO_DISTRACT_CHANCE_MAX = 0.04;
+const MICRO_DISTRACT_MIN_TICKS_MIN = 10;
+const MICRO_DISTRACT_MIN_TICKS_MAX = 20;
+const MICRO_DISTRACT_MAX_TICKS_MIN = 30;
+const MICRO_DISTRACT_MAX_TICKS_MAX = 40;
 
 export const generateDelayProfile = (accountName: string): DelayProfile => {
     const rng = mulberry32(hashString(accountName));
@@ -105,6 +121,9 @@ export const generateDelayProfile = (accountName: string): DelayProfile => {
         jitterAmplifyChance: sampleFloat(rng, AMPLIFY_CHANCE_MIN, AMPLIFY_CHANCE_MAX),
         jitterAmplifyMinTicks: sampleInt(rng, AMPLIFY_MIN_TICKS_MIN, AMPLIFY_MIN_TICKS_MAX),
         jitterAmplifyMaxTicks: sampleInt(rng, AMPLIFY_MAX_TICKS_MIN, AMPLIFY_MAX_TICKS_MAX),
+        microDistractionChance: sampleFloat(rng, MICRO_DISTRACT_CHANCE_MIN, MICRO_DISTRACT_CHANCE_MAX),
+        microDistractionMinTicks: sampleInt(rng, MICRO_DISTRACT_MIN_TICKS_MIN, MICRO_DISTRACT_MIN_TICKS_MAX),
+        microDistractionMaxTicks: sampleInt(rng, MICRO_DISTRACT_MAX_TICKS_MIN, MICRO_DISTRACT_MAX_TICKS_MAX),
     };
 };
 
@@ -121,10 +140,14 @@ export const setDelayProfile = (profile: DelayProfile): void => {
 
 export const setDelayProfileForAccount = (accountName: string): DelayProfile => {
     // Check hardcoded profiles first — these are manually curated per account.
-    const hardcoded = (hardcodedProfiles as Record<string, DelayProfile>)[accountName];
+    // Merge with the default profile so any newly-added fields (e.g.
+    // microDistraction*) default sensibly when older JSON entries don't
+    // include them.
+    const hardcoded = (hardcodedProfiles as Record<string, Partial<DelayProfile>>)[accountName];
     if (hardcoded) {
-        activeProfile = hardcoded;
-        return hardcoded;
+        const merged: DelayProfile = { ...defaultProfile, ...hardcoded };
+        activeProfile = merged;
+        return merged;
     }
     // Fall back to deterministic generation from the account name.
     const profile = generateDelayProfile(accountName);
@@ -134,11 +157,63 @@ export const setDelayProfileForAccount = (accountName: string): DelayProfile => 
 
 export const getActiveDelayProfile = (): DelayProfile | null => activeProfile;
 
+// --- Diurnal pace (fatigue) ------------------------------------------------
+// A smooth, monotonic drift in action speed across the waking day. After
+// nightly sleep ends, the player is "fresh" (0% fatigue, 20% faster than
+// baseline). As the day progresses, fatigue increases linearly toward 100%
+// just before the next nightly sleep (5% slower than baseline). This models
+// real circadian rhythm — a short break doesn't reset fatigue, only a full
+// night's sleep does.
+//
+//   paceMultiplier = PACE_FRESH + (fatigueFraction * (PACE_TIRED - PACE_FRESH))
+//   fatigueFraction = clamp((now - dayStartMs) / (dayEndMs - dayStartMs), 0, 1)
+//
+// The multiplier is applied to the FINAL delay (after all layers), so base,
+// hesitation, outliers, and distractions all scale together with freshness.
+
+const PACE_FRESH = 0.8;  // 0% fatigue — 20% faster than baseline
+const PACE_TIRED = 1.05; // 100% fatigue — 5% slower than baseline
+
+let dayStartMs = 0; // wall-clock ms when the waking day started (after nightly sleep)
+let dayEndMs = 0;   // wall-clock ms when the next nightly sleep begins
+
+/** Set the waking-day bounds. Called after nightly sleep ends and when the
+ *  nightly schedule is recomputed. If both are 0, the pace multiplier
+ *  defaults to 1.0 (no drift — safe fallback for development / pre-login). */
+export const setDayBounds = (startMs: number, endMs: number): void => {
+    dayStartMs = startMs;
+    dayEndMs = endMs;
+};
+
+/** Current fatigue as a 0-100 percentage. 0% = just woke up, 100% = about
+ *  to sleep. Returns 0 if day bounds are not set. */
+export const getFatiguePercent = (): number => {
+    if (dayStartMs <= 0 || dayEndMs <= dayStartMs) return 0;
+    const now = Date.now();
+    const fraction = (now - dayStartMs) / (dayEndMs - dayStartMs);
+    return Math.max(0, Math.min(1, fraction)) * 100;
+};
+
+/** Current pace multiplier derived from fatigue. 0.8 at 0% fatigue,
+ *  1.05 at 100% fatigue. Returns 1.0 if day bounds are not set. */
+const getPaceMultiplier = (): number => {
+    if (dayStartMs <= 0 || dayEndMs <= dayStartMs) return 1.0;
+    const now = Date.now();
+    const fraction = Math.max(0, Math.min(1, (now - dayStartMs) / (dayEndMs - dayStartMs)));
+    return PACE_FRESH + fraction * (PACE_TIRED - PACE_FRESH);
+};
+
 // --- createDelay() ---------------------------------------------------------
 // base:        guaranteed minimum delay in ticks (clamped to >= 1).
 // triggerChance: 0-100, % chance that hesitation/outlier/amplify layers fire.
 // max:          optional ceiling — clips the final delay after all layers
 //               EXCEPT the rare distraction event (which bypasses max).
+// suppressDistractions: when true, the micro-distraction and rare-distraction
+//               layers are skipped entirely. Use this for mid-flow steps
+//               (buy/sell/abort offer flows) where a 6-60s pause between
+//               connected clicks is non-human. The distraction layers still
+//               fire between independent actions (idle, walk, open GE, collect)
+//               where a human would actually glance at chat or tab out.
 //
 // Structure:
 //   ALWAYS applies (independent of triggerChance):
@@ -148,8 +223,12 @@ export const getActiveDelayProfile = (): DelayProfile | null => activeProfile;
 //     3. Hesitation — 1.5-3x multiplier ("paused to think")
 //     4. Outlier — 3-8% chance of 1.3-1.8x (nested 1.3-1.5x)
 //     5. Amplify — 0.5-2% chance of +5-30 ticks ("looked away")
-//   RARE (independent of everything, bypasses max):
-//     6. Distraction — 0.1% chance of +20-60 ticks (12-36s "tabbed out")
+//   RARE (independent of everything, bypasses max, skipped when
+//   suppressDistractions is true):
+//     6. Micro-distraction — 2-4% chance of +10-40 ticks (6-24s "glanced
+//        at chat/wiki"). Fires roughly 2-4 times per ~100 calls, creating
+//        a visible mid-length tail in the reaction-time distribution.
+//     7. Distraction — 0.1% chance of +30-100 ticks (18-60s "tabbed out")
 //        Fires roughly once per ~1000 delay calls (~once per hour of active
 //        play). This breaks any hard ceiling pattern that would otherwise
 //        make the delay distribution look artificial over long sessions.
@@ -157,7 +236,19 @@ export const getActiveDelayProfile = (): DelayProfile | null => activeProfile;
 // This ensures every step has micro-variance (never identical consecutive
 // delays) while the heavier "human paused" effects fire at the trigger rate.
 // Use max to cap mechanical steps so triggered delays don't exceed 3-6 ticks.
-export const createDelay = (base: number, triggerChance: number, max?: number): number => {
+//
+// After each call, getLastDelayLayers() returns a string describing which
+// humanisation layers fired (e.g. "hesitation+outlier", "micro-distraction",
+// "rare-distraction"). Empty string means only base+bias+jitter applied.
+
+let lastDelayLayers = '';
+
+export const getLastDelayLayers = (): string => lastDelayLayers;
+
+export const createDelay = (base: number, triggerChance: number, max?: number, suppressDistractions: boolean = false): number => {
+    // Reset layer tracking for this call.
+    lastDelayLayers = '';
+
     // Clamp base to minimum 1 — never return 0 or negative.
     const b = Math.max(1, Math.floor(base));
 
@@ -166,6 +257,7 @@ export const createDelay = (base: number, triggerChance: number, max?: number): 
     const p = activeProfile ?? defaultProfile;
 
     let delay = b;
+    const layers: string[] = [];
 
     // --- ALWAYS: micro-variance layers (independent of triggerChance) ---
 
@@ -188,6 +280,7 @@ export const createDelay = (base: number, triggerChance: number, max?: number): 
         // 3. Hesitation — stretch the delay by the profile's hesitation multiplier.
         //    This is the main "human paused to think" effect.
         delay = Math.max(1, Math.round(delay * p.hesitationMultiplier));
+        layers.push('hesitation');
 
         // 4. Delay outlier — long-tail stretch (inspired by applyDelayOutlier).
         //    3-8% chance of multiplying by 1.3-1.8x, with a nested 15-25% chance
@@ -196,6 +289,9 @@ export const createDelay = (base: number, triggerChance: number, max?: number): 
             delay = Math.round(delay * p.outlierMultiplier);
             if (roll() < p.outlierNestedChance) {
                 delay = Math.round(delay * p.outlierNestedMultiplier);
+                layers.push('outlier+nested');
+            } else {
+                layers.push('outlier');
             }
         }
 
@@ -205,28 +301,66 @@ export const createDelay = (base: number, triggerChance: number, max?: number): 
         if (roll() < p.jitterAmplifyChance) {
             const amplify = sampleInt(roll2rng, p.jitterAmplifyMinTicks, p.jitterAmplifyMaxTicks);
             delay += amplify;
+            layers.push('amplify');
         }
     }
 
+    // --- MICRO-DISTRACTION: mid-length tail (bypasses max) ---
+    // 2-4% chance (per-account) of adding 10-40 ticks (6-24s), simulating
+    // "glanced at chat/wiki for a moment." Fires independently of
+    // triggerChance and is NOT clipped by max. This creates a visible
+    // mid-length tail in the reaction-time distribution — more frequent
+    // than the rare distraction below but shorter, so the bot sometimes
+    // takes 6-24s to react instead of always 1-8 ticks. Over ~100 calls
+    // (roughly 5-10 min of active play), this fires ~2-4 times.
+    //
+    // Skipped when suppressDistractions is true — mid-flow steps (buy/sell/
+    // abort offer flows) are connected sequences of clicks where a 6-24s
+    // pause is non-human. The distraction layers fire between independent
+    // actions (idle, walk, open GE, collect) where a human would actually
+    // glance at chat or tab out.
+    let distracted = false;
+    if (!suppressDistractions && roll() < p.microDistractionChance) {
+        const micro = sampleInt(roll2rng, p.microDistractionMinTicks, p.microDistractionMaxTicks);
+        delay += micro;
+        distracted = true;
+        layers.push('micro-distraction');
+    }
+
     // --- RARE: distraction event (bypasses max) ---
-    // 0.1% chance per call of a 20-60 tick (12-36s) pause, simulating
+    // 0.1% chance per call of a 30-100 tick (18-60s) pause, simulating
     // "tabbed out to check something." This fires independently of
     // triggerChance and is NOT clipped by max, ensuring the delay
     // distribution has an unbounded long tail that no hard ceiling
     // could produce. Over ~1000 calls (roughly an hour of active play),
     // this fires ~1 time.
-    let distracted = false;
-    if (roll() < 0.001) {
-        const distraction = sampleInt(roll2rng, 20, 60);
+    //
+    // Skipped when suppressDistractions is true (same rationale as above).
+    if (!suppressDistractions && roll() < 0.001) {
+        const distraction = sampleInt(roll2rng, 30, 100);
         delay += distraction;
         distracted = true;
+        layers.push('rare-distraction');
+    }
+
+    // --- Diurnal pace multiplier ---
+    // Applied to the final delay (after all layers) so the entire reaction
+    // time scales with freshness. 0.8x when fresh (morning), 1.05x when tired
+    // (end of day). This is a smooth monotonic drift — no periodicity.
+    const paceMultiplier = getPaceMultiplier();
+    if (paceMultiplier !== 1.0) {
+        delay = Math.max(1, Math.round(delay * paceMultiplier));
     }
 
     // Final clamp — never below 1, and clip to max if provided.
     // The distraction event bypasses the max cap so the long tail
     // is preserved even on mechanical steps with low max values.
     const result = Math.max(1, delay);
-    if (distracted) return result;
+    if (distracted) {
+        lastDelayLayers = layers.join('+');
+        return result;
+    }
+    lastDelayLayers = layers.join('+');
     return (max !== undefined && max > 0) ? Math.min(result, max) : result;
 };
 
@@ -246,4 +380,7 @@ const defaultProfile: DelayProfile = {
     jitterAmplifyChance: 0.01,
     jitterAmplifyMinTicks: 10,
     jitterAmplifyMaxTicks: 20,
+    microDistractionChance: 0.03,
+    microDistractionMinTicks: 15,
+    microDistractionMaxTicks: 35,
 };

@@ -41,10 +41,11 @@ import {
     auditGeState,
     getOfferSlotState,
     scanSearchResults,
+    scanSearchResultsUnique,
     type GeAudit,
     type OfferSlotState,
 } from './widgets.js';
-import { isTyping } from '../input/typing.js';
+import { isTyping, cancelTyping } from '../input/typing.js';
 import { cancelTypingMistakeSequence } from '../input/typing-mistakes.js';
 import { formatGeInput } from '../general/helpers.js';
 
@@ -60,11 +61,12 @@ export interface BuyOfferOptions {
     /** Price per item. */
     price: number;
     /**
-     * Optional humanised delay function. Called as delayFn(base, triggerChance, max?)
-     * after each dispatching step. Returns the tick count to wait. If not
-     * provided, defaults to the base (no humanisation).
+     * Optional humanised delay function. Called as
+     * delayFn(base, triggerChance, max?, suppressDistractions?) after each
+     * dispatching step. Returns the tick count to wait. If not provided,
+     * defaults to the base (no humanisation).
      */
-    delayFn?: (base: number, triggerChance: number, max?: number) => number;
+    delayFn?: (base: number, triggerChance: number, max?: number, suppressDistractions?: boolean) => number;
     /**
      * Optional debug log callback. Called before each action with a
      * human-readable description of what the step is about to do.
@@ -92,12 +94,21 @@ export class BuyOfferFlow {
     get itemName(): string { return this._itemName; }
     readonly quantity: number;
     readonly price: number;
-    private readonly delayFn: (base: number, triggerChance: number, max?: number) => number;
+    private readonly delayFn: (base: number, triggerChance: number, max?: number, suppressDistractions?: boolean) => number;
     private readonly debugLog: (msg: string) => void;
 
     private step = 0;
     private waitTicks = 0;
     private typingStarted = false;
+    // Early-stop search typing: when the desired item appears as the unique
+    // GE search result, we stop typing early (e.g. "magp" for "Magpie impling
+    // jar"). This is both faster and more humanlike — real players stop
+    // typing once they see their item.
+    //   earlyStopPending  — unique result spotted, waiting for the looking
+    //                       delay before advancing to step 5.
+    //   earlyStopLookTicks — ticks remaining in the "looking at results" delay.
+    private earlyStopPending = false;
+    private earlyStopLookTicks = 0;
     // Re-attempt counter per step. Reset on advance(). If an action fails
     // (returns false or the expected state doesn't appear), we re-attempt
     // up to MAX_REATTEMPTS times before failing. This prevents spam-clicking:
@@ -108,6 +119,26 @@ export class BuyOfferFlow {
     // we skip the price entry steps (13-16) and go straight to validation
     // (step 17) instead of clicking "Enter price".
     private _skipPriceEntry = false;
+    // Set true the first time waitForConfirm() (step 19) observes the offer
+    // config screen has closed. Ensures the one-time waitTicks reset only
+    // fires on the open->closed transition, not every tick afterwards —
+    // without this guard, the reset runs every tick and the slot-occupied
+    // grace counter can never accumulate, causing an infinite
+    // active-but-stuck loop (the bot ticks the buy flow forever with no
+    // state transition, completion, or failure log).
+    private configClosedObserved = false;
+    // Set by resumeFromState() when recovering from a stuck price or
+    // quantity prompt. The prompt field may already contain partial or
+    // complete text from before the reload — re-typing would append to it
+    // (e.g. "1103" + "1103" = "11031103"). Instead, we Escape to close the
+    // prompt (discarding the field contents), wait for it to close, then
+    // re-click the "Enter price/quantity" button to open a fresh prompt
+    // before typing from scratch.
+    //   _needsEscapeReset — true when we need to Escape before the normal
+    //                       click-enter step logic runs.
+    //   _escapeSent       — true once the Escape key has been dispatched.
+    private _needsEscapeReset = false;
+    private _escapeSent = false;
 
     constructor(opts: BuyOfferOptions) {
         this.quantity = opts.quantity;
@@ -152,21 +183,51 @@ export class BuyOfferFlow {
     //   - Offer config open with correct item but wrong/missing qty → step 7 (click qty enter)
     //   - Offer config open with wrong item → fail (can't safely recover)
     //   - Search prompt open → step 3 (start typing)
-    //   - Price prompt open → step 14 (start typing price)
+    //   - Quantity prompt open → step 7 (escape + re-click qty enter + type)
+    //   - Price prompt open → step 12 (escape + re-click price enter + type)
     //   - GE main screen with a slot matching our item → offer already placed, done
     //   - GE main screen, no matching slot → start fresh from step 0
     resumeFromState(audit: GeAudit): void {
         if (this.status !== 'in_progress') return;
+
+        // Cancel any stuck typing/mistake state from before the reload.
+        // After a hot-reload the SDK typing state is gone, but the
+        // mistake-sequence flag lives in JS module scope and may still be
+        // set. Calling cancelTyping() is a safe defensive reset.
+        cancelTyping();
+        cancelTypingMistakeSequence();
 
         if (!audit.geOpen) {
             this.fail('GE is not open — cannot resume');
             return;
         }
 
+        // Quantity prompt is open — we were mid-quantity-entry.
+        // This must be checked BEFORE the price prompt case because the
+        // prompt widget is visible during both prompts.
+        // The prompt field may already contain partial text from before the
+        // reload — re-typing would append to it. Instead, we Escape to close
+        // the prompt (discarding the field), then re-click "Enter quantity"
+        // to open a fresh prompt before typing from scratch.
+        if (audit.screen === 'quantity_prompt') {
+            this.log('Resume: quantity prompt open — escaping and re-entering to clear field');
+            this.step = 7; // clickQtyEnterStep — will Escape first via _needsEscapeReset
+            this.typingStarted = false;
+            this._needsEscapeReset = true;
+            this._escapeSent = false;
+            this.resolveSlotFromAudit(audit);
+            return;
+        }
+
         // Price prompt is open — we were mid-price-entry.
+        // Same rationale as the quantity prompt case: Escape to discard any
+        // existing field text, then re-click "Enter price" for a fresh prompt.
         if (audit.screen === 'price_prompt') {
-            this.log('Resume: price prompt open — resuming at price typing');
-            this.step = 14;
+            this.log('Resume: price prompt open — escaping and re-entering to clear field');
+            this.step = 12; // clickPriceEnterStep — will Escape first via _needsEscapeReset
+            this.typingStarted = false;
+            this._needsEscapeReset = true;
+            this._escapeSent = false;
             this.resolveSlotFromAudit(audit);
             return;
         }
@@ -292,7 +353,12 @@ export class BuyOfferFlow {
         this.step++;
         this.waitTicks = 0;
         this.typingStarted = false;
+        this.earlyStopPending = false;
+        this.earlyStopLookTicks = 0;
         this.reattempts = 0;
+        this.configClosedObserved = false;
+        this._needsEscapeReset = false;
+        this._escapeSent = false;
     }
 
     // computeDelay()
@@ -300,9 +366,12 @@ export class BuyOfferFlow {
     // lastDelay so the caller can read it for setAction(). Uses base=1,
     // triggerChance=100 (full humanisation on every step — tweak later).
     // max: optional ceiling to clip the delay (useful for testing).
+    // suppressDistractions defaults to true — these are mid-flow steps in a
+    // connected sequence of clicks where a 6-60s distraction pause is
+    // non-human. The distraction layers fire between independent actions
+    // (idle, walk, open GE, collect) via the auto-loop's createDelay calls.
     private computeDelay(base: number = 1, triggerChance: number = 100, max?: number): void {
-        this.lastDelay = this.delayFn(base, triggerChance, max);
-        this.log(`Step ${this.step}: Delaying ${this.lastDelay} tick${this.lastDelay === 1 ? '' : 's'}`);
+        this.lastDelay = this.delayFn(base, triggerChance, max, true);
     }
 
     // log()
@@ -331,6 +400,8 @@ export class BuyOfferFlow {
                 cancelTypingMistakeSequence();
                 this.waitTicks = 0;
                 this.typingStarted = false;
+                this.earlyStopPending = false;
+                this.earlyStopLookTicks = 0;
             }
         }
         return false; // no action dispatched, just polling
@@ -372,7 +443,7 @@ export class BuyOfferFlow {
         if (!clickBuySlot(this.slotIndex)) {
             return this.waitTick(); // widget not ready, retry
         }
-        this.computeDelay(2, 30, 4);
+        this.computeDelay(1, 25, 4);
         this.advance();
         return true;
     }
@@ -406,8 +477,60 @@ export class BuyOfferFlow {
     }
 
     // Step 4: Wait for typing to complete.
+    // Early-stop: while typing is in progress, check each tick whether the
+    // desired item has appeared as the UNIQUE search result (e.g. "magp"
+    // uniquely matches "Magpie impling jar"). If so, cancel the remaining
+    // typing — real players stop typing once they see their item. A minimum
+    // prefix of 3 characters is required to avoid stopping after 1-2 chars,
+    // which would look unnatural.
+    //
+    // Looking delay: after spotting the unique result, there's a ~40% chance
+    // of a 1-2 tick "looking at the results" pause before advancing to step 5,
+    // simulating the human moment of registering the result before clicking.
     private waitForSearchTyping(): boolean {
+        // If we're in the looking-delay phase, count it down.
+        if (this.earlyStopPending) {
+            if (this.earlyStopLookTicks > 0) {
+                this.earlyStopLookTicks--;
+                return this.waitTick();
+            }
+            // Looking delay done — advance to step 5 (click search result).
+            this.log('Step 4: Early-stop looking delay complete — advancing to click result');
+            this.computeDelay(1, 30, 4);
+            this.advance();
+            return true;
+        }
+
         if (isTyping()) {
+            // Check for early-stop opportunity while typing is in progress.
+            // Only check if at least 3 characters have been typed (the SDK
+            // types char-by-char, so we can't know exactly how many chars
+            // are in the search box — but scanSearchResultsUnique reads the
+            // actual result widgets, so if the unique result is visible, the
+            // minimum prefix has already been typed by the SDK).
+            // Skip the check during a typing-mistake sequence — the wrong
+            // character means the search won't match our target item, so
+            // scanSearchResultsUnique won't return unique=true. This is the
+            // correct behavior: we only early-stop when the correct text has
+            // been typed and the right result is showing.
+            const scan = scanSearchResultsUnique(this._itemName);
+            if (scan.unique) {
+                // Unique result spotted — cancel typing and either advance
+                // immediately or add a looking delay.
+                this.log(`Step 4: Early-stop — unique result for "${this._itemName}" spotted (${scan.visibleCount} result), cancelling typing`);
+                cancelTyping();
+                // 40% chance of a 1-2 tick "looking at results" delay.
+                if (Math.random() < 0.4) {
+                    this.earlyStopLookTicks = Math.random() < 0.5 ? 1 : 2;
+                    this.earlyStopPending = true;
+                    this.log(`Step 4: Looking delay — waiting ${this.earlyStopLookTicks}t before clicking result`);
+                    return this.waitTick();
+                }
+                // No looking delay — advance immediately.
+                this.computeDelay(1, 30, 4);
+                this.advance();
+                return true;
+            }
             return this.waitTick();
         }
         this.computeDelay(1, 30, 4);
@@ -435,7 +558,7 @@ export class BuyOfferFlow {
         if (!clickSearchResult(matchIndex)) {
             return this.waitTick();
         }
-        this.computeDelay(2, 30, 4);
+        this.computeDelay(1, 25, 4);
         this.advance();
         return true;
     }
@@ -512,11 +635,30 @@ export class BuyOfferFlow {
 
     // Step 8: Click the "Enter quantity" button.
     private clickQtyEnterStep(): boolean {
+        // If resuming from a stuck quantity prompt, Escape first to close it
+        // and discard any partial field text, then re-click to open a fresh
+        // prompt. This prevents double-typing (e.g. "1863" + "1863") after a
+        // hot-reload mid-quantity-entry.
+        if (this._needsEscapeReset) {
+            if (!this._escapeSent) {
+                this.log('Step 8: Escaping quantity prompt before re-clicking (resume reset)');
+                titan.keyboard.sendKey(titan.keyboard.Key.Escape);
+                this._escapeSent = true;
+                return this.waitTick();
+            }
+            // Wait for the prompt to close before re-clicking.
+            if (isPricePromptShown()) {
+                return this.waitTick();
+            }
+            this._needsEscapeReset = false;
+            this._escapeSent = false;
+            // Fall through to the normal click below.
+        }
         this.log('Step 8: Clicking "Enter quantity"');
         if (!clickQtyEnter()) {
             return this.waitTick();
         }
-        this.computeDelay(2, 30, 4);
+        this.computeDelay(1, 25, 4);
         this.advance();
         return true;
     }
@@ -587,11 +729,30 @@ export class BuyOfferFlow {
 
     // Step 13: Click the "Enter price" button.
     private clickPriceEnterStep(): boolean {
+        // If resuming from a stuck price prompt, Escape first to close it
+        // and discard any partial field text, then re-click to open a fresh
+        // prompt. This prevents double-typing (e.g. "1103" + "1103" =
+        // "11031103") after a hot-reload mid-price-entry.
+        if (this._needsEscapeReset) {
+            if (!this._escapeSent) {
+                this.log('Step 13: Escaping price prompt before re-clicking (resume reset)');
+                titan.keyboard.sendKey(titan.keyboard.Key.Escape);
+                this._escapeSent = true;
+                return this.waitTick();
+            }
+            // Wait for the prompt to close before re-clicking.
+            if (isPricePromptShown()) {
+                return this.waitTick();
+            }
+            this._needsEscapeReset = false;
+            this._escapeSent = false;
+            // Fall through to the normal click below.
+        }
         this.log('Step 13: Clicking "Enter price"');
         if (!clickPriceEnter()) {
             return this.waitTick();
         }
-        this.computeDelay(2, 30, 4);
+        this.computeDelay(1, 25, 4);
         this.advance();
         return true;
     }
@@ -692,7 +853,7 @@ export class BuyOfferFlow {
         if (!clickConfirm()) {
             return this.waitTick();
         }
-        this.computeDelay(2, 30, 4);
+        this.computeDelay(1, 25, 4);
         this.advance();
         return true;
     }
@@ -703,10 +864,29 @@ export class BuyOfferFlow {
         if (isOfferConfigOpen()) {
             return this.waitTick(); // config screen still open
         }
-        // Config screen closed — verify the slot is occupied.
+        // Config screen closed — reset the wait counter ONCE so the
+        // slot-occupied verification below gets its own 3-tick grace period
+        // separate from the config-screen polling phase. The flag ensures
+        // this reset only fires on the open->closed transition; without it,
+        // the reset runs every tick and the grace counter can never
+        // accumulate, causing an infinite active-but-stuck loop where the
+        // auto-loop ticks the buy flow forever with no state transition,
+        // completion, or failure log.
+        if (!this.configClosedObserved) {
+            this.waitTicks = 0;
+            this.configClosedObserved = true;
+        }
+        // Verify the slot is occupied.
         if (!isSlotOccupied(this.slotIndex)) {
-            // Give it a couple ticks to register.
-            if (this.waitTicks < 3) {
+            // Give it ticks to register. 10 ticks (6s) is generous but
+            // necessary: after a hot reload, the confirm click can take
+            // longer to process and the slot-occupied state may not register
+            // within the original 3-tick (1.8s) grace. A false failure here
+            // is costly — the cache may not yet have the entry, leading to
+            // a duplicate buy attempt. The configClosedObserved flag above
+            // still prevents the infinite-loop regression because the grace
+            // counter only starts after the one-time reset.
+            if (this.waitTicks < 10) {
                 this.waitTicks++;
                 return false;
             }

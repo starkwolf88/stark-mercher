@@ -1,7 +1,10 @@
 import type { StarkMercher } from '../stark-mercher.js';
+import { invalidateGeWidgetCache, invalidateBooleanStateCache } from '../grand_exchange/widgets.js';
+import { invalidateInvCache } from '../grand_exchange/auto-loop.js';
+import { invalidateNearGeCache } from '../grand_exchange/clerk.js';
 
 function debugLog(bot: StarkMercher, msg: string): void {
-    if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg);
+    if (bot.logDebugValue) titan.logf('[Stark Mercher] %s', msg);
 }
 
 // sanityCheckState()
@@ -52,6 +55,12 @@ export const sanityCheckState = (bot: StarkMercher, tick: number) => {
 // transition. The offer cache (persisted in a hidden setting) is NOT cleared —
 // it survives hops and reloads.
 export const resetInFlightActionState = (bot: StarkMercher): void => {
+    // Invalidate cross-tick caches — widget and inventory state from before
+    // the transition (hop/break/login) is no longer valid.
+    invalidateGeWidgetCache();
+    invalidateBooleanStateCache();
+    invalidateNearGeCache();
+    invalidateInvCache();
     // Clear in-flight auto-loop flows (they hold tick-based step state that
     // becomes stale after a world hop or break).
     bot.autoLoop.activeBuyFlow = null;
@@ -75,7 +84,23 @@ export const resetInFlightActionState = (bot: StarkMercher): void => {
     bot.loopIdleSinceTick = -1;
     bot.shortBreakDelayTicks = -1;
     bot.nextActionEtaMin = -1;
-    bot.checkedAtHalfEta = false;
+    bot.lastIdleDiagTick = -1;
+    // Reset idle activity tick throttle — the tick counter resets on hop/
+    // break/login, so idleActivityLastTick (tick-based) is stale. Reset to
+    // -1 to allow immediate action. The phase/sub-step are preserved so
+    // the activity continues from where it left off (e.g. if mid-converting,
+    // the bars are still in inventory after the transition).
+    bot.autoLoop.idleActivityLastTick = -1;
+    // Clear any pending GE-completion chat flag — it's transient and
+    // shouldn't survive across hop/break/login transitions.
+    bot.geOfferCompletedChatMs = 0;
+    // NOTE: checkedAtHalfEta is intentionally NOT reset here. It represents
+    // "we already checked at 50% ETA and found nothing ready" — this
+    // knowledge survives login/logout/hop transitions. Clearing it here
+    // would wipe the 90% escalation memory on every login, causing every
+    // break to be a 50% check and producing rapid login/nothing-to-do/
+    // logout cycling. It is cleared only when an actual GE action is
+    // performed (buy/sell/abort/collect/revision) in auto-loop.ts.
     // Reset action throttle
     bot.currentAction = null;
     bot.actionStartTime = 0;

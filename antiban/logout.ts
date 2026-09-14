@@ -19,15 +19,52 @@ const LOGOUT_CLICK_HERE_PACKED = 11927560; // "click here to logout" (non-world-
 const DOOR_LABELS = ['Logout', 'Log out', 'Log Out'];
 const CONFIRM_LABELS = ['Click here to logout', 'Logout', 'Log out', 'Log Out'];
 
+// --- Logout door entity cache ----------------------------------------------
+// The logout door is a static scenery object — it never despawns or moves.
+// The query titan.queries.objects().hasAction('Log out', ...).nearest() is
+// UNSCOPED (no radius argument — scans ALL loaded objects), making it the
+// most expensive per-call query in the plugin. Caching the result eliminates
+// the unscoped scan on every logout cycle (and every retry within a cycle).
+//
+// SDK 105+ guarantees object handles are live cross-tick — a cached reference
+// re-resolves its fields against the live tile once per tick, so the cached
+// handle stays valid and tracks the current state automatically.
+//
+// Invalidated via invalidateLogoutDoorCache() on: hop completion,
+// onGameStateChanged (login/logout/hop), tick counter reset, and onDisable.
+let cachedLogoutDoor: titan.TileObject | null = null;
+let cachedLogoutDoorChecked = false;
+
+/** Invalidates the cached logout door. Call on hop completion,
+ *  onGameStateChanged (login/logout/hop), tick counter reset, and onDisable
+ *  so the next tryClickLogoutObject call re-queries the live scene. */
+export const invalidateLogoutDoorCache = (): void => {
+    cachedLogoutDoor = null;
+    cachedLogoutDoorChecked = false;
+};
+
+/** Returns the cached logout door object, querying once on first access.
+ *  Returns null if no logout door is present in the loaded scene. */
+const getLogoutDoor = (): titan.TileObject | null => {
+    if (cachedLogoutDoorChecked) return cachedLogoutDoor;
+    cachedLogoutDoorChecked = true;
+    try {
+        cachedLogoutDoor = titan.queries.objects()
+            .hasAction('Log out', 'Log-out', 'Logout', 'Log Out')
+            .nearest();
+    } catch {
+        cachedLogoutDoor = null;
+    }
+    return cachedLogoutDoor;
+};
+
 function debugLog(bot: StarkMercher, msg: string): void {
-    if (bot.logDebug.value) titan.logf('[Stark Mercher] %s', msg);
+    if (bot.logDebugValue) titan.logf('[Stark Mercher] %s', msg);
 }
 
 function tryClickLogoutObject(bot: StarkMercher): boolean {
     try {
-        const door = titan.queries.objects()
-            .hasAction('Log out', 'Log-out', 'Logout', 'Log Out')
-            .nearest();
+        const door = getLogoutDoor();
         if (door && door.exists) {
             const actions = door.actions;
             const action = actions.find(a => DOOR_LABELS.includes(a)) || actions[0];
@@ -87,7 +124,6 @@ function tryClickText(bot: StarkMercher, labels: string[], description: string, 
  *  Returns true when the player has been logged out (logoutComplete set). */
 export function logoutForBreak(bot: StarkMercher, reason: string = 'break', silent: boolean = false): void {
     const now = Date.now();
-    const playerName = titan.state.client.localPlayer?.name;
 
     if (now < bot.logoutNextAttemptMs) return;
 
@@ -95,8 +131,11 @@ export function logoutForBreak(bot: StarkMercher, reason: string = 'break', sile
     // The GE window can block the logout door widget.
     // We don't close the bank here since the mercher doesn't use the bank yet.
 
-    if (!playerName) {
-        // Already logged out (or name not yet loaded).
+    // Use the scalar isLoggedIn read (no native handle) instead of
+    // titan.state.client.localPlayer?.name (creates a native Player handle
+    // on every call). bot.currentPlayerName is already tracked for logging.
+    if (!titan.state.login.isLoggedIn) {
+        // Already logged out.
         bot.logoutStep = 2;
         bot.logoutComplete = true;
         return;

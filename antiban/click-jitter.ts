@@ -31,6 +31,16 @@ export interface ClickJitterProfile {
 // --- Active profile (module-level) -----------------------------------------
 let activeProfile: ClickJitterProfile | null = null;
 
+// Generation counter — incremented on resetClickJitter() (called from onDisable).
+// Pending runOnClientTick callbacks capture the generation at schedule time and
+// bail early if it doesn't match when they fire. This prevents stale callbacks
+// from a previous plugin instance (or a disabled plugin) from firing after
+// reload/disable and creating native handles on a dead plugin instance — the
+// classic "callbacks created inside onGameTick" reload-leak pattern flagged by
+// the Titan client devs. QuickJS does NOT automatically unbind runOnClientTick
+// callbacks on plugin disable/reload.
+let clickJitterGeneration = 0;
+
 const defaultProfile: ClickJitterProfile = {
     reactionJitterClientTicks: 2,
     doubleClickChance: 5,
@@ -38,6 +48,17 @@ const defaultProfile: ClickJitterProfile = {
 
 export const setClickJitterProfile = (profile: ClickJitterProfile): void => {
     activeProfile = profile;
+};
+
+/** Resets the click-jitter profile and debug logger. Called from onDisable so
+ *  a toggle off/on starts fresh — the profile is re-derived from the delay
+ *  profile on the next login, and the debug logger is re-bound on enable.
+ *  Also increments the generation counter so any pending runOnClientTick
+ *  callbacks from the previous instance bail early instead of firing on a
+ *  dead/disabled plugin and creating stale native handles. */
+export const resetClickJitter = (): void => {
+    activeProfile = null;
+    clickJitterGeneration++;
 };
 
 /**
@@ -65,17 +86,25 @@ const sampleInt = (min: number, max: number): number =>
     Math.floor(roll() * (max - min + 1)) + min;
 
 // --- Client tick scheduling ------------------------------------------------
-/** Schedule a callback to run after a number of client ticks (~20ms each). */
+/** Schedule a callback to run after a number of client ticks (~20ms each).
+ *  Captures the current generation so the callback bails early if the plugin
+ *  is disabled/reloaded before it fires. */
 function scheduleClientTick(cb: () => void, ticks: number): void {
+    const gen = clickJitterGeneration;
+    const guard = () => {
+        if (gen !== clickJitterGeneration) return; // stale — plugin was disabled/reloaded
+        cb();
+    };
     if (ticks <= 0) {
-        titan.runOnClientTick(cb);
+        titan.runOnClientTick(guard);
         return;
     }
     let remaining = ticks;
     const step = () => {
+        if (gen !== clickJitterGeneration) return; // stale — bail early
         remaining--;
         if (remaining <= 0) {
-            cb();
+            guard();
         } else {
             titan.runOnClientTick(step);
         }

@@ -16,8 +16,17 @@ const LOGIN_SUCCESS_LOCKOUT_MS = 8 * 600; // re-check title every 8 ticks (~4.8s
 const TITLE_CLICK_PACKED_ID = 24772680;
 const TITLE_CLICK_TEXT = 'Click here to play';
 
-const POST_LOGIN_RESUME_TICKS_MIN = 3;
-const POST_LOGIN_RESUME_TICKS_MAX = 5;
+// Post-login settle delay — waits after the title screen disappears before
+// resuming the auto-loop. Must be long enough for the world's 3D models to
+// load (graph nodes). If too short, the first GE-open click after login lands
+// on a leftover UI widget (text=Play) because the clerk/booth graph node is
+// still NULL — ClickSafety sanitizes the click and the GE doesn't open,
+// wasting ~3s on a retry. 8-12 ticks (4.8-7.2s) base gives enough time for
+// the world to render; max cap 18 ticks (10.8s) allows headroom for
+// hesitation/outlier humanisation layers.
+const POST_LOGIN_RESUME_TICKS_MIN = 8;
+const POST_LOGIN_RESUME_TICKS_MAX = 12;
+const POST_LOGIN_RESUME_TICKS_MAX_CAP = 18;
 
 const LOGIN_STAGE_THROTTLE_MS = 2000;
 const LOGIN_RETRY_INTERVAL_MS = 30 * 1000;
@@ -36,12 +45,26 @@ const INDEX9_RETRY_MAX_MS = 60 * 1000;
 const LOGIN_SUBMIT_DELAY_TICKS_MIN = 2;
 const LOGIN_SUBMIT_DELAY_TICKS_MAX = 4;
 
+// loginStep is called every game tick (from breakStep) and every second
+// (from wallClockStep) while logged out. Each call invokes findTitleWidget
+// 2-3 times, creating native WidgetState handles. Throttle the whole step
+// to ~3 ticks (1.8s) — login is not time-critical and the internal staging
+// (2s) and title-click (1s) throttles already cap the actual work rate.
+const LOGIN_STEP_MIN_INTERVAL_MS = 600 * 3;
+let lastLoginStepMs = 0;
+
+/** Resets the login-step throttle. Called from onDisable so a toggle off/on
+ *  doesn't inherit a stale throttle timestamp from the previous run. */
+export const resetLoginThrottle = (): void => {
+    lastLoginStepMs = 0;
+};
+
 function debugLog(bot: StarkMercher, msg: string, ...args: unknown[]): void {
-    if (bot.logDebug.value) titan.logf('[Stark Mercher] ' + msg, ...args);
+    if (bot.logDebugValue) titan.logf('[Stark Mercher] ' + msg, ...args);
 }
 
 function humanLog(bot: StarkMercher, msg: string, ...args: unknown[]): void {
-    titan.logf('[Stark Mercher] ' + msg, ...args);
+    if (bot.logInfoValue) titan.logf('[Stark Mercher] ' + msg, ...args);
 }
 
 function sampleInt(min: number, max: number): number {
@@ -64,6 +87,14 @@ function findTitleWidget(bot: StarkMercher): titan.WidgetState | null {
     return null;
 }
 
+// Exported title-screen predicate — single targeted widget lookup (no loops,
+// no toArray()). Used by runStartupAudit() to defer the GE audit while the
+// title screen is visible, so the audit doesn't log a misleading "closed"
+// state or attempt GE actions before the player is in-world.
+export function isTitleScreenVisible(_bot: StarkMercher): boolean {
+    return findTitleWidget(_bot) !== null;
+}
+
 function tryClickTitle(bot: StarkMercher): boolean {
     const now = Date.now();
     const w = findTitleWidget(bot);
@@ -78,7 +109,7 @@ function tryClickTitle(bot: StarkMercher): boolean {
             // Store as wall-clock timestamp (not setAction) because the
             // tick counter resets on first tick after login, which would
             // wipe the action delay.
-            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, POST_LOGIN_RESUME_TICKS_MAX, 8);
+            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, POST_LOGIN_RESUME_TICKS_MAX, POST_LOGIN_RESUME_TICKS_MAX_CAP);
             // Reset login state BEFORE setting settle values, otherwise
             // resetLoginState wipes postLoginResumeAtMs/loginSettled.
             resetLoginState(bot);
@@ -93,7 +124,7 @@ function tryClickTitle(bot: StarkMercher): boolean {
     if (!titleExists) {
         if (isInWorld() && !bot.loginSettled) {
             debugLog(bot, 'Title screen gone; player in-world; settling');
-            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, POST_LOGIN_RESUME_TICKS_MAX, 8);
+            const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, POST_LOGIN_RESUME_TICKS_MAX, POST_LOGIN_RESUME_TICKS_MAX_CAP);
             // Reset login state BEFORE setting settle values, otherwise
             // resetLoginState wipes postLoginResumeAtMs/loginSettled.
             resetLoginState(bot);
@@ -256,10 +287,31 @@ function tryStageAndSubmitLogin(bot: StarkMercher): boolean {
     }
 
     if (!isStaged) {
+        // Startup grace period: on a fresh client launch, the native account
+        // profile system may not be ready yet. stageCredentials() returns
+        // false until the profile resolver initializes. Wait for the grace
+        // period before attempting the first stage, then use a longer
+        // throttle (5s) until staging succeeds — the 2s default causes a
+        // rapid retry loop that never catches the profile system becoming
+        // ready.
+        if (now < bot.loginStartupGraceUntil) {
+            const remaining = Math.ceil((bot.loginStartupGraceUntil - now) / 1000);
+            debugLog(bot, `Waiting ${remaining}s for native login system before first stage attempt (loginIndex=${snap.loginIndex})`);
+            bot.loginStageNextAttemptAt = bot.loginStartupGraceUntil;
+            return true;
+        }
         const ok = titan.state.login.stageCredentials(characterName);
-        bot.loginStageNextAttemptAt = now + LOGIN_STAGE_THROTTLE_MS;
-        if (ok) debugLog(bot, 'Staged profile credentials for %s', characterName);
-        else debugLog(bot, 'stageCredentials(%s) returned false; will retry', characterName);
+        // Use a longer throttle (5s) when staging fails so we don't hammer
+        // the native profile resolver. Once it succeeds, the normal 2s
+        // throttle applies for any subsequent re-stage needs.
+        bot.loginStageNextAttemptAt = now + (ok ? LOGIN_STAGE_THROTTLE_MS : 5000);
+        if (ok) {
+            debugLog(bot, 'Staged profile credentials for %s', characterName);
+            // Clear the grace period — the native system is ready now.
+            bot.loginStartupGraceUntil = 0;
+        } else {
+            debugLog(bot, `stageCredentials(${characterName}) returned false (loginIndex=${snap.loginIndex}); will retry in 5s`);
+        }
         return true;
     }
 
@@ -281,6 +333,9 @@ function tryStageAndSubmitLogin(bot: StarkMercher): boolean {
 
 /** Called from onMainLoop when the player is logged out. */
 export function loginStep(bot: StarkMercher): void {
+    const now = Date.now();
+    if (now - lastLoginStepMs < LOGIN_STEP_MIN_INTERVAL_MS) return;
+    lastLoginStepMs = now;
     const w = findTitleWidget(bot);
     const titleExists = w && w.exists;
 
@@ -293,7 +348,7 @@ export function loginStep(bot: StarkMercher): void {
     if (bot.titleWaitingForGone) {
         if (!titleExists) {
             if (isInWorld()) {
-                const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, POST_LOGIN_RESUME_TICKS_MAX);
+                const settleTicks = createDelay(POST_LOGIN_RESUME_TICKS_MIN, POST_LOGIN_RESUME_TICKS_MAX, POST_LOGIN_RESUME_TICKS_MAX_CAP);
                 // Reset login state BEFORE setting settle values, otherwise
                 // resetLoginState wipes postLoginResumeAtMs/loginSettled.
                 resetLoginState(bot);
@@ -330,4 +385,6 @@ export function resetLoginState(bot: StarkMercher): void {
     bot.loginSubmitAttemptTimes = [];
     bot.loginFirstAttemptAtMs = 0;
     bot.loginTotalSubmitAttempts = 0;
+    // Allow the next loginStep to run immediately after a reset.
+    lastLoginStepMs = 0;
 }

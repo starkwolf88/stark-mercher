@@ -22,5 +22,29 @@
     "jitterAmplifyChance": 0.0063,
     "jitterAmplifyMinTicks": 5,
     "jitterAmplifyMaxTicks": 16
+  },
+  "hc fruitz": {
+    "reactionBias": 0.4,
+    "jitterTicks": 2,
+    "hesitationMultiplier": 2.2,
+    "outlierChance": 0.065,
+    "outlierMultiplier": 1.55,
+    "outlierNestedChance": 0.19,
+    "outlierNestedMultiplier": 1.38,
+    "jitterAmplifyChance": 0.011,
+    "jitterAmplifyMinTicks": 8,
+    "jitterAmplifyMaxTicks": 22
+  },
+  "im starkyb": {
+    "reactionBias": -0.15,
+    "jitterTicks": 1,
+    "hesitationMultiplier": 2.05,
+    "outlierChance": 0.048,
+    "outlierMultiplier": 1.48,
+    "outlierNestedChance": 0.205,
+    "outlierNestedMultiplier": 1.36,
+    "jitterAmplifyChance": 0.0085,
+    "jitterAmplifyMinTicks": 7,
+    "jitterAmplifyMaxTicks": 19
   }
 }

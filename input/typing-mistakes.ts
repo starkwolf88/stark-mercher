@@ -18,10 +18,10 @@
 // corrected before the flow's validation step runs, so the final typed text
 // is always correct.
 //
-// Realisation delay uses createDelay(2, 100, 3) from humanised-delay.ts so it
-// integrates with the existing per-account humanisation (reaction bias, jitter,
-// rare distraction). This yields 1-3 ticks (0.6-1.8s) normally, with the 0.1%
-// distraction event bypassing the cap (12-36s "tabbed out while correcting").
+// Realisation delay uses createDelay(2, 100, 3, true) from humanised-delay.ts
+// so it integrates with the existing per-account humanisation (reaction bias,
+// jitter). Distractions are suppressed (mid-flow). This yields 1-3 ticks
+// (0.6-1.8s).
 //
 // --- Tick-driven state machine ---------------------------------------------
 // The mistake sequence is driven by game ticks, NOT setTimeout. The Titan
@@ -357,9 +357,9 @@ export const typeStringWithMistake = (
                 return;
             }
             // Phase 2: humanised realisation delay before pressing backspace.
-            // createDelay(2, 100, 3) → 1-3 ticks normally, 0.1% distraction
-            // bypasses the cap (12-36s "tabbed out").
-            const realiseTicks = createDelay(2, 100, 3);
+            // createDelay(2, 100, 3, true) → 1-3 ticks, distractions suppressed
+            // (mid-flow — a 6-60s pause while correcting a typo is non-human).
+            const realiseTicks = createDelay(2, 100, 3, true);
             debugLog(`Typing mistake: realising in ${realiseTicks}t (${realiseTicks * TICK_MS}ms)`);
             if (mistakeState) {
                 mistakeState.phase = 'realise_gap';

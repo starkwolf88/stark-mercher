@@ -17,18 +17,55 @@ import {
     GE_ABORT_WIDGET,
     GE_DETAIL_STATUS_SLOT,
 } from './constants.js';
+import { getMerchableItemById } from '../data/merchable-items.js';
+import { getPriceHistoryEntryById } from '../data/price-history.js';
 
-let cachedChildrenTick = -1;
+// Cross-tick widget cache — persists across ticks to reduce native handle
+// creation. Each titan.state.widgets.children() and .find() call creates a
+// native WidgetState handle. The previous per-tick cache cleared every tick,
+// creating ~11 handles/tick (~39 with inventory). Over 4-8 hours this
+// exhausted the finite native handle table, causing FPS to gradually drop
+// to 0.
+//
+// The cache now persists for up to WIDGET_CACHE_TTL_TICKS ticks (5 minutes)
+// as a safety net. Callers MUST call invalidateGeWidgetCache() after any
+// action that changes GE widget state (offer placed/aborted/collected, GE
+// opened/closed, screen transition, click dispatched within a flow). The
+// flow handler in auto-loop.ts invalidates at the start of each flow tick
+// to ensure flows always see fresh state. During idle monitoring (the
+// majority of a long session), the cache is valid for up to 5 minutes,
+// reducing handle creation by ~100x vs per-tick caching.
+//
+// Tick counter resets (disconnect/hop) are handled by the tick < baseTick
+// check, which clears the cache immediately.
+const WIDGET_CACHE_TTL_TICKS = 500; // 500 ticks ≈ 5 minutes
+let widgetCacheBaseTick = -1;
 const cachedChildren: Record<number, titan.WidgetState[]> = {};
+const cachedFinds: Record<number, titan.WidgetState | null> = {};
+
+/** Invalidates the cross-tick widget cache. Must be called after any action
+ *  that changes GE widget state (offer placed/aborted/collected, GE
+ *  opened/closed, screen transition, click dispatched within a flow). */
+export const invalidateGeWidgetCache = (): void => {
+    for (const key of Object.keys(cachedChildren)) {
+        delete cachedChildren[key as any];
+    }
+    for (const key of Object.keys(cachedFinds)) {
+        delete cachedFinds[key as any];
+    }
+    widgetCacheBaseTick = -1;
+};
+
+const checkWidgetCacheExpiry = (): void => {
+    const tick = titan.state.client.tick;
+    if (widgetCacheBaseTick < 0 || tick < widgetCacheBaseTick || tick - widgetCacheBaseTick >= WIDGET_CACHE_TTL_TICKS) {
+        invalidateGeWidgetCache();
+        widgetCacheBaseTick = tick;
+    }
+};
 
 const childrenForParent = (packedId: number): titan.WidgetState[] => {
-    const tick = titan.state.client.tick;
-    if (cachedChildrenTick !== tick) {
-        cachedChildrenTick = tick;
-        for (const key of Object.keys(cachedChildren)) {
-            delete cachedChildren[key as any];
-        }
-    }
+    checkWidgetCacheExpiry();
     if (cachedChildren[packedId] !== undefined) {
         return cachedChildren[packedId];
     }
@@ -40,11 +77,32 @@ const childrenForParent = (packedId: number): titan.WidgetState[] => {
     return cachedChildren[packedId];
 };
 
+// findWidgetById() — cached via the same cross-tick cache as children().
+// find() is called ~3-4 times per tick by auditGeState (isOfferConfigOpen,
+// isSearchPromptShown, isPricePromptShown) and each call creates a native
+// WidgetState handle. The cross-tick cache avoids redundant native calls
+// when the same widget is looked up multiple times within the cache TTL.
+const findWidgetById = (packedId: number): titan.WidgetState | null => {
+    checkWidgetCacheExpiry();
+    if (cachedFinds[packedId] !== undefined) {
+        return cachedFinds[packedId];
+    }
+    try {
+        cachedFinds[packedId] = titan.state.widgets.find(packedId);
+    } catch (e) {
+        cachedFinds[packedId] = null;
+    }
+    return cachedFinds[packedId];
+};
+
 // findWidget()
 // Direct cached-state read via find()/children() — avoids the expensive
 // titan.queries.widgets() query-builder API (~570ms per call).
+// Both find() and children() results are cached across ticks (up to
+// WIDGET_CACHE_TTL_TICKS). Call invalidateGeWidgetCache() after any
+// state-changing action to ensure fresh reads.
 export const findWidget = (packedId: number, slot?: number): titan.WidgetState | null => {
-    if (slot === undefined) return titan.state.widgets.find(packedId);
+    if (slot === undefined) return findWidgetById(packedId);
     const children = childrenForParent(packedId);
     return children[slot] || null;
 };
@@ -57,8 +115,13 @@ export const widgetShown = (w: titan.WidgetState | null): boolean =>
 // The GE interface is open. Uses the SDK's built-in check rather than a
 // manual widget lookup — the amount widget (GE_AMOUNT_WIDGET) is only
 // present on the offer config screen, not the main GE slot view.
+//
+// Cached via the boolean state cache (see below) — titan.utils.bank.isGeOpen
+// is a composition helper that internally calls widgets.find(), creating a
+// native WidgetState handle. isGeOpen() is called 2-3x per tick (tickLogic,
+// autoLoop Step 1, auditGeState). Over 8 hours this created ~150k handles.
 export const isGeOpen = (): boolean =>
-    titan.utils.bank.isGeOpen;
+    cachedBankIsGeOpen();
 
 // isOfferConfigOpen()
 // The offer configuration screen is open (showing item, quantity, price,
@@ -75,8 +138,34 @@ export const isSearchPromptShown = (): boolean =>
 
 // isPricePromptShown()
 // "Set a price for each item:" — confirms the price input is ready.
+// NOTE: GE_PRICE_PROMPT_WIDGET is the chatbox dialogue container that is
+// visible during BOTH the quantity prompt ("How many do you wish to buy?")
+// and the price prompt ("Set a price for each item:"). This function only
+// checks widget visibility — callers that need to distinguish between the
+// two prompts should use isQuantityPromptShown() instead.
 export const isPricePromptShown = (): boolean =>
     widgetShown(findWidget(GE_PRICE_PROMPT_WIDGET));
+
+// readPromptText()
+// Reads the text content of the GE chatbox prompt widget. Returns null if
+// the widget isn't visible or has no text. The prompt text distinguishes
+// between the quantity prompt ("How many do you wish to buy?") and the
+// price prompt ("Set a price for each item:").
+export const readPromptText = (): string | null => {
+    const w = findWidget(GE_PRICE_PROMPT_WIDGET);
+    if (!w || !w.visible || !w.text) return null;
+    return w.text.trim();
+};
+
+// isQuantityPromptShown()
+// Returns true if the GE quantity prompt is open ("How many do you wish to
+// buy?"). This must be checked BEFORE isPricePromptShown() because the
+// prompt widget is visible during both prompts.
+export const isQuantityPromptShown = (): boolean => {
+    const text = readPromptText();
+    if (!text) return false;
+    return text.toLowerCase().includes('how many');
+};
 
 // isOfferDetailOpen()
 // The offer detail screen is open (after clicking into an occupied slot).
@@ -141,7 +230,9 @@ export const readOfferQuantity = (): number | null => {
         // The quantity widget shows just a number (no "coins" suffix like price).
         // Skip the price text widget (slot 41) which shows "<n> coins".
         if (i === GE_PRICE_TEXT_SLOT) continue;
-        if (Number.isFinite(n) && n > 0 && w.text.trim().match(/^\d+$/)) {
+        // OSRS formats quantities >= 1000 with commas (e.g. "14,593").
+        // Allow commas in the text match; parseInt above already strips them.
+        if (Number.isFinite(n) && n > 0 && w.text.trim().match(/^[\d,]+$/)) {
             return n;
         }
     }
@@ -182,12 +273,157 @@ export const scanSearchResults = (itemName: string): { active: boolean; matchInd
     return { active, matchIndex: -1 };
 };
 
+// scanSearchResultsUnique()
+// Variant of scanSearchResults for early-stop typing. Returns whether the
+// desired item is the ONLY visible result (unique match). Used by
+// BuyOfferFlow to stop typing as soon as the item is uniquely identifiable
+// — e.g. "magp" uniquely matches "Magpie impling jar" because no other GE
+// item starts with "magp". This is both faster and more humanlike (real
+// players stop typing once they see their item).
+//
+// Returns { active, unique, matchIndex, visibleCount }:
+//   active       — results are visible (at least 1 result shown)
+//   unique       — exactly 1 result visible AND it's an exact match
+//   matchIndex   — the native child slot to pass to interact() (or -1)
+//   visibleCount — total visible results (for diagnostics)
+export const scanSearchResultsUnique = (itemName: string): {
+    active: boolean;
+    unique: boolean;
+    matchIndex: number;
+    visibleCount: number;
+} => {
+    const wanted = itemName.trim().toLowerCase();
+    const children = childrenForParent(GE_SEARCH_RESULT_TEXT_WIDGET);
+    let active = false;
+    let visibleCount = 0;
+    let matchIndex = -1;
+    for (let i = 0; i < children.length; i++) {
+        const w = children[i];
+        if (!w || !w.visible || !w.text) continue;
+        active = true;
+        visibleCount++;
+        if (w.text.trim().toLowerCase() === wanted) {
+            const bg = children[i - 1];
+            const bgSlot = bg ? bg.dynamicChildSlot : w.dynamicChildSlot - 1;
+            matchIndex = bgSlot;
+        }
+    }
+    // Unique = exactly 1 visible result AND it's our item.
+    const unique = active && visibleCount === 1 && matchIndex >= 0;
+    return { active, unique, matchIndex, visibleCount };
+};
+
 // isMembersWorld()
+// Cached — titan.state.world.metadata() returns a full snapshot of the world
+// list (~100+ objects) on every call. This is called multiple times per tick
+// via offerSlotCount() and auditGeState(). The result only changes on a world
+// hop or logout/login, so we cache it and invalidate via
+// invalidateMembersWorldCache() on hop completion and any logout.
+let cachedIsMembersWorld: boolean | null = null;
+
 export const isMembersWorld = (): boolean => {
+    if (cachedIsMembersWorld !== null) return cachedIsMembersWorld;
     const id = titan.state.world.current();
-    if (id === null) return false;
+    if (id === null) {
+        cachedIsMembersWorld = false;
+        return false;
+    }
     const meta = titan.state.world.metadata().find(w => w.id === id);
-    return meta ? meta.isMembers : false;
+    cachedIsMembersWorld = meta ? meta.isMembers : false;
+    return cachedIsMembersWorld;
+};
+
+/** Invalidates the cached isMembersWorld result. Must be called on hop
+ *  completion and on any logout (break, disconnect, rotation) so the next
+ *  isMembersWorld() call re-fetches from the live world list. */
+export const invalidateMembersWorldCache = (): void => {
+    cachedIsMembersWorld = null;
+};
+
+// --- Boolean state cache (isGeOpen, bank.isOpen, inventory.isOpen) ----------
+// titan.utils.bank.isGeOpen, titan.utils.bank.isOpen, and
+// titan.utils.inventory.isOpen are composition helpers that internally call
+// titan.state.widgets.find(), each creating a native WidgetState handle.
+// These are called every game tick from tickLogic, autoLoopTick, and
+// idle-activity bank phases — 5-7 calls/tick. Over 8 hours this created
+// ~300k+ native handles, gradually exhausting the finite handle table and
+// causing FPS to drop to 0 (same root cause as the mixology 1200-group
+// scan, just slower accumulation).
+//
+// The cache uses a short TTL (10 ticks ≈ 6 seconds) — responsive enough to
+// detect unexpected GE/bank/inventory closing, but reduces handle creation
+// by 10x. Callers MUST call invalidateBooleanStateCache() after any action
+// that changes these states (GE opened/closed, bank opened/closed,
+// inventory opened, hop, login). The cache also auto-expires on tick
+// counter resets (disconnect/hop).
+const BOOL_CACHE_TTL_TICKS = 10; // 10 ticks ≈ 6 seconds
+let boolCacheBaseTick = -1;
+let cachedGeOpen: boolean | null = null;
+let cachedBankOpen: boolean | null = null;
+let cachedInvOpen: boolean | null = null;
+
+/** Invalidates the boolean state cache. Must be called after any action
+ *  that changes GE/bank/inventory open state (GE opened/closed, bank
+ *  opened/closed, inventory opened, hop, login). */
+export const invalidateBooleanStateCache = (): void => {
+    cachedGeOpen = null;
+    cachedBankOpen = null;
+    cachedInvOpen = null;
+    cachedWorldSwitcherOpen = null;
+    boolCacheBaseTick = -1;
+};
+
+const checkBoolCacheExpiry = (): void => {
+    const tick = titan.state.client.tick;
+    if (boolCacheBaseTick < 0 || tick < boolCacheBaseTick || tick - boolCacheBaseTick >= BOOL_CACHE_TTL_TICKS) {
+        invalidateBooleanStateCache();
+        boolCacheBaseTick = tick;
+    }
+};
+
+/** Cached titan.utils.bank.isGeOpen. */
+const cachedBankIsGeOpen = (): boolean => {
+    checkBoolCacheExpiry();
+    if (cachedGeOpen !== null) return cachedGeOpen;
+    cachedGeOpen = titan.utils.bank.isGeOpen;
+    return cachedGeOpen;
+};
+
+/** Cached titan.utils.bank.isOpen. */
+export const isBankOpen = (): boolean => {
+    checkBoolCacheExpiry();
+    if (cachedBankOpen !== null) return cachedBankOpen;
+    cachedBankOpen = titan.utils.bank.isOpen;
+    return cachedBankOpen;
+};
+
+/** Cached titan.utils.inventory.isOpen. */
+export const isInventoryOpen = (): boolean => {
+    checkBoolCacheExpiry();
+    if (cachedInvOpen !== null) return cachedInvOpen;
+    cachedInvOpen = titan.utils.inventory.isOpen;
+    return cachedInvOpen;
+};
+
+// --- World switcher cache ----------------------------------------------------
+// titan.state.widgets.find(WORLD_SWITCHER_PACKED) creates a native
+// WidgetState handle. isWorldSwitcherOpen() is called every game tick from
+// tickLogic when GE/bank are closed. Cached via the boolean state cache
+// (same 10-tick TTL) to avoid per-tick handle creation.
+const WORLD_SWITCHER_PACKED = (69 << 16) | 0;
+let cachedWorldSwitcherOpen: boolean | null = null;
+
+/** True when the OSRS world switcher full-screen interface is open. */
+export const isWorldSwitcherOpenCached = (): boolean => {
+    checkBoolCacheExpiry();
+    if (cachedWorldSwitcherOpen !== null) return cachedWorldSwitcherOpen;
+    try {
+        const w = titan.state.widgets.find(WORLD_SWITCHER_PACKED);
+        cachedWorldSwitcherOpen = !!(w && w.exists && w.visible);
+    } catch {
+        cachedWorldSwitcherOpen = false;
+    }
+    return cachedWorldSwitcherOpen;
 };
 
 // offerSlotCount()
@@ -253,6 +489,32 @@ const readOfferProgress = (packedId: number): { fill: number; full: number } => 
     };
 };
 
+// resolveTruncatedItemName()
+// The GE slot widget (child 19) truncates long item names with "..." when
+// the name doesn't fit the slot's text area. This happens for single-word
+// item names with no spaces (e.g. "Antidote++(4)" → "Antidote++...") because
+// the widget renderer can't break them across lines. Multi-word names wrap
+// and are shown in full.
+//
+// The slot widget also exposes the OSRS itemId (child 18), which is stable
+// and never truncated. We resolve the full name by looking up the itemId in
+// merchableItems.json first (fast — ~30 items), then priceHistory.json
+// (~1800-3000 items — covers every item with 1h Wiki data, not just
+// merchable ones). Both are in-memory Map/array lookups — no native SDK
+// calls. If neither has the itemId, the truncated name is returned as-is
+// (same as the previous behavior — the slot stays unmanaged).
+//
+// This only fires when the name ends with "..." (rare), so non-truncated
+// names incur zero overhead.
+const resolveTruncatedItemName = (name: string, itemId: number): string => {
+    if (!name.endsWith('...') || itemId <= 0) return name;
+    const merch = getMerchableItemById(itemId);
+    if (merch) return merch.itemName;
+    const history = getPriceHistoryEntryById(itemId);
+    if (history) return history.name;
+    return name;
+};
+
 // getOfferSlotState()
 // Fast read of offer slot state from cached child widgets, including progress.
 // Uses only childrenForParent() — no query builder — so it's safe
@@ -284,11 +546,18 @@ export const getOfferSlotState = (index: number): OfferSlotState => {
         }
     }
 
+    const itemId = itemChild?.itemId ?? -1;
+    const rawName = nameChild?.text?.trim() || null;
+    // Resolve truncated names (ending with "...") via itemId lookup so
+    // downstream code (reverse reconciliation, stale checks, profit tracking)
+    // gets the full item name. See resolveTruncatedItemName above.
+    const itemName = rawName ? resolveTruncatedItemName(rawName, itemId) : null;
+
     return {
         type,
-        itemId: itemChild?.itemId ?? -1,
+        itemId,
         itemQuantity: itemChild?.itemQuantity ?? 0,
-        itemName: nameChild?.text?.trim() || null,
+        itemName,
         priceText: priceChild?.text?.trim() || null,
         status,
         progress,
@@ -330,7 +599,7 @@ export const anySlotOccupied = (): boolean => {
 
 // GeScreen
 // Which GE screen is currently visible.
-export type GeScreen = 'closed' | 'main' | 'offer_config' | 'search_prompt' | 'price_prompt';
+export type GeScreen = 'closed' | 'main' | 'offer_config' | 'search_prompt' | 'quantity_prompt' | 'price_prompt';
 
 // GeAudit
 // Full audit of GE state — used on script start (onEnable) to reconstruct
@@ -343,6 +612,7 @@ export interface GeAudit {
     geOpen: boolean;
     offerConfigOpen: boolean;
     searchPromptShown: boolean;
+    quantityPromptShown: boolean;
     pricePromptShown: boolean;
     // Offer config screen details (only valid when screen === 'offer_config')
     configItemName: string | null;
@@ -362,10 +632,15 @@ export const auditGeState = (): GeAudit => {
     const geOpen = isGeOpen();
     const offerConfigOpen = isOfferConfigOpen();
     const searchPromptShown = isSearchPromptShown();
-    const pricePromptShown = isPricePromptShown();
+    // Check quantity prompt BEFORE price prompt — the prompt widget is
+    // visible during both, so isPricePromptShown() returns true for both.
+    // isQuantityPromptShown() checks the prompt text for "how many".
+    const quantityPromptShown = isQuantityPromptShown();
+    const pricePromptShown = !quantityPromptShown && isPricePromptShown();
 
     let screen: GeScreen = 'closed';
-    if (pricePromptShown) screen = 'price_prompt';
+    if (quantityPromptShown) screen = 'quantity_prompt';
+    else if (pricePromptShown) screen = 'price_prompt';
     else if (searchPromptShown) screen = 'search_prompt';
     else if (offerConfigOpen) screen = 'offer_config';
     else if (geOpen) screen = 'main';
@@ -381,6 +656,7 @@ export const auditGeState = (): GeAudit => {
         geOpen,
         offerConfigOpen,
         searchPromptShown,
+        quantityPromptShown,
         pricePromptShown,
         configItemName: offerConfigOpen ? readOfferItemName() : null,
         configQuantity: offerConfigOpen ? readOfferQuantity() : null,
