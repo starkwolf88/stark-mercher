@@ -7,7 +7,14 @@
 // and ensure both paths produce identical output.
 //
 // Titan Shell truncates output at ~200-300 visible characters, so each
-// entry is logged on its own line via a separate titan.logf() call.
+// entry is logged on its own line. However, each titan.logf() call crosses
+// the JS<->native boundary and creates a native handle — the dumps run on
+// EVERY logout (rotation/hop/break), and merch/abort history grows over a
+// session, so per-entry logf calls scaled with account count and session
+// length (hundreds of handles per dump late in a session) — a measurable
+// contributor to the gradual FPS drop in multi-account rotation.
+// Lines are now accumulated and flushed in chunks (see flushDumpLines),
+// cutting native calls by ~20x while keeping one entry per line.
 // ============================================================================
 
 import type { StarkMercher } from '../stark-mercher.js';
@@ -16,6 +23,26 @@ import { getMerchHistory, getAllAccountNetProfits } from '../data/merch-history.
 import { getAbortHistory } from '../data/abort-history.js';
 import { getGeTax } from '../grand_exchange/constants.js';
 import { getRoster } from '../antiban/account-rotation.js';
+
+// --- Chunked log emission ----------------------------------------------------
+// Each titan.logf() crosses the JS<->native boundary and creates a native
+// handle. Emitting hundreds of lines per logout dump (one per cache/history
+// entry) created hundreds of handles per rotation cycle. We accumulate lines
+// and flush them joined by '\n' in chunks of ~1200 chars — one entry per
+// line is preserved for readability, but the native call count drops by
+// roughly the entries-per-chunk factor (~10-20x).
+const DUMP_CHUNK_CHARS = 1200;
+const flushDumpLines = (lines: string[]): void => {
+    let chunk = '';
+    for (const line of lines) {
+        if (chunk.length + line.length + 1 > DUMP_CHUNK_CHARS && chunk.length > 0) {
+            titan.logf('%s', chunk);
+            chunk = '';
+        }
+        chunk = chunk.length > 0 ? chunk + '\n' + line : line;
+    }
+    if (chunk.length > 0) titan.logf('%s', chunk);
+};
 
 // --- Offer cache dump -------------------------------------------------------
 
@@ -43,7 +70,7 @@ export const dumpOfferCache = (bot: StarkMercher, accountName: string): void => 
         titan.logf('[Stark Mercher] Offer cache for %s is empty.', accountName);
         return;
     }
-    titan.logf('[Stark Mercher] Offer cache for %s (%d entries):', accountName, keys.length);
+    const lines: string[] = [`[Stark Mercher] Offer cache for ${accountName} (${keys.length} entries):`];
     const now = Date.now();
     for (const key of keys) {
         const e = cache[key];
@@ -109,12 +136,10 @@ export const dumpOfferCache = (bot: StarkMercher, accountName: string): void => 
         // by recordSellOffer/confirmSellOffer/fixModeMismatch.
         const reconstructed = e.reconstructed ? ', reconstructed' : '';
 
-        titan.logf('[Stark Mercher]   %s: mode=%s, buy=%d, sell=%d (orig=%d), elapsed=%smin, revisions=[%s]%s%s%s%s%s%s%s%s%s%s%s%s%s',
-            key, e.mode, e.buyPrice, e.sellPrice, e.originalSellPrice, elapsedMin, revisions,
-            netProj, buyEta, sellEta, confirmed, partials, totalBought, firstBought, limitReached, sellQty,
-            buyProgress, buyProgressAt, sellProgress, sellProgressAt, floorHits, reconstructed);
+        lines.push(`[Stark Mercher]   ${key}: mode=${e.mode}, buy=${e.buyPrice}, sell=${e.sellPrice} (orig=${e.originalSellPrice}), elapsed=${elapsedMin}min, revisions=[${revisions}]${netProj}${buyEta}${sellEta}${confirmed}${partials}${totalBought}${firstBought}${limitReached}${sellQty}${buyProgress}${buyProgressAt}${sellProgress}${sellProgressAt}${floorHits}${reconstructed}`);
     }
-    titan.logf('[Stark Mercher] Cache dump complete (%d entries).', keys.length);
+    lines.push(`[Stark Mercher] Cache dump complete (${keys.length} entries).`);
+    flushDumpLines(lines);
 };
 
 // --- Merch history dump -----------------------------------------------------
@@ -131,34 +156,33 @@ export const dumpMerchHistory = (bot: StarkMercher, accountName: string): void =
         titan.logf('[Stark Mercher] No merch history for %s.', accountName);
         return;
     }
-    titan.logf('[Stark Mercher] Merch history for %s:', accountName);
+    const lines: string[] = [`[Stark Mercher] Merch history for ${accountName}:`];
     if (history.profits.length > 0) {
-        titan.logf('[Stark Mercher] === PROFITS (%d) ===', history.profits.length);
+        lines.push(`[Stark Mercher] === PROFITS (${history.profits.length}) ===`);
         let totalProfit = 0;
         for (const e of history.profits) {
             const revPrices = e.revisionPrices ? `, revPrices=[${e.revisionPrices.join(',')}]` : '';
             const sellTime = e.sellElapsedMin !== undefined ? `, sellElapsed=${e.sellElapsedMin}min` : '';
             const reqVsActual = e.requestedBuyQty !== undefined ? `, reqBuy=${e.requestedBuyQty}` : '';
-            titan.logf('[Stark Mercher]   %s: qty=%d, profit=+%dgp, buy=%d, avgSold=%d, revisions=%d%s%s%s, date=%s',
-                e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, reqVsActual, revPrices, sellTime, e.date);
+            lines.push(`[Stark Mercher]   ${e.item}: qty=${e.qty}, profit=+${e.profit}gp, buy=${e.buy}, avgSold=${e.avgSold}, revisions=${e.revisions}${reqVsActual}${revPrices}${sellTime}, date=${e.date}`);
             totalProfit += e.profit;
         }
-        titan.logf('[Stark Mercher]   Total profit: +%dgp', totalProfit);
+        lines.push(`[Stark Mercher]   Total profit: +${totalProfit}gp`);
     }
     if (history.losses.length > 0) {
-        titan.logf('[Stark Mercher] === LOSSES (%d) ===', history.losses.length);
+        lines.push(`[Stark Mercher] === LOSSES (${history.losses.length}) ===`);
         let totalLoss = 0;
         for (const e of history.losses) {
             const revPrices = e.revisionPrices ? `, revPrices=[${e.revisionPrices.join(',')}]` : '';
             const sellTime = e.sellElapsedMin !== undefined ? `, sellElapsed=${e.sellElapsedMin}min` : '';
             const reqVsActual = e.requestedBuyQty !== undefined ? `, reqBuy=${e.requestedBuyQty}` : '';
-            titan.logf('[Stark Mercher]   %s: qty=%d, loss=%dgp, buy=%d, avgSold=%d, revisions=%d%s%s%s, date=%s',
-                e.item, e.qty, e.profit, e.buy, e.avgSold, e.revisions, reqVsActual, revPrices, sellTime, e.date);
+            lines.push(`[Stark Mercher]   ${e.item}: qty=${e.qty}, loss=${e.profit}gp, buy=${e.buy}, avgSold=${e.avgSold}, revisions=${e.revisions}${reqVsActual}${revPrices}${sellTime}, date=${e.date}`);
             totalLoss += e.profit;
         }
-        titan.logf('[Stark Mercher]   Total loss: %dgp', totalLoss);
+        lines.push(`[Stark Mercher]   Total loss: ${totalLoss}gp`);
     }
-    titan.logf('[Stark Mercher] Merch history dump complete.');
+    lines.push('[Stark Mercher] Merch history dump complete.');
+    flushDumpLines(lines);
 };
 
 // --- Abort history dump -----------------------------------------------------
@@ -174,13 +198,13 @@ export const dumpAbortHistory = (bot: StarkMercher, accountName: string): void =
         titan.logf('[Stark Mercher] No abort history for %s.', accountName);
         return;
     }
-    titan.logf('[Stark Mercher] Abort history for %s (%d entries):', accountName, aborts.aborts.length);
+    const lines: string[] = [`[Stark Mercher] Abort history for ${accountName} (${aborts.aborts.length} entries):`];
     for (const a of aborts.aborts) {
         const cat = a.category ?? 'unknown';
-        titan.logf('[Stark Mercher]   [%s] %s: %s req=%d filled=%d, elapsed=%s eta=%s, price=%d, reason="%s", date=%s',
-            cat, a.item, a.type, a.requestedQty, a.filledQty, a.elapsedMin.toFixed(1) + 'min', a.etaMin.toFixed(1) + 'min', a.price, a.reason, a.date);
+        lines.push(`[Stark Mercher]   [${cat}] ${a.item}: ${a.type} req=${a.requestedQty} filled=${a.filledQty}, elapsed=${a.elapsedMin.toFixed(1)}min eta=${a.etaMin.toFixed(1)}min, price=${a.price}, reason="${a.reason}", date=${a.date}`);
     }
-    titan.logf('[Stark Mercher] Abort history dump complete.');
+    lines.push('[Stark Mercher] Abort history dump complete.');
+    flushDumpLines(lines);
 };
 
 // --- Buy freeze dump --------------------------------------------------------
@@ -233,14 +257,15 @@ export const dumpBuyFreezes = (bot: StarkMercher): void => {
         const sources = bot.autoLoop?.buyFreezeSources;
         const active = items.filter(name => flat[name] > now);
         const expired = items.length - active.length;
-        titan.logf('[Stark Mercher] Buy freezes (%d active, %d expired):', active.length, expired);
+        const lines: string[] = [`[Stark Mercher] Buy freezes (${active.length} active, ${expired} expired):`];
         for (const name of active) {
             const until = flat[name];
             const minsLeft = Math.max(0, Math.ceil((until - now) / 60000));
             const source = sources?.get(name) ?? 'restored';
-            titan.logf('[Stark Mercher]   %s [%s]: expires in %d min (at %s)', name, source, minsLeft, new Date(until).toISOString());
+            lines.push(`[Stark Mercher]   ${name} [${source}]: expires in ${minsLeft} min (at ${new Date(until).toISOString()})`);
         }
-        titan.logf('[Stark Mercher] Buy freeze dump complete.');
+        lines.push('[Stark Mercher] Buy freeze dump complete.');
+        flushDumpLines(lines);
     } catch (e) {
         titan.logf('[Stark Mercher] Failed to parse buy-freeze data: %s', String(e));
     }
@@ -291,7 +316,7 @@ export const dumpAccountProfits = (bot: StarkMercher): void => {
             return;
         }
         titan.logf('[Stark Mercher] Account profits (%d accounts):', lines.length);
-        for (const line of lines) titan.logf('%s', line);
+        flushDumpLines(lines);
         titan.logf('[Stark Mercher] Account profit dump complete.');
     } catch (e) {
         titan.logf('[Stark Mercher] Failed to dump account profits: %s', String(e));

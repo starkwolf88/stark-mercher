@@ -38,7 +38,7 @@ import { createDelay } from '../antiban/humanised-delay.js';
 import { walkToGe } from '../grand_exchange/clerk.js';
 import { isGeOpen, isBankOpen, invalidateBooleanStateCache } from '../grand_exchange/widgets.js';
 import { sendKeyWithJitter } from '../antiban/click-jitter.js';
-import { depositItemAndNoted } from './idle-deposit.js';
+import { depositItemAndNoted, resolveNotedId } from './idle-deposit.js';
 
 // --- Item IDs ---------------------------------------------------------------
 const PESTLE_AND_MORTAR_ID = 233;
@@ -556,10 +556,18 @@ export const goatHornTick = (
  * check before GE operations to prevent selling/collecting with idle items
  * in the inventory.
  */
+/** Count items matching an ID or its noted variant (from cached snapshot).
+ *  Ingredients collected from manual GE offers arrive noted — a different
+ *  item ID that countInvItem alone would miss. */
+const countInvItemOrNoted = (itemId: number): number => {
+    const notedId = resolveNotedId(itemId);
+    return countInvItem(itemId) + (notedId > 0 ? countInvItem(notedId) : 0);
+};
+
 export const hasGoatHornItems = (): boolean =>
-    countInvItem(GOAT_HORN_DUST_ID) > 0
-    || countInvItem(GOAT_HORN_ID) > 0
-    || countInvItem(PESTLE_AND_MORTAR_ID) > 0;
+    countInvItemOrNoted(GOAT_HORN_DUST_ID) > 0
+    || countInvItemOrNoted(GOAT_HORN_ID) > 0
+    || countInvItemOrNoted(PESTLE_AND_MORTAR_ID) > 0;
 
 /** Item IDs that must never be sold on the GE when Goat Horn Dust is the
  *  selected idle activity. The sell scan uses this to filter them out. */

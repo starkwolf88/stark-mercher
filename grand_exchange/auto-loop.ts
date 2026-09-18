@@ -58,6 +58,7 @@ import { startChocolateDust, chocolateDustTick, hasIdleActivityItems as hasChoco
 import { startGoatHorn, goatHornTick, hasGoatHornItems, GOAT_HORN_EXCLUDED_SELL_IDS, GOAT_HORN_INGREDIENT_NAMES, GOAT_HORN_RESULT_PRODUCT_NAMES } from '../idle-activity/goat-horn.js';
 import { startUltraCompost, ultraCompostTick, hasUltraCompostItems, ULTRA_COMPOST_EXCLUDED_SELL_IDS, ULTRA_COMPOST_INGREDIENT_NAMES, ULTRA_COMPOST_RESULT_PRODUCT_NAMES } from '../idle-activity/ultra-compost.js';
 import { hasAnyActivityItems, ANY_EXCLUDED_SELL_IDS, ANY_INGREDIENT_NAMES, ANY_RESULT_PRODUCT_NAMES, startScanning, anyActivityTick } from '../idle-activity/any-activity.js';
+import { expandWithNotedIds } from '../idle-activity/idle-deposit.js';
 
 // --- Idle activity dispatch -------------------------------------------------
 // Dispatches to the correct idle activity based on the selected setting.
@@ -90,14 +91,28 @@ const hasIdleActivityItems = (bot: StarkMercher): boolean => {
 /** Returns the set of item IDs that must never be sold on the GE for the
  *  selected idle activity. The sell scan filters these out so idle activity
  *  ingredients (e.g. volcanic ash, knife, chocolate bars) are never listed
- *  for sale, even when they're kept in the inventory across cycles. */
+ *  for sale, even when they're kept in the inventory across cycles.
+ *
+ *  The returned set includes each item's NOTED variant — ingredients
+ *  collected from manual GE buy offers arrive noted with a different item
+ *  ID, and an unnoted-only filter would let the sell scan list them (this
+ *  was observed with noted supercompost being sold). The expanded set is
+ *  cached per base set so the one-time ItemDef lookups don't repeat. */
+let excludedSellExpandedBase: ReadonlySet<number> | null = null;
+let excludedSellExpanded: ReadonlySet<number> = new Set();
 const getIdleActivityExcludedSellIds = (bot: StarkMercher): ReadonlySet<number> => {
     const activity = bot.idleActivityValue;
-    if (activity === IDLE_ACTIVITY_CHOCOLATE_DUST) return CHOCOLATE_DUST_EXCLUDED_SELL_IDS;
-    if (activity === IDLE_ACTIVITY_ULTRA_COMPOST) return ULTRA_COMPOST_EXCLUDED_SELL_IDS;
-    if (activity === IDLE_ACTIVITY_GOAT_HORN) return GOAT_HORN_EXCLUDED_SELL_IDS;
-    if (activity === IDLE_ACTIVITY_ANY) return ANY_EXCLUDED_SELL_IDS;
-    return EMPTY_SET;
+    let base: ReadonlySet<number>;
+    if (activity === IDLE_ACTIVITY_CHOCOLATE_DUST) base = CHOCOLATE_DUST_EXCLUDED_SELL_IDS;
+    else if (activity === IDLE_ACTIVITY_ULTRA_COMPOST) base = ULTRA_COMPOST_EXCLUDED_SELL_IDS;
+    else if (activity === IDLE_ACTIVITY_GOAT_HORN) base = GOAT_HORN_EXCLUDED_SELL_IDS;
+    else if (activity === IDLE_ACTIVITY_ANY) base = ANY_EXCLUDED_SELL_IDS;
+    else return EMPTY_SET; // None — hasAnyActivityItems guards block GE flows while idle items are in inventory
+    if (excludedSellExpandedBase !== base) {
+        excludedSellExpandedBase = base;
+        excludedSellExpanded = expandWithNotedIds(base);
+    }
+    return excludedSellExpanded;
 };
 const EMPTY_SET: ReadonlySet<number> = new Set();
 const EMPTY_STRING_SET: ReadonlySet<string> = new Set();

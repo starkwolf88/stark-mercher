@@ -1,6 +1,6 @@
 /// <reference path="./titan-plugin-sdk.d.ts" />
 import { debug } from './general/debug.js';
-import { onEnable, terminate } from './general/lifecycle.js';
+import { onEnable, terminate, resetForResume } from './general/lifecycle.js';
 import { shouldWait } from './general/timing.js';
 import { sanityCheckState } from './general/state.js';
 import { auditGeState, invalidateMembersWorldCache, invalidateGeWidgetCache, invalidateBooleanStateCache, isOfferConfigOpen, isSearchPromptShown, isPricePromptShown, isQuantityPromptShown, isGeOpen, isBankOpen, isInventoryOpen, isWorldSwitcherOpenCached } from './grand_exchange/widgets.js';
@@ -8,7 +8,7 @@ import { autoLoopTick, createAutoLoopState, resetAutoLoop, invalidateInvCache, t
 import { sendKeyWithJitter, resetClickJitter } from './antiban/click-jitter.js';
 import { ensureInventoryOpen, resetLocalPlayerCache } from './general/helpers.js';
 import { breakStep, wallClockStep, resetBreakState, saveBreakState, initSessionProfile, markNightlyBreakFinished, resetHop, forceHop, shouldPauseForHopBoundary, resetLoginSnapshotCache, formatUKTime } from './antiban/session.js';
-import { resetLoginState, loginStep, isTitleScreenVisible, resetLoginThrottle } from './antiban/login.js';
+import { resetLoginState, loginStep, isTitleScreenVisible, resetLoginThrottle, invalidateTitleWidgetCache } from './antiban/login.js';
 import { resetLogoutState } from './antiban/logout.js';
 import { hopStep, completeHop, onChatMessage as onHopChatMessage } from './antiban/hopper.js';
 import { renderBotOverlay } from './widgets/bot-overlay.js';
@@ -37,6 +37,18 @@ export class StarkMercher extends titan.Plugin {
     terminated = false;
     terminationReason = '';
     isRunning = false;
+    // True only between onEnable and onDisable. Unlike `terminated` (which
+    // resetForResume can clear), a stale instance from a hot reload never
+    // gets onEnable called again, so `enabled` stays false permanently —
+    // button onClick handlers use it to refuse work on dead registrations
+    // (e.g. startStop's resetForResume would otherwise resurrect them).
+    enabled = false;
+    // Unique instance identifier — detects whether dead plugin instances
+    // still receive event callbacks after hot reload. Each reload creates
+    // a new StarkMercher() with a new instanceId; if the runtime accumulates
+    // registrations instead of replacing them, multiple instanceIds will
+    // appear in the diag log for the same client tick.
+    readonly instanceId = Math.random().toString(36).slice(2, 6);
 
     // --- Overlay HUD ---
     // isHudActive gates the overlay render callback. Set true on enable,
@@ -52,6 +64,11 @@ export class StarkMercher extends titan.Plugin {
     // read as plain fields in the per-frame paths. Matches the mixology
     // plugin's pattern of reading only plain booleans in onMainLoop.
     autoModeValue = 0;
+    // Last non-Paused mode (1=Normal, 2=Slow, 3=F2P). Restored by the
+    // Start/Stop Script button when resuming. Persisted via the hidden
+    // lastActiveModeSetting so it survives hot reloads; synced in onEnable
+    // and onSettingChanged.
+    lastActiveMode = 1;
     showHudValue = true;
     hopWorldsValue = true;
     // Additional cached plain-JS mirrors of settings read from per-tick
@@ -359,6 +376,18 @@ export class StarkMercher extends titan.Plugin {
         hidden: true,
     });
 
+    // --- Hidden last active mode setting ---
+    // Stores the last non-Paused autoMode (1=Normal, 2=Slow, 3=F2P) so the
+    // Start/Stop Script button can resume the correct mode after a hot
+    // reload while Stopped. Same persistence limitation as
+    // offerCacheSetting — hot reload only.
+    lastActiveModeSetting: titan.Setting<string> = this.stringSetting({
+        key: 'lastActiveMode',
+        name: 'Last active mode (hidden)',
+        default: '1',
+        hidden: true,
+    });
+
     // --- Hidden break state setting ---
     // Stores the current break/login state as JSON so it survives plugin
     // restarts and hot reloads. Includes breakPhase, breakType, breakTargetEndMs,
@@ -516,6 +545,7 @@ export class StarkMercher extends titan.Plugin {
         position: 0,
         tooltip: 'Forwards the break timer to 0s — logs back in immediately.',
         onClick: () => {
+            if (!this.enabled) return; // dead instance — must not write shared break-state setting
             if (this.breakPhase === 'logged_out' || this.breakPhase === 'logging_out') {
                 this.breakTargetEndMs = Date.now();
                 saveBreakState(this);
@@ -523,6 +553,51 @@ export class StarkMercher extends titan.Plugin {
             } else {
                 if (this.logInfoValue) titan.logf('[Stark Mercher] End Logout clicked — not in a break (phase=%s), nothing to do.', this.breakPhase);
             }
+        },
+    });
+
+    // --- Start/Stop Script button ---
+    // Toggles the script between Paused and the last active mode by writing
+    // the autoMode setting directly — identical to switching the Mode combo.
+    // Stop saves the current mode to lastActiveMode (persisted via the
+    // hidden lastActiveModeSetting so it survives hot reloads) and switches
+    // to Paused; Start restores it. A terminated bot counts as "stopped" —
+    // clicking the button runs resetForResume() (the same recovery as a
+    // plugin toggle off/on) before resuming. Same pattern as the startStop
+    // button in stark-mixology / stark-herblore.
+    startStop: titan.Setting<void> = this.buttonSetting({
+        key: 'startStop',
+        name: 'Start/Stop Script',
+        position: -2,
+        tooltip: 'Start or stop the script. Stop switches Mode to Paused; Start resumes the last active mode.',
+        onClick: () => {
+            if (!this.enabled) return; // dead instance — resetForResume would resurrect it
+            const stopped = this.autoModeValue === 0 || this.terminated;
+            if (!stopped) {
+                this.lastActiveMode = this.autoModeValue;
+                this.lastActiveModeSetting.value = String(this.lastActiveMode);
+                this.autoMode.value = 0;
+            } else {
+                if (this.terminated) {
+                    // resetForResume() is the same recovery as a plugin
+                    // toggle off/on — clears terminated, resets all
+                    // in-flight state, and re-stamps scriptStartMs
+                    // (terminate() cleared the setting, so a fresh timer
+                    // starts). Refresh the overlay start-time field to match.
+                    if (this.logInfoValue) titan.log('[Stark Mercher] Start clicked — clearing terminated state and resuming.');
+                    resetForResume(this);
+                    this.sessionStartUKTime = formatUKTime(this.scriptStartMs);
+                }
+                if (this.autoModeValue === 0) {
+                    this.autoMode.value = this.lastActiveMode >= 1 && this.lastActiveMode <= 3 ? this.lastActiveMode : 1;
+                }
+            }
+            // Drive the same side effects as a manual Mode combo change
+            // (cached mirror, overlay label, status text, startup-audit
+            // reset, log). The mode-change block inside onSettingChanged is
+            // guarded by a previous-value check, so this call is a no-op if
+            // the native layer already fired onSettingChanged on the write.
+            this.onSettingChanged('autoMode');
         },
     });
 
@@ -590,6 +665,7 @@ export class StarkMercher extends titan.Plugin {
         name: 'Log Cache Data',
         position: -1,
         onClick: () => {
+            if (!this.enabled) return; // dead instance
             const accountName = this.currentPlayerName || '';
             if (!accountName) {
                 titan.log('[Stark Mercher] Cannot log cache — no account name available.');
@@ -610,6 +686,7 @@ export class StarkMercher extends titan.Plugin {
         name: 'Log Merch & Abort History',
         position: -1,
         onClick: () => {
+            if (!this.enabled) return; // dead instance
             const accountName = this.currentPlayerName || '';
             if (!accountName) {
                 titan.log('[Stark Mercher] Cannot log history — no account name available.');
@@ -630,6 +707,7 @@ export class StarkMercher extends titan.Plugin {
         name: 'Log Buy Freezes',
         position: -1,
         onClick: () => {
+            if (!this.enabled) return; // dead instance
             dumpBuyFreezes(this);
         },
     });
@@ -699,7 +777,7 @@ export class StarkMercher extends titan.Plugin {
         key: 'resetHop',
         name: 'Reset Hop',
         position: -1,
-        onClick: () => { resetHop(this); },
+        onClick: () => { if (this.enabled) resetHop(this); },
     });
 
     forceHop: titan.Setting<void> = this.buttonSetting({
@@ -707,7 +785,7 @@ export class StarkMercher extends titan.Plugin {
         name: 'Force Hop',
         position: -1,
         tooltip: 'Forces the next hop to become due. The hop still waits for a safe boundary.',
-        onClick: () => { forceHop(this); },
+        onClick: () => { if (this.enabled) forceHop(this); },
     });
 
     // runStartupAudit()
@@ -753,11 +831,24 @@ export class StarkMercher extends titan.Plugin {
 
     onEnable() {
         onEnable(this);
+        titan.logf('[Stark Mercher] instance=%s', this.instanceId);
+        this.enabled = true;
         this.isHudActive = true;
         // Cache the setting values so per-frame callbacks (onMainLoop, overlay
         // render) read plain JS fields instead of crossing the JS<->native
         // boundary via Setting.value every frame.
         this.autoModeValue = this.autoMode.value;
+        this.isRunning = this.autoModeValue !== 0;
+        // Restore the last active mode for the Start/Stop Script button.
+        // If the plugin was enabled while already in an active mode, that
+        // mode is the better source of truth — update the persisted value.
+        if (this.autoModeValue !== 0) {
+            this.lastActiveMode = this.autoModeValue;
+            this.lastActiveModeSetting.value = String(this.autoModeValue);
+        } else {
+            const savedMode = parseInt(this.lastActiveModeSetting.value, 10);
+            this.lastActiveMode = savedMode >= 1 && savedMode <= 3 ? savedMode : 1;
+        }
         this.showHudValue = this.showHud.value;
         this.hopWorldsValue = this.hopWorlds.value;
         this.idleActivityValue = this.idleActivity?.value ?? 0;
@@ -779,10 +870,19 @@ export class StarkMercher extends titan.Plugin {
         this.cachedIsLoggedIn = titan.state.login.isLoggedIn;
     }
     onDisable() {
+        // Mark this instance terminated FIRST so every event handler bails
+        // on its `if (this.terminated)` guard. If the runtime keeps a stale
+        // registration alive after hot reload/toggle (stale onGameTick /
+        // onMainLoop / onChatMessage hooks firing into the dead instance),
+        // this flag is what stops it from running full tick logic and
+        // creating native handles on dead state. resetState() in onEnable
+        // clears it back to false for a real re-enable.
+        this.terminated = true;
+        this.enabled = false;
         this.isHudActive = false;
         this.statusText = 'Stopped';
         this.overlayStatusText = 'Stopped';
-        if (this.terminated && this.terminationReason) {
+        if (this.terminationReason) {
             if (this.logInfoValue) titan.logf("[Stark Mercher] Stopped: %s", this.terminationReason);
         }
         // Release native handles held in module-level caches. The JS module
@@ -807,6 +907,7 @@ export class StarkMercher extends titan.Plugin {
         // fresh — no stale throttle timestamps, no stale login snapshots,
         // no retained local-player handle.
         resetLoginThrottle();
+        invalidateTitleWidgetCache();
         resetLoginSnapshotCache();
         resetClickJitter();
         resetLocalPlayerCache();
@@ -817,14 +918,26 @@ export class StarkMercher extends titan.Plugin {
         invalidateSessionProfileCache();
     }
     onSettingChanged(key: string) {
+        // Dead instances must not process setting changes — the new
+        // instance's writes to shared settings (same keys) would otherwise
+        // trigger native Setting.value reads on every stale registration.
+        if (this.terminated) return;
         // Keep the per-frame cached mirrors in sync with the underlying
         // settings. Both autoMode and showHud are read from high-frequency
         // callbacks (onMainLoop, overlay render); the cached plain fields
         // avoid crossing the JS<->native boundary via Setting.value every
         // frame.
+        const prevAutoMode = this.autoModeValue;
         if (key === 'autoMode') {
             this.autoModeValue = this.autoMode.value;
             this.overlayStatusText = modeLabel(this.autoModeValue);
+            this.isRunning = this.autoModeValue !== 0;
+            // Track the last non-Paused mode so the Start/Stop Script button
+            // can resume it (persisted so it survives hot reloads).
+            if (this.autoModeValue !== 0 && this.autoModeValue !== this.lastActiveMode) {
+                this.lastActiveMode = this.autoModeValue;
+                this.lastActiveModeSetting.value = String(this.autoModeValue);
+            }
         } else if (key === 'showHud') {
             this.showHudValue = this.showHud.value;
         } else if (key === 'hopWorlds') {
@@ -841,8 +954,10 @@ export class StarkMercher extends titan.Plugin {
         // When Mode is switched, update the status text and re-run the startup
         // audit on the next tick so the auto-loop reconciles from current GE
         // state (the audit is skipped while Paused, so switching to Normal or
-        // Slow needs it to run).
-        if (key === 'autoMode') {
+        // Slow needs it to run). The prev-value check makes this idempotent —
+        // the Start/Stop Script button invokes this handler after writing
+        // autoMode.value, which the native layer may already have fired.
+        if (key === 'autoMode' && prevAutoMode !== this.autoModeValue) {
             if (this.autoModeValue === 0) {
                 this.statusText = 'Paused';
                 if (this.logInfoValue) titan.log('[Stark Mercher] Mode switched to Paused — all script logic stopped.');
@@ -1002,7 +1117,10 @@ export class StarkMercher extends titan.Plugin {
             const now = Date.now();
             if (this.logInfoValue && now - this.lastDiagLogMs >= 30000) {
                 this.lastDiagLogMs = now;
-                titan.logf('[Stark Mercher] diag: clientTick=%d', titan.state.client.tick);
+                // instance= identifies which plugin instance emitted this —
+                // if multiple instanceIds log the same clientTick, stale
+                // registrations from hot reloads are still firing.
+                titan.logf('[Stark Mercher] diag: instance=%s clientTick=%d', this.instanceId, titan.state.client.tick);
             }
             // wallClockStep is all logged-out logic (break transitions, rotation,
             // login step, account detection). When logged in, onGameTick handles
@@ -1025,11 +1143,12 @@ export class StarkMercher extends titan.Plugin {
         // Cache the login state so onMainLoop can skip wallClockStep when
         // logged in without a per-frame native read.
         this.cachedIsLoggedIn = event.newState === titan.LoginGameState.LoggedIn;
-        // Invalidate the cached isMembersWorld() result on any login state
-        // change — covers hop, break logout/login, unexpected logout/login,
-        // and account rotation. The world may have changed (or the player
-        // may be on a different world after logging back in).
-        invalidateMembersWorldCache();
+        // NOTE: isMembersWorld() is NOT invalidated here — it uses a world-ID-
+        // aware cache that automatically re-fetches only when the world ID
+        // actually changes (after a hop or login to a different world). This
+        // avoids a metadata() re-fetch (~100+ native handles) on every login
+        // state change, which was a major contributor to native handle
+        // accumulation during multi-account rotation.
         // Invalidate cross-tick caches on any login state change — covers
         // hop, break logout/login, unexpected logout/login, and account
         // rotation. Widget and inventory state from the previous world/session

@@ -316,6 +316,50 @@ interface WebPathStep {
     readonly name: string;
 }
 
+/** Lifecycle state of an asynchronous screenshot request. SDK 131+. */
+enum ScreenshotPhase {
+    None = 0,
+    /** Waiting for the next presented frame, or encoding it. */
+    Pending = 1,
+    /** PNG bytes are available through ScreenshotFacade.copyPng. */
+    Ready = 2,
+    Failed = 3,
+}
+
+interface ScreenshotStatus {
+    /** Opaque uint64 id; always a bigint to avoid precision loss. */
+    readonly requestId: bigint;
+    readonly phase: ScreenshotPhase;
+    /** Captured frame size in pixels; zero until Ready. */
+    readonly width: number;
+    readonly height: number;
+    /** Encoded PNG size in bytes; zero until Ready. */
+    readonly pngBytes: number;
+    /** Failure reason, or empty. */
+    readonly message: string;
+    readonly finished: boolean;
+}
+
+/**
+ * Asynchronous full-frame game screenshots: the same image the controller's
+ * `/tabs` command returns (the presented backbuffer after the AboveWidgets
+ * overlay pass), PNG-encoded. Capture happens on the next presented frame
+ * and encoding on a worker thread, so submit() returns a handle to poll for
+ * ScreenshotPhase.Ready. At most 4 handles may be outstanding; release each
+ * one. A request that never sees a presented frame fails on its own after a
+ * few seconds. Callable from any plugin callback. SDK 131+.
+ */
+interface ScreenshotFacade {
+    /** Queue one capture, or return null when the host cannot accept another. */
+    submit(): bigint | null;
+    /** Poll a retained request, or return null for an unknown/released handle. */
+    poll(handle: bigint): ScreenshotStatus | null;
+    /** PNG bytes of a Ready request, or null for anything else. */
+    copyPng(handle: bigint): Uint8Array | null;
+    /** Release retained state; the handle must not be used after this succeeds. */
+    release(handle: bigint): boolean;
+}
+
 interface WebWalkerFacade {
     /** Queue a route job, or return null when the request cannot be accepted. */
     submit(request: WebPathRequest): bigint | null;
@@ -558,6 +602,9 @@ interface ActorBase extends InstanceConvertible {
     /** Valid actor path queue entries as world points in this actor's WorldView. Index 0 is the logical/server tile. SDK 59+. */
     readonly pathQueue: WorldPoint[];
     /** Active actor-attached spot animations. Empty when unavailable or none are active. SDK 76+. */
+    /** SDK 127: complete UTF-8 text; null is unavailable/invalid, empty is valid. */
+    getOverheadText(): string | null;
+    getOverheadTextCyclesRemaining(): number | null;
     readonly currentSpotAnims: ActorSpotAnim[];
 
     readonly isPlayer: boolean;
@@ -779,10 +826,18 @@ interface Item {
      * runtime shape: inventory items produce the two-packet
      * `WIDGET_TARGET` -> `WIDGET_TARGET_ON_WIDGET` flow (the knife-on-logs
      * case), NPCs select the item then invoke an NPC menu entry,
-     * and `TileObject`s select the item then invoke a loc menu entry.
-     * Returns `true` when the first selection packet was accepted.
+     * `TileObject`s select the item then invoke a loc menu entry, and
+     * `GroundItem`s (SDK 129) queue the `WIDGET_TARGET` ->
+     * `ITEM_USE_ON_GROUND_ITEM` selected pair together through the same
+     * facade `utils.magic.castOn` uses; the host pins this item id and binds
+     * the unique matching stack (and its quantity) on the game thread.
+     * Ground-item targets are recognised first by shape (`id`, `tileX/Y`,
+     * `quantity`, `ownershipType`, no `hashIndex` / `packedId`) and require
+     * a live inventory `slot`.
+     * Returns `true` when the first selection packet was accepted (for
+     * ground items: when the pair was queued).
      */
-    useOn(target: Item | Npc | TileObject): boolean;
+    useOn(target: Item | Npc | Player | TileObject | GroundItem): boolean;
     /** Cast `spell` on this inventory item. */
     castOn(spell: MagicSpell): boolean;
 }
@@ -939,7 +994,9 @@ interface LocatableQuery<T> extends Query<T> {
     within(worldArea: titan.WorldArea): this;
     within(radius: number, origin: Tile | ActorBase | WorldPoint | LocalPoint): this;
     nearestTo(origin: Tile | ActorBase | WorldPoint | LocalPoint): T | null;
-    /** Nearest entity to the local player, or null. */
+    /** Nearest entity to the local player, or null. Uses the projected player
+     * center for top-level entities while aboard a child WorldView. Entities in
+     * other views, or without an available matching-plane center, are skipped. */
     nearest(): T | null;
     /** Keep only entities on the exact scene tile (or x, y pair). */
     onTile(tile: Tile): this;
@@ -1182,7 +1239,11 @@ interface IntSettingInit extends SettingMetaBase {
     type(id: number): this;
     contentType(id: number): this;
     itemId(id: number): this;
-    /** Replace matches with their non-null direct dynamic children. */
+    /**
+     * Replace matches with their non-null direct dynamic children.
+     * Each parent contributes up to 2048 children (SDK 124); clipping a
+     * larger parent sets `truncated`.
+     */
     children(): this;
     /** True when the host clipped a bounded live traversal. */
     readonly truncated: boolean;
@@ -1390,6 +1451,17 @@ interface ActorSpotAnimEvent {
     /** Native cycle field. */
     readonly cycle: number;
     /** Current game tick captured at dispatch, or 0 if unavailable. */
+    readonly gameTick: number;
+}
+
+/** One accepted utterance, including repetitions and empty text; expiry excluded. */
+interface OverheadTextChangedEvent {
+    readonly actor: Actor;
+    readonly actorType: number;
+    readonly kind: "player" | "npc";
+    readonly indexOrId: number;
+    readonly actorName: string;
+    readonly overheadText: string;
     readonly gameTick: number;
 }
 
@@ -1650,6 +1722,9 @@ interface BreakHandlerUtility {
  * helper methods (this.boolSetting, this.section, this.overlay, ...) and
  * override the lifecycle methods you care about.
  */
+/** SDK 127: bit 1 direct reads; bit 2 all five utterance sources installed. */
+function overheadTextCapabilities(): number;
+
 class Plugin {
     id: string;
     name: string;
@@ -1734,6 +1809,7 @@ class Plugin {
     /** Fired when an actor-attached spot animation is applied. Added in SDK 76. */
     onActorSpotAnim?(event: ActorSpotAnimEvent): void;
     /** Fired when an actor animation field actually changes. Added in SDK 78. */
+    onOverheadTextChanged?(event: OverheadTextChangedEvent): void;
     onAnimationChanged?(event: AnimationChangedEvent): void;
     /** Fired when a mapped item container's slot contents differ from the
      * previous tick. Detection is tick-level diff. Added in SDK 26. */
@@ -2066,6 +2142,9 @@ interface PanelElement {
     /** Host-driven web-walk executor over generated routes. SDK 114+. */
     const webWalk: WebWalkFacade;
 
+    /** Asynchronous full-frame game screenshots, as PNG bytes. SDK 131+. */
+    const screenshot: ScreenshotFacade;
+
     // --- Geometry helpers (SDK 39) ---
     // Mirror the inline methods on `titan::WorldPos` in C++. Operate
     // over plain `WorldPoint` interface values returned from entity
@@ -2127,6 +2206,12 @@ interface PanelElement {
     namespace state {
         const client: {
             readonly tick: number;
+            /**
+             * Current signed 32-bit native Client.GameCycle. It advances at
+             * the nominal 20 ms client logic cadence (50 Hz); 30 cycles make
+             * one 600 ms server tick. Distinct from `tick`. SDK 125+.
+             */
+            readonly gameCycle: number;
             readonly plane: number;
             readonly playerCount: number;
             /** Scene base X in absolute world tile coordinates. */
@@ -2191,6 +2276,11 @@ interface PanelElement {
              * directly, but the player does not move toward the click target.
              */
             invokeMenuAction(action: MenuActionSpec): boolean;
+            /** SDK 128: queue source opcode 25 and its exact dependent target together.
+             * Both skipClick flags must agree. Omit expectedSourceItemId for a
+             * spell widget so the host binds its live item. True means queued. */
+            invokeSelectedMenuAction(source: MenuActionSpec, target: MenuActionSpec,
+                                     expectedSourceItemId?: number): boolean;
         };
 
         const camera: {
@@ -2954,8 +3044,7 @@ interface PanelElement {
          * selects one exact direct dynamic child beneath it. SDK v64+.
          *
          * @param opcode   MenuAction opcode (57 = CC_OP, 1007 = CC_OP_LOW,
-         *                 39..43 = WIDGET_FIRST..FIFTH_OPTION, 25 =
-         *                 WIDGET_TARGET, 2 = WIDGET_TARGET_ON_GAME_OBJECT,
+         *                 25 = WIDGET_TARGET, 2 = WIDGET_TARGET_ON_GAME_OBJECT,
          *                 8 = WIDGET_TARGET_ON_NPC, 15 = WIDGET_TARGET_ON_PLAYER,
          *                 58 = WIDGET_TARGET_ON_WIDGET).
          * @param identifier Menu-entry identifier -- the CC_OP sub-action
@@ -2982,19 +3071,21 @@ interface PanelElement {
              * remembers its parent and slot for `child.setText(...)` and
              * `child.interact(opcode, identifier)`.
              *
+             * Sized to the parent's true child count (SDK 124; previously
+             * clipped at 128), bounded at 2048 entries per call.
+             *
              * Returns an empty array when the parent is missing, has no
              * dynamic children, or the host is pre-SDK-38.
              */
             children(parentPackedId: number): WidgetState[];
             pack(group: number, child: number): number;
             /**
-             * Dispatch a widget-family DoAction (CC_OP,
-             * WIDGET_*_OPTION, WIDGET_TARGET, WIDGET_TARGET_ON_WIDGET,
+             * Dispatch a widget-family action (CC_OP, CC_OP_LOW,
+             * WIDGET_TARGET, WIDGET_TARGET_ON_WIDGET,
              * ...).
              *
              * @param opcode   MenuAction opcode (57 = CC_OP, 1007 = CC_OP_LOW,
-             *                 39..43 = WIDGET_FIRST..FIFTH_OPTION, 25 =
-             *                 WIDGET_TARGET, 2 = WIDGET_TARGET_ON_GAME_OBJECT,
+             *                 25 = WIDGET_TARGET, 2 = WIDGET_TARGET_ON_GAME_OBJECT,
              *                 8 = WIDGET_TARGET_ON_NPC, 15 = WIDGET_TARGET_ON_PLAYER,
              *                 58 = WIDGET_TARGET_ON_WIDGET).
              * @param identifier Menu-entry identifier -- the CC_OP
@@ -3044,6 +3135,7 @@ interface PanelElement {
         LoginScreen = 10,
         LoginAuthenticator = 11,
         LoggingIn = 20,
+        Loading = 25,
         LoggedIn = 30,
         HoppingWorld = 45,
     }
@@ -3093,6 +3185,7 @@ interface PanelElement {
         const walk: {
             toScene(sceneX: number, sceneY: number): boolean;
             toWorld(worldX: number, worldY: number, plane: number): boolean;
+            /** Tile uses scene-local x/y and plane; WorldPoint uses absolute x/y and z. */
             to(tile: Tile | WorldPoint): boolean;
         };
 
@@ -3182,8 +3275,10 @@ interface PanelElement {
         entityClickbox(entity: Npc | Player, outline: number, fill?: number): void;
         /**
          * Raw entry for plugins that already hold the entity pointer and
-         * its typecode. Passing `typecode = 0` skips typecode-keyed lookup
-         * and falls back to the host's world-keyed fallback cache.
+         * its typecode. The typecode-keyed picking cache is the host's
+         * only picking evidence; passing `typecode = 0` skips it, leaving
+         * only GraphNode data and (for actors) the approximate
+         * synthesized footprint.
          */
         entityClickboxRaw(entityPtr: number | bigint, typecode: number | bigint,
                           outline: number, fill?: number): void;
@@ -3204,6 +3299,24 @@ interface PanelElement {
         tileObjectHull(obj: TileObject, outline: number, fill?: number): void;
         tileObjectHullRaw(locPtr: number | bigint, typecode: number | bigint,
                           outline: number, fill?: number): void;
+        /**
+         * Draw the TRUE model silhouette: the 2D convex hull of the entity's
+         * actual projected model vertices, rotated and placed exactly where
+         * the engine renders it. Tighter than entityHull (which hulls the 8
+         * AABB corners) -- irregular or tall-thin models get a real outline
+         * instead of a box. Silent no-op on hosts older than SDK 122 or when
+         * the model handle isn't bound this frame (host model-AABB hook
+         * inactive / revision without Model geometry).
+         */
+        /** @param mode outline polygon: 0 = convex hull (default), 1 = concave hull. */
+        entityOutline(entity: Npc | Player, outline: number, fill?: number,
+                      mode?: 0 | 1): void;
+        entityOutlineRaw(entityPtr: number | bigint, typecode: number | bigint,
+                         outline: number, fill?: number, mode?: 0 | 1): void;
+        tileObjectOutline(obj: TileObject, outline: number, fill?: number,
+                          mode?: 0 | 1): void;
+        tileObjectOutlineRaw(locPtr: number | bigint, typecode: number | bigint,
+                             outline: number, fill?: number, mode?: 0 | 1): void;
         textAtWorld(worldX: number, worldY: number, worldZ: number,
                     text: string, color: number, centered?: boolean): void;
         textAtWorldInWorldView(worldViewId: number,

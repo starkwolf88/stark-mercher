@@ -34,7 +34,7 @@ const notedIdCache = new Map<number, number>();
  * `noted === true` — this guards against stale/unexpected field values
  * causing a wrong-item deposit.
  */
-const resolveNotedId = (unnotedId: number): number => {
+export const resolveNotedId = (unnotedId: number): number => {
     const cached = notedIdCache.get(unnotedId);
     if (cached !== undefined) return cached;
     let notedId = -1;
@@ -93,4 +93,20 @@ export const depositItemAndNoted = (
     if (notedId > 0 && notedId !== unnotedId) {
         bank.depositAllOfItem(notedId);
     }
+};
+
+/**
+ * Expand a set of unnoted ingredient IDs to also include each item's noted
+ * variant. Items collected from manual GE offers arrive noted (different
+ * item ID) — ID-based filters (e.g. the sell scan's excluded-sell set) must
+ * cover both variants or noted ingredients would be listed for sale.
+ * `resolveNotedId` caches its lookups, so this is cheap after the first call.
+ */
+export const expandWithNotedIds = (ids: ReadonlySet<number>): ReadonlySet<number> => {
+    const expanded = new Set<number>(ids);
+    for (const id of ids) {
+        const notedId = resolveNotedId(id);
+        if (notedId > 0 && notedId !== id) expanded.add(notedId);
+    }
+    return expanded;
 };

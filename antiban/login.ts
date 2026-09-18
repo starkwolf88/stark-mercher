@@ -10,6 +10,7 @@
 
 import type { StarkMercher } from '../stark-mercher.js';
 import { createDelay } from './humanised-delay.js';
+import { getLocalPlayer } from '../general/helpers.js';
 
 const LOGIN_THROTTLE_MS = 1000;
 const LOGIN_SUCCESS_LOCKOUT_MS = 8 * 600; // re-check title every 8 ticks (~4.8s)
@@ -53,6 +54,22 @@ const LOGIN_SUBMIT_DELAY_TICKS_MAX = 4;
 const LOGIN_STEP_MIN_INTERVAL_MS = 600 * 3;
 let lastLoginStepMs = 0;
 
+// Title widget cache — findByText scans every loaded widget's text field
+// (~2.7s on the login screen, which has dozens of widget groups). The title
+// widget is static once found, so cache the handle and reuse it until it
+// goes stale. When not found, throttle findByText to once per 5s to prevent
+// back-to-back full scans while the login screen is still loading.
+let cachedTitleWidget: titan.WidgetState | null = null;
+let titleWidgetMissAtMs = 0;
+const TITLE_WIDGET_MISS_THROTTLE_MS = 5000;
+
+/** Invalidates the cached title widget. Called from resetLoginState and
+ *  onDisable so stale handles don't survive login state changes. */
+export const invalidateTitleWidgetCache = (): void => {
+    cachedTitleWidget = null;
+    titleWidgetMissAtMs = 0;
+};
+
 /** Resets the login-step throttle. Called from onDisable so a toggle off/on
  *  doesn't inherit a stale throttle timestamp from the previous run. */
 export const resetLoginThrottle = (): void => {
@@ -72,18 +89,44 @@ function sampleInt(min: number, max: number): number {
 }
 
 function isInWorld(): boolean {
-    return !!titan.state.client.localPlayer && titan.state.login.isWorldReady;
+    return !!getLocalPlayer() && titan.state.login.isWorldReady;
 }
 
 function findTitleWidget(bot: StarkMercher): titan.WidgetState | null {
+    // Cached handle — check liveness without a new native lookup
+    if (cachedTitleWidget) {
+        try {
+            if (cachedTitleWidget.exists && cachedTitleWidget.visible) {
+                return cachedTitleWidget;
+            }
+        } catch { /* stale handle */ }
+        cachedTitleWidget = null;
+    }
+    // Fast path: direct packed-ID lookup (1 native call)
     const byId = titan.state.widgets.find(TITLE_CLICK_PACKED_ID);
-    if (byId && byId.exists && byId.visible) return byId;
+    if (byId && byId.exists && byId.visible) {
+        cachedTitleWidget = byId;
+        titleWidgetMissAtMs = 0;
+        return byId;
+    }
+    // Slow path: findByText scans all widgets (~2.7s on the login screen).
+    // Throttle to once per 5s when the widget isn't found to prevent
+    // back-to-back full scans while the login screen is still loading.
+    const now = Date.now();
+    if (now - titleWidgetMissAtMs < TITLE_WIDGET_MISS_THROTTLE_MS) {
+        return null;
+    }
     try {
         const byText = titan.state.widgets.findByText(TITLE_CLICK_TEXT);
-        if (byText && byText.exists && byText.visible) return byText;
+        if (byText && byText.exists && byText.visible) {
+            cachedTitleWidget = byText;
+            titleWidgetMissAtMs = 0;
+            return byText;
+        }
     } catch (e) {
         // findByText not supported on this host
     }
+    titleWidgetMissAtMs = now;
     return null;
 }
 
@@ -386,5 +429,6 @@ export function resetLoginState(bot: StarkMercher): void {
     bot.loginFirstAttemptAtMs = 0;
     bot.loginTotalSubmitAttempts = 0;
     // Allow the next loginStep to run immediately after a reset.
+    invalidateTitleWidgetCache();
     lastLoginStepMs = 0;
 }

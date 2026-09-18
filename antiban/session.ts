@@ -27,7 +27,7 @@ import type { SessionProfile } from './session-profile.js';
 import { loadOrCreateSessionProfile, formatTime } from './session-profile.js';
 import { logoutForBreak, resetLogoutState } from './logout.js';
 import { loginStep, resetLoginState } from './login.js';
-import { isPlayerIdle } from '../general/helpers.js';
+import { isPlayerIdle, getLocalPlayer } from '../general/helpers.js';
 import { cancelHop } from './hopper.js';
 import { dumpAllState, updateProfitDisplay } from '../general/dump.js';
 import { isRotationEnabled, selectNextAccount, recordAccountLogout, recordAccountLogin, loadRotationIndex, getRoster, isAccountSleeping, normalizeAccountName } from './account-rotation.js';
@@ -568,7 +568,7 @@ function tryImmediateRotation(bot: StarkMercher): boolean {
  *  case-insensitively (after trim), we use the roster's version. This keeps
  *  all history under a single consistent key. */
 export function initSessionProfile(bot: StarkMercher): void {
-    const playerName = titan.state.client.localPlayer?.name;
+    const playerName = getLocalPlayer()?.name;
     if (!playerName) {
         debugLog(bot, 'initSessionProfile: no player name, skipping');
         return;
@@ -1726,5 +1726,5 @@ function updateDayBoundsFromSchedule(bot: StarkMercher, bedtimeMs: number): void
 }
 
 function isInWorld(): boolean {
-    return !!titan.state.client.localPlayer && titan.state.login.isWorldReady;
+    return !!getLocalPlayer() && titan.state.login.isWorldReady;
 }

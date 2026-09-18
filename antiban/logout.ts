@@ -21,10 +21,11 @@ const CONFIRM_LABELS = ['Click here to logout', 'Logout', 'Log out', 'Log Out'];
 
 // --- Logout door entity cache ----------------------------------------------
 // The logout door is a static scenery object — it never despawns or moves.
-// The query titan.queries.objects().hasAction('Log out', ...).nearest() is
-// UNSCOPED (no radius argument — scans ALL loaded objects), making it the
-// most expensive per-call query in the plugin. Caching the result eliminates
-// the unscoped scan on every logout cycle (and every retry within a cycle).
+// The query titan.queries.objects().currentWorldView().hasAction('Log out',
+// ...).nearest() is scoped to the current WorldView (unscoped objects() can
+// span multiple loaded WorldViews with stale/ghost copies). Caching the
+// result eliminates the scan on every logout cycle (and every retry within a
+// cycle).
 //
 // SDK 105+ guarantees object handles are live cross-tick — a cached reference
 // re-resolves its fields against the live tile once per tick, so the cached
@@ -50,6 +51,7 @@ const getLogoutDoor = (): titan.TileObject | null => {
     cachedLogoutDoorChecked = true;
     try {
         cachedLogoutDoor = titan.queries.objects()
+            .currentWorldView()
             .hasAction('Log out', 'Log-out', 'Logout', 'Log Out')
             .nearest();
     } catch {
@@ -150,17 +152,17 @@ export function logoutForBreak(bot: StarkMercher, reason: string = 'break', sile
     }
 
     if (bot.logoutStep === 1) {
-        if (tryClickText(bot, CONFIRM_LABELS, 'logout confirm', 1)) {
-            bot.logoutStep = 2;
-            bot.logoutNextAttemptMs = now + 5000;
-            return;
-        }
         if (tryClickWidget(bot, LOGOUT_CONFIRM_PACKED, 'logout confirm (world switcher)', 1)) {
             bot.logoutStep = 2;
             bot.logoutNextAttemptMs = now + 5000;
             return;
         }
         if (tryClickWidget(bot, LOGOUT_CLICK_HERE_PACKED, 'logout confirm (menu)', 1, -1)) {
+            bot.logoutStep = 2;
+            bot.logoutNextAttemptMs = now + 5000;
+            return;
+        }
+        if (tryClickText(bot, CONFIRM_LABELS, 'logout confirm', 1)) {
             bot.logoutStep = 2;
             bot.logoutNextAttemptMs = now + 5000;
             return;

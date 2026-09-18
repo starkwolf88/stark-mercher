@@ -50,7 +50,7 @@ import { createDelay } from '../antiban/humanised-delay.js';
 import { walkToGe } from '../grand_exchange/clerk.js';
 import { isGeOpen, isBankOpen, invalidateBooleanStateCache } from '../grand_exchange/widgets.js';
 import { sendKeyWithJitter, clickWithJitter } from '../antiban/click-jitter.js';
-import { depositItemAndNoted } from './idle-deposit.js';
+import { depositItemAndNoted, resolveNotedId } from './idle-deposit.js';
 
 // --- Item IDs ---------------------------------------------------------------
 // Supercompost: non-stackable (1 slot per bucket), noteable
@@ -71,26 +71,17 @@ const SUB_WITHDRAW_SUPER = 5;
 const SUB_CLOSE_BANK = 6;
 
 // --- Converting sub-steps ---------------------------------------------------
-// 0 = select volcanic ash with "Use" (WIDGET_TARGET — first half of split use-on)
-// 1 = wait a humanised gap, then click supercompost (WIDGET_TARGET_ON_WIDGET)
+// 0 = use volcanic ash on supercompost (Item.useOn queues the
+//     WIDGET_TARGET + WIDGET_TARGET_ON_WIDGET pair atomically — the new
+//     callback-based interaction system requires an explicit
+//     source-and-target pair for selected/target actions)
 // 2 = waiting for make-X dialogue to appear
 // 3 = press spacebar to make all
 // 4 = processing — idle until all supercompost is converted
 const SUB_CONV_USE_ASH = 0;
-const SUB_CONV_CLICK_SUPER = 1;
 const SUB_CONV_WAIT_DIALOGUE = 2;
 const SUB_CONV_PRESS_SPACE = 3;
 const SUB_CONV_PROCESSING = 4;
-
-// --- Inventory widget (group 149, child 0) — for split use-on ---------------
-// The SDK's Item.useOn() sends WIDGET_TARGET + WIDGET_TARGET_ON_WIDGET in the
-// same client frame with no delay between them. A human would select the first
-// item, move the mouse, then click the second. We split useOn into two widget
-// interactions with a humanised gap between them (same pattern as stark-mixology
-// herblore — see potionUseOnStep / potionUseTargetStep).
-const INVENTORY_WIDGET_PACKED_ID = (149 << 16) | 0;
-const WIDGET_TARGET_OPCODE = 25;
-const WIDGET_TARGET_ON_WIDGET_OPCODE = 58;
 
 // --- Bank open throttle -----------------------------------------------------
 const BANK_OPEN_THROTTLE_TICKS = 5;
@@ -365,6 +356,7 @@ export const ultraCompostTick = (
                         bank.close();
                         invalidateBooleanStateCache();
                     }
+                    invalidateInvCache(); // fresh post-close snapshot for converting
                     loop.idleActivityPhase = 'converting';
                     loop.idleActivitySubStep = 0;
                     loop.idleActivityLastTick = tick;
@@ -417,15 +409,26 @@ export const ultraCompostTick = (
             }
 
             switch (loop.idleActivitySubStep) {
-                // Step 0: Select volcanic ash with "Use" (WIDGET_TARGET).
-                // This is the first half of the split use-on. The SDK's
-                // Item.useOn() sends both WIDGET_TARGET and
-                // WIDGET_TARGET_ON_WIDGET in the same client frame with no
-                // delay between them. A human would select the first item,
-                // move the mouse, then click the second. We split the
-                // interaction into two widget clicks with a humanised gap
-                // between them (same pattern as stark-mixology herblore).
+                // Step 0: Use volcanic ash on supercompost via Item.useOn().
+                // The new callback-based interaction system rejects a bare
+                // WIDGET_TARGET_ON_WIDGET (opcode 58) widget interact — the
+                // selected target action must be queued together with its
+                // source ("Selected targets require an explicit
+                // source-and-target pair"). Item.useOn() does this correctly
+                // via the facade's paired queue. Same pattern as
+                // chocolate-dust (knife.useOn(bar)).
                 case SUB_CONV_USE_ASH: {
+                    // Bank still open — the ordinary inventory widget route
+                    // is unavailable while the bank interface is up (the new
+                    // callback system rejects the queued pair with "Ordinary
+                    // widget callback route or request unavailable"). Go back
+                    // to close it first.
+                    if (isBankOpen()) {
+                        loop.idleActivityPhase = 'banking';
+                        loop.idleActivitySubStep = SUB_CLOSE_BANK;
+                        loop.idleActivityLastTick = -1;
+                        return true;
+                    }
                     const ash = findInvItem(VOLCANIC_ASH_ID);
                     const superCompost = findInvItem(SUPERCOMPOST_ID);
                     if (!ash || !superCompost) {
@@ -434,50 +437,7 @@ export const ultraCompostTick = (
                         loop.idleActivityLastTick = -1;
                         return true;
                     }
-                    const invWidget = titan.state.widgets.find(INVENTORY_WIDGET_PACKED_ID);
-                    if (!invWidget || !invWidget.visible) {
-                        // Fallback: widget not found, use the atomic useOn() call.
-                        ash.useOn(superCompost);
-                        loop.idleActivitySubStep = SUB_CONV_WAIT_DIALOGUE;
-                        loop.idleActivityLastTick = tick;
-                        const delay = createDelay(3, 20, 8);
-                        setAction(bot, 'idle_use_ash', delay);
-                        return true;
-                    }
-                    clickWithJitter(() => invWidget.interact(WIDGET_TARGET_OPCODE, 0, ash.slot), { reason: 'select volcanic ash (Use)' });
-                    loop.idleActivitySubStep = SUB_CONV_CLICK_SUPER;
-                    loop.idleActivityLastTick = tick;
-                    // Humanised gap between selecting ash and clicking
-                    // supercompost — simulates mouse travel + reaction time.
-                    const gapDelay = createDelay(1, 4, 2);
-                    setAction(bot, 'idle_use_ash', gapDelay);
-                    return true;
-                }
-
-                // Step 1: Click supercompost (WIDGET_TARGET_ON_WIDGET).
-                // After the humanised gap from step 0, click the second item
-                // to complete the use-on interaction.
-                case SUB_CONV_CLICK_SUPER: {
-                    const superCompost = findInvItem(SUPERCOMPOST_ID);
-                    if (!superCompost) {
-                        loop.idleActivityPhase = 'banking';
-                        loop.idleActivitySubStep = SUB_OPEN_BANK;
-                        loop.idleActivityLastTick = -1;
-                        return true;
-                    }
-                    const invWidget = titan.state.widgets.find(INVENTORY_WIDGET_PACKED_ID);
-                    if (!invWidget || !invWidget.visible) {
-                        // Widget gone mid-sequence — fall back to useOn() to
-                        // complete the action.
-                        const ash = findInvItem(VOLCANIC_ASH_ID);
-                        if (ash) ash.useOn(superCompost);
-                        loop.idleActivitySubStep = SUB_CONV_WAIT_DIALOGUE;
-                        loop.idleActivityLastTick = tick;
-                        const delay = createDelay(3, 20, 8);
-                        setAction(bot, 'idle_use_ash', delay);
-                        return true;
-                    }
-                    clickWithJitter(() => invWidget.interact(WIDGET_TARGET_ON_WIDGET_OPCODE, 0, superCompost.slot), { reason: 'use volcanic ash on supercompost' });
+                    clickWithJitter(() => ash.useOn(superCompost), { reason: 'use volcanic ash on supercompost' });
                     loop.idleActivitySubStep = SUB_CONV_WAIT_DIALOGUE;
                     loop.idleActivityLastTick = tick;
                     const delay = createDelay(3, 20, 8);
@@ -648,15 +608,24 @@ export const ultraCompostTick = (
     }
 };
 
+/** Count items matching an ID or its noted variant (from cached snapshot).
+ *  Ingredients collected from manual GE offers arrive noted — a different
+ *  item ID that countInvItem alone would miss. */
+const countInvItemOrNoted = (itemId: number): number => {
+    const notedId = resolveNotedId(itemId);
+    return countInvItem(itemId) + (notedId > 0 ? countInvItem(notedId) : 0);
+};
+
 /**
  * Check if the inventory contains any ultra compost idle-activity items
- * that would interfere with GE operations (ultracompost or supercompost).
+ * that would interfere with GE operations (ultracompost or supercompost,
+ * including their noted variants collected from manual GE offers).
  * Volcanic ash is excluded — it's stackable (1 slot) and kept in the
  * inventory across cycles, so it doesn't block GE sell/collect/abort.
  */
 export const hasUltraCompostItems = (): boolean =>
-    countInvItem(ULTRACOMPOST_ID) > 0
-    || countInvItem(SUPERCOMPOST_ID) > 0;
+    countInvItemOrNoted(ULTRACOMPOST_ID) > 0
+    || countInvItemOrNoted(SUPERCOMPOST_ID) > 0;
 
 /** Item IDs that must never be sold on the GE when Ultra Compost is the
  *  selected idle activity. Volcanic ash is included here even though it's

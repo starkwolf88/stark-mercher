@@ -3,6 +3,7 @@ import { resetAutoLoop, invalidateInvCache } from '../grand_exchange/auto-loop.j
 import { invalidateGeWidgetCache } from '../grand_exchange/widgets.js';
 import { resetBreakState, restoreBreakState, initSessionProfile, resetHopState, loadHopState } from '../antiban/session.js';
 import { loadRotationIndex } from '../antiban/account-rotation.js';
+import { getLocalPlayer } from './helpers.js';
 
 // onEnable()
 export const onEnable = (bot: StarkMercher) => {
@@ -120,7 +121,7 @@ const resetState = (bot: StarkMercher) => {
     // rotation). -1 = not yet loaded; loadRotationIndex returns 0 if unset.
     bot.rotationIndex = loadRotationIndex(bot);
     // If the player is already in-world, load the session profile immediately.
-    if (titan.state.client.localPlayer?.name) {
+    if (getLocalPlayer()?.name) {
         initSessionProfile(bot);
     }
 };

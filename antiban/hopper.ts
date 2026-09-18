@@ -22,6 +22,7 @@ import { invalidateLogoutDoorCache } from './logout.js';
 import { resetInFlightActionState } from '../general/state.js';
 import { resetLoginState } from './login.js';
 import { sendKeyWithJitter } from './click-jitter.js';
+import { getLocalPlayer } from '../general/helpers.js';
 
 const TICKS_PER_MINUTE = 100;
 const HOP_MAX_WAIT_MS = 45000;
@@ -254,7 +255,7 @@ export function completeHop(bot: StarkMercher, tick: number): void {
     if (!bot.hopSawLoggedOut) return;
 
     const currentWorld = titan.state.world.current();
-    if ((currentWorld !== null && currentWorld !== bot.hopToWorldId) || !titan.state.client.localPlayer) {
+    if ((currentWorld !== null && currentWorld !== bot.hopToWorldId) || !getLocalPlayer()) {
         return;
     }
 

@@ -5,8 +5,10 @@ import { GE_CLERK_IDS, GE_ZONE_CENTER, GE_ZONE_RADIUS, GE_STAND_TILES } from './
 // despawn, move, or change. The only event that invalidates them is a world
 // hop or login/logout transition (the scene reloads). Caching the toArray()
 // results eliminates per-call native handle creation from
-// titan.queries.npcs().ids(...).toArray() and
-// titan.queries.objects(20).nameContains(...).hasAction(...).toArray().
+// titan.queries.npcs().currentWorldView().ids(...).toArray() and
+// titan.queries.objects(20).currentWorldView().nameContains(...).hasAction(...).toArray().
+// .currentWorldView() scopes the query to the active WorldView — unscoped
+// queries can span multiple loaded WorldViews with stale/ghost copies.
 //
 // SDK 105+ guarantees object handles are live cross-tick — a cached reference
 // re-resolves its fields against the live tile once per tick, so the cached
@@ -27,19 +29,20 @@ export const invalidateEntityQueryCache = (): void => {
 };
 
 /** Returns the cached GE clerk NPC array, populating it from a single
- *  titan.queries.npcs().ids(...).toArray() call on first access. */
+ *  titan.queries.npcs().currentWorldView().ids(...).toArray() call on
+ *  first access. */
 const getClerks = (): titan.Npc[] => {
     if (cachedClerks) return cachedClerks;
-    cachedClerks = titan.queries.npcs().ids(...GE_CLERK_IDS).toArray();
+    cachedClerks = titan.queries.npcs().currentWorldView().ids(...GE_CLERK_IDS).toArray();
     return cachedClerks;
 };
 
 /** Returns the cached GE booth object array, populating it from a single
- *  titan.queries.objects(20).nameContains(...).hasAction(...).toArray() call
- *  on first access. */
+ *  titan.queries.objects(20).currentWorldView().nameContains(...).hasAction(...).toArray()
+ *  call on first access. */
 const getBooths = (): titan.TileObject[] => {
     if (cachedBooths) return cachedBooths;
-    cachedBooths = titan.queries.objects(20).nameContains('Grand Exchange').hasAction('Exchange').toArray();
+    cachedBooths = titan.queries.objects(20).currentWorldView().nameContains('Grand Exchange').hasAction('Exchange').toArray();
     return cachedBooths;
 };
 

@@ -314,30 +314,56 @@ export const scanSearchResultsUnique = (itemName: string): {
 };
 
 // isMembersWorld()
-// Cached — titan.state.world.metadata() returns a full snapshot of the world
-// list (~100+ objects) on every call. This is called multiple times per tick
-// via offerSlotCount() and auditGeState(). The result only changes on a world
-// hop or logout/login, so we cache it and invalidate via
-// invalidateMembersWorldCache() on hop completion and any logout.
+// World-ID-aware cache — titan.state.world.metadata() returns a full snapshot
+// of the world list (~100+ WorldMetadata native objects) on every call. This
+// is called multiple times per tick via offerSlotCount() and auditGeState().
+// The result only changes when the player is on a DIFFERENT world, so we cache
+// both the world ID and the boolean. On each call, titan.state.world.current()
+// (scalar read, no native handle) is compared to the cached world ID — if they
+// match, the cached boolean is returned without any native handle creation.
+//
+// This is critical for multi-account rotation: each login/logout cycle
+// previously invalidated the boolean cache via invalidateMembersWorldCache()
+// from onGameStateChanged, forcing a metadata() re-fetch (~100+ native
+// handles) on every login — even when the account logged back into the SAME
+// world. With 5 accounts (~6 cycles/hour), that was ~600+ native handles/hour
+// just for isMembersWorld. The world-ID check eliminates this entirely when the
+// world hasn't changed (the common case).
+//
+// invalidateMembersWorldCache() is still called on tick counter reset and
+// onDisable as defensive measures, but it is no longer called from
+// onGameStateChanged — the world-ID check handles invalidation automatically
+// after a hop (the world ID changes) or a login (the world ID is re-read).
 let cachedIsMembersWorld: boolean | null = null;
+let cachedIsMembersWorldId: number | null = null;
 
 export const isMembersWorld = (): boolean => {
-    if (cachedIsMembersWorld !== null) return cachedIsMembersWorld;
     const id = titan.state.world.current();
     if (id === null) {
         cachedIsMembersWorld = false;
+        cachedIsMembersWorldId = null;
         return false;
     }
+    // World ID matches the cached value — return the cached boolean without
+    // any native handle creation. titan.state.world.current() is a scalar
+    // read (no native handle), so this check is free.
+    if (cachedIsMembersWorld !== null && cachedIsMembersWorldId === id) {
+        return cachedIsMembersWorld;
+    }
+    // World ID changed (hop or login to a different world) — re-fetch.
     const meta = titan.state.world.metadata().find(w => w.id === id);
     cachedIsMembersWorld = meta ? meta.isMembers : false;
+    cachedIsMembersWorldId = id;
     return cachedIsMembersWorld;
 };
 
-/** Invalidates the cached isMembersWorld result. Must be called on hop
- *  completion and on any logout (break, disconnect, rotation) so the next
- *  isMembersWorld() call re-fetches from the live world list. */
+/** Invalidates the cached isMembersWorld result. Called on tick counter
+ *  reset and onDisable as defensive measures. No longer called from
+ *  onGameStateChanged — the world-ID check in isMembersWorld() handles
+ *  invalidation automatically when the world changes after a hop or login. */
 export const invalidateMembersWorldCache = (): void => {
     cachedIsMembersWorld = null;
+    cachedIsMembersWorldId = null;
 };
 
 // --- Boolean state cache (isGeOpen, bank.isOpen, inventory.isOpen) ----------

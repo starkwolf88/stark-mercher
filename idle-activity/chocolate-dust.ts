@@ -38,7 +38,7 @@ import { createDelay } from '../antiban/humanised-delay.js';
 import { walkToGe } from '../grand_exchange/clerk.js';
 import { isGeOpen, isBankOpen, invalidateBooleanStateCache } from '../grand_exchange/widgets.js';
 import { sendKeyWithJitter } from '../antiban/click-jitter.js';
-import { depositItemAndNoted } from './idle-deposit.js';
+import { depositItemAndNoted, resolveNotedId } from './idle-deposit.js';
 
 // --- Item IDs ---------------------------------------------------------------
 const KNIFE_ID = 946;
@@ -556,10 +556,18 @@ export const chocolateDustTick = (
  * chocolate bars, or knife). Used as a safety check before GE operations
  * to prevent selling/collecting with idle items in the inventory.
  */
+/** Count items matching an ID or its noted variant (from cached snapshot).
+ *  Ingredients collected from manual GE offers arrive noted — a different
+ *  item ID that countInvItem alone would miss. */
+const countInvItemOrNoted = (itemId: number): number => {
+    const notedId = resolveNotedId(itemId);
+    return countInvItem(itemId) + (notedId > 0 ? countInvItem(notedId) : 0);
+};
+
 export const hasIdleActivityItems = (): boolean =>
-    countInvItem(CHOCOLATE_DUST_ID) > 0
-    || countInvItem(CHOCOLATE_BAR_ID) > 0
-    || countInvItem(KNIFE_ID) > 0;
+    countInvItemOrNoted(CHOCOLATE_DUST_ID) > 0
+    || countInvItemOrNoted(CHOCOLATE_BAR_ID) > 0
+    || countInvItemOrNoted(KNIFE_ID) > 0;
 
 /** Item IDs that must never be sold on the GE when Chocolate Dust is the
  *  selected idle activity. The sell scan uses this to filter them out. */

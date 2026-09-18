@@ -11,6 +11,34 @@ behavior, or debugging any runtime issue.
 
 ---
 
+## Mode toggle & Start/Stop Script button
+
+`autoMode` combo: `Paused` (0, default) / `Normal` (1) / `Slow` (2) / `F2P`
+(3). Paused = no script logic at all (every loop callback early-returns on
+`autoModeValue === 0`); the overlay still renders. The **Start/Stop Script**
+button (`startStop` buttonSetting, position -2 — top of the settings panel)
+toggles the mode programmatically — identical to switching the Mode combo.
+Stop saves the current mode to `lastActiveMode` (persisted via the hidden
+`lastActiveMode` string setting — hot-reload only) and writes
+`autoMode.value = 0`; Start writes `autoMode.value` back to the last active
+mode. A `terminated` bot counts as stopped — clicking the button runs
+`resetForResume()` (same recovery as a plugin toggle off/on, including a
+fresh `scriptStartMs` since `terminate()` cleared the setting) before
+resuming. The button invokes `onSettingChanged('autoMode')` after the
+write; the mode-change block there is guarded by a previous-value check,
+so it is idempotent whether or not the native layer fires the callback on
+programmatic writes. `isRunning` mirrors `autoModeValue !== 0` (set in
+`onEnable`/`onSettingChanged`, cleared by `resetState`/`terminate()`) —
+informational only, not a gate.
+
+**Log signatures** (same as a manual Mode switch):
+- `Mode switched to Paused — all script logic stopped.` — Stop clicked
+- `Mode switched to <Normal|Slow|F2P> — resuming on next tick.` — Start clicked
+- `Start clicked — clearing terminated state and resuming.` — Start on a
+  terminated bot (precedes the mode-switch log when the mode also changes)
+
+---
+
 ## Auto-merch loop order (`autoLoopTick`)
 
 The loop runs one tick at a time. Only one action per tick. When a flow is active,
@@ -989,6 +1017,19 @@ Stackable items and tools without note pairs return `noteId = -1` and
 GE-collected items (e.g. Smoke runes, Steel cannonballs) are untouched —
 only items whose unnoted OR noted ID matches a known idle-activity
 ingredient are deposited.
+
+**Noted-variant sell protection**: the same noted-ID gap existed on the sell
+side — noted ingredients bypassed both `has*Items` (unnoted-only
+`countInvItem`) and the sell scan's `*_EXCLUDED_SELL_IDS` filter, so a noted
+ingredient collected from a manual GE buy offer could be listed for sale
+(observed: supercompost). Fixes: (1) `hasChocolateDustItems`,
+`hasUltraCompostItems`, and `hasGoatHornItems` count noted variants via
+`countInvItemOrNoted` (exported `resolveNotedId` from `idle-deposit.ts`),
+so noted ingredients trigger the cleanup-for-GE banking path; (2)
+`getIdleActivityExcludedSellIds` expands the base excluded set with each
+item's noted variant via `expandWithNotedIds` (cached per base set), so the
+sell scan and the free-slot-for-sell abort check can never list a noted
+ingredient either.
 
 **Hot-reload recovery / startup with idle items in inventory**: after a hot
 reload (or at script start), `idleActivityPhase` resets to `'none'` (in-memory

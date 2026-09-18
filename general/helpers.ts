@@ -13,10 +13,18 @@ const MOVEMENT_STREAK = 3;
 // native Player handle on every read. isPlayerIdle() is called multiple
 // times per game tick by break/hop/safe-boundary logic, so cache the
 // handle for the duration of a single tick. Cleared on tick counter reset.
+//
+// Exported so isInWorld() in session.ts and login.ts can share the same
+// per-tick Player handle instead of creating a new one on every call.
+// During the logging_in phase, breakStep calls isInWorld() every tick
+// (from onGameTick), and loginStep also calls isInWorld() (from
+// wallClockStep when logged out, where localPlayer is null). Sharing the
+// cache avoids creating a second Player handle per tick during login
+// transitions.
 let cachedLocalPlayer: titan.Player | null = null;
 let cachedLocalPlayerTick = -1;
 
-const getLocalPlayer = (): titan.Player | null => {
+export const getLocalPlayer = (): titan.Player | null => {
     const tick = titan.state.client.tick;
     if (tick === cachedLocalPlayerTick) return cachedLocalPlayer;
     if (tick < cachedLocalPlayerTick) cachedLocalPlayerTick = -1;
