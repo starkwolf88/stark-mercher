@@ -1203,7 +1203,10 @@ interface SettingMetaBase {
     section?: Section;
     /** Render order within the section. */
     position?: number;
-    /** Start hidden. Can be flipped at runtime via setting.isHidden = true. */
+    /**
+     * Start hidden. Flip it at runtime with `setting.isHidden = true`; the
+     * value keeps its own state and stays saved either way.
+     */
     hidden?: boolean;
     /** Tooltip shown on the control. */
     tooltip?: string;
@@ -1286,15 +1289,91 @@ interface ButtonSettingInit extends SettingMetaBase {
     onClick: () => void;
 }
 
+/**
+ * One row of a checkbox matrix. A row names the column labels it actually has,
+ * so the grid's shape is declared in the same vocabulary the UI renders rather
+ * than by position. Columns a row does not name do not exist on it: they render
+ * as a blank gap and can never be checked. SDK 135+.
+ */
+interface MatrixRowInit {
+    /** Row label, rendered down the left-hand side. */
+    label: string;
+    /** Column labels present on this row. Omit for every column. */
+    cells?: string[];
+    /** Subset of `cells` that starts checked. Omit for none. */
+    checked?: string[];
+}
+
+/**
+ * A grid of checkboxes: one row per entry in `rows`, one column per entry in
+ * `columns`. Collapses a run of repetitive per-row booleans into one control,
+ * and into one setting entry instead of N. SDK 135+.
+ *
+ * The value is a cell bitmask, `bit = row * columns.length + column`, capped at
+ * 31 cells so bit 31 is never set and the mask stays a positive 32-bit int on
+ * every runtime.
+ */
+interface MatrixSettingInit extends SettingMetaBase {
+    key: string;
+    name: string;
+    /** Column labels, left to right. */
+    columns: string[];
+    /** Rows, top to bottom. */
+    rows: MatrixRowInit[];
+}
+
 interface Setting<T> {
     readonly key: string;
     readonly name: string;
+    /**
+     * The current value. Assigning saves it to the user's controller
+     * config exactly as an edit made in the side panel is, so it survives a
+     * restart (SDK 140). Writing the same value again costs nothing, and
+     * repeated writes coalesce into one save, so this is safe per tick.
+     *
+     * Values the controller pushes down do not come through this setter, so
+     * the host can always tell your write from its own replay of saved
+     * state.
+     */
     value: T;
     readonly defaultValue: T;
+    /**
+     * Show or hide this setting in the controller panel. Presentation only:
+     * the value is untouched and stays saved, so a setting hidden behind a
+     * mode switch keeps whatever the user last chose. Flipping it repaints
+     * the panel.
+     */
     isHidden: boolean;
     readonly position: number;
-    /** Restore the value to defaultValue. */
+    /** Restore the value to defaultValue, and save that. */
     reset(): void;
+}
+
+/**
+ * A checkbox grid setting. `value` is the raw cell bitmask, so `setting | 0` and
+ * `Number(setting)` give the mask and `if (setting)` is truthy when any cell is
+ * checked. Prefer `get` / `set` / `toggle` over hand-rolled bit math: they
+ * bounds-check, refuse unavailable cells, and do not hard-code the column count
+ * at every call site. SDK 135+.
+ */
+interface MatrixSetting extends Setting<number> {
+    readonly rowCount: number;
+    readonly columnCount: number;
+    /** Cells that exist, as a bitmask. A clear bit is a blank gap. */
+    readonly availability: number;
+    isAvailable(row: number, column: number): boolean;
+    /** False for an out-of-range or unavailable cell. */
+    get(row: number, column: number): boolean;
+    /** No-op on an out-of-range or unavailable cell. */
+    set(row: number, column: number, on: boolean): void;
+    /** Flips the cell and returns its new state; false when it cannot flip. */
+    toggle(row: number, column: number): boolean;
+    /** Fresh row-major snapshot, `rowCount` x `columnCount`. */
+    toGrid(): boolean[][];
+    /** Replace every cell; short rows and unavailable cells read as false. */
+    setGrid(grid: boolean[][]): void;
+    /** Numeric coercion yields the cell bitmask. */
+    valueOf(): number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1518,6 +1597,132 @@ interface ItemContainerChangedEvent {
     readonly capacity: number;
     readonly gameTick: number;
     readonly items: ItemContainerSlot[];
+}
+
+/** RuneLite-style personal offer states. SDK 136+. */
+enum GrandExchangeOfferState {
+    Unknown = -1, Empty = 0, CancelledBuy = 1, CancelledSell = 2,
+    Buying = 3, Bought = 4, Selling = 5, Sold = 6,
+    UNKNOWN = -1, EMPTY = 0, CANCELLED_BUY = 1, CANCELLED_SELL = 2,
+    BUYING = 3, BOUGHT = 4, SELLING = 5, SOLD = 6
+}
+
+/** SDK 139: values submitted to the shared C++ buying queue. */
+interface GeBuyOptions {
+    itemId: number;
+    quantity: number;
+    /** Defaults: 3 attempts, 10 seconds per offer, 3 minutes overall. */
+    maxAttempts?: number;
+    waitPerAttemptMs?: number;
+    timeoutMs?: number;
+    toInventory?: boolean;
+    noted?: boolean;
+    autoOpen?: boolean;
+    /** 0n (default) means no ceiling; each retry adds another +5% guide-price step. */
+    maxUnitPrice?: bigint;
+}
+interface GeRequest {
+    readonly requestId: bigint;
+    readonly itemId: number;
+    readonly quantity: number;
+    readonly filled: number;
+    readonly remaining: number;
+    readonly attempts: number;
+    readonly slot: number;
+    readonly phase: titan.GeRequestPhase;
+    readonly unitPrice: bigint;
+    readonly spent: bigint;
+    readonly message: string;
+    readonly isComplete: boolean;
+    readonly isSuccessful: boolean;
+}
+
+/** Immutable owned snapshot of a personal Grand Exchange offer. SDK 136+.
+ * Monetary values remain bigint on every client revision, including clients
+ * that store 64-bit prices and completed gold. Empty slots are included. */
+interface GrandExchangeOffer {
+    /** Zero-based personal offer slot. */
+    readonly slot: number;
+    readonly itemId: number;
+    readonly totalQuantity: number;
+    /** Completed quantity for either a buy or sell offer (RuneLite naming). */
+    readonly quantitySold: number;
+    /** Unit price. Use bigint arithmetic to preserve precision. */
+    readonly price: bigint;
+    /** Completed gold for either a buy or sell offer (RuneLite naming). */
+    readonly spent: bigint;
+    readonly state: GrandExchangeOfferState;
+    /** Native status value; use state for normalized offer semantics. */
+    readonly status: number;
+    /** Native direction: 0 buy, 1 sell. */
+    readonly type: number;
+}
+
+/** Cached public Wiki item metadata. Missing amounts are null; zero is a known value. SDK 137+. */
+interface ItemPriceMetadata {
+    readonly id: number;
+    readonly name: string;
+    readonly examine: string;
+    readonly buyLimit: bigint | null;
+    readonly highAlch: bigint | null;
+    readonly members: boolean;
+}
+
+/** Public Wiki high/low trade prices, not personal offer prices. All amounts/times are lossless. SDK 137+. */
+interface ItemPrice {
+    readonly id: number;
+    readonly high: bigint | null;
+    readonly low: bigint | null;
+    /** Unix seconds, or null when no trade time is available. */
+    readonly highTime: bigint | null;
+    readonly lowTime: bigint | null;
+    /** Unix seconds of the last successful fetch and last request attempt; zero before either occurs. */
+    readonly fetchedAt: bigint;
+    readonly lastAttemptAt: bigint;
+    readonly loading: boolean;
+    readonly pending: boolean;
+    /** Refresh failure, if any. Previously cached values remain available. */
+    readonly error: string;
+}
+
+/** Client-wide asynchronous public-price cache status. SDK 137+. */
+interface ItemPriceStatus {
+    /** True when a catalogue has been fetched successfully. */
+    readonly available: boolean;
+    readonly catalogLoading: boolean;
+    readonly catalogPending: boolean;
+    readonly pendingCount: number;
+    /** -1 when idle, 0 while loading the catalogue, otherwise the requested item ID. */
+    readonly loadingItem: number;
+    readonly catalogRevision: bigint;
+    readonly catalogFetchedAt: bigint;
+    readonly catalogLastAttemptAt: bigint;
+    readonly error: string;
+}
+
+/** Personal offer update, with an immutable snapshot captured for this event.
+ * Each login/attach begins with synthetic Empty events for all slots, followed
+ * by known populated offers and native slot replacements. Repeated native
+ * updates are delivered even when their contents match. The initial Empty
+ * events do not imply that every live slot is queryable yet.
+ * Retaining the event never turns it into a view of a later offer. SDK 136+. */
+/** SDK 138. Owned remembered bank; known=false differs from a known empty bank.
+ * live means observed through the open bank. Historical slots are not action targets. */
+interface BankCacheSnapshot {
+    readonly account: string;
+    readonly known: boolean;
+    readonly live: boolean;
+    readonly loading: boolean;
+    /** UTC Unix seconds of the last confirmed observation; 0 when unknown. */
+    readonly lastObservedAt: number;
+    readonly error: string;
+    readonly items: readonly Readonly<ItemContainerSlot>[];
+}
+
+interface GrandExchangeOfferChangedEvent {
+    readonly offer: GrandExchangeOffer;
+    /** Zero-based personal offer slot. */
+    readonly slot: number;
 }
 
 /** Runtime ItemDef snapshot (RuneLite Client parity).
@@ -1762,6 +1967,14 @@ class Plugin {
      * Setting<void> that auto-registers.
      */
     buttonSetting(init: ButtonSettingInit): Setting<void>;
+    /**
+     * Checkbox grid — row labels down the left, column labels across the top, a
+     * checkbox per cell. Each row names the columns it has, so a column a row
+     * omits renders as a blank gap and can never be checked. Returns a
+     * MatrixSetting that auto-registers; `value` is the cell bitmask
+     * (`bit = row * columns.length + column`). SDK 135+.
+     */
+    matrixSetting(init: MatrixSettingInit): MatrixSetting;
 
     // Section helper — auto-registers.
     section(key: string, name: string, opts?: SectionOptions): Section;
@@ -1814,6 +2027,8 @@ class Plugin {
     /** Fired when a mapped item container's slot contents differ from the
      * previous tick. Detection is tick-level diff. Added in SDK 26. */
     onItemContainerChanged?(event: ItemContainerChangedEvent): void;
+    /** RuneLite-style personal Grand Exchange offer update. SDK 136+. */
+    onGrandExchangeOfferChanged?(event: GrandExchangeOfferChangedEvent): void;
 
     onNpcSpawned?(npc: Npc): void;
     onNpcDespawned?(npc: Npc): void;
@@ -2266,6 +2481,12 @@ interface PanelElement {
             getLocalDestinationLocation(): LocalPoint | null;
             /** Active minimap red-flag destination in world coords. SDK 82+. */
             getWorldDestinationLocation(): WorldPoint | null;
+            /** Personal offer snapshot, or null for an invalid slot/unavailable data. SDK 136+. */
+            getGrandExchangeOffer(slot: number): GrandExchangeOffer | null;
+            /** All personal slots, including empty slots; [] when unavailable or offer-event delivery is pending. SDK 136+. */
+            getGrandExchangeOffers(): readonly GrandExchangeOffer[];
+            /** True when a complete personal-offer snapshot is available and queued callbacks have settled. SDK 136+. */
+            isGrandExchangeAvailable(): boolean;
             /**
              * Dispatch a fully-specified menu-action entry. Mirrors
              * `titan::ClientFacade::invokeMenuAction(...)` in C++.
@@ -2281,6 +2502,41 @@ interface PanelElement {
              * spell widget so the host binds its live item. True means queued. */
             invokeSelectedMenuAction(source: MenuActionSpec, target: MenuActionSpec,
                                      expectedSourceItemId?: number): boolean;
+        };
+
+        /** Per-character bank memory, shared across all runtimes. SDK 138+. */
+        const itemCache: {
+            /** null only on unsupported hosts; inspect known before interpreting counts. */
+            bank(): BankCacheSnapshot | null;
+            readonly isLoaded: boolean;
+            getBankItems(): readonly Readonly<ItemContainerSlot>[];
+            count(...ids: number[]): number;
+            countByName(names: readonly string[], ignore?: readonly string[]): number;
+            getItemsCountInBank(...ids: number[]): number;
+            getItemsCountInBank(...names: string[]): number;
+            getItemsCountInBank(names: readonly string[], ignore: readonly string[]): number;
+        };
+        /** Personal offers, with immutable snapshots and lossless monetary values. SDK 136+. */
+        const grandExchange: {
+            /** True when validated full offer data is available and queued offer callbacks have settled. */
+            readonly available: boolean;
+            /** Invalid slots and unavailable data return null. Slots are zero-based. */
+            offer(slot: number): GrandExchangeOffer | null;
+            /** All personal slots, including empty slots; [] when unavailable or offer-event delivery is pending. */
+            offers(): readonly GrandExchangeOffer[];
+        };
+
+        /** Shared asynchronous Wiki prices. Reads return immutable owned snapshots and never start HTTP work. SDK 137+. */
+        const itemPrices: {
+            /** Coalesced with existing work and fresh/backoff cache entries. False if unavailable or the queue is full. */
+            requestCatalog(): boolean;
+            /** Queue a positive int32 item ID; repeated requests share the same client cache. */
+            request(id: number): boolean;
+            status(): ItemPriceStatus;
+            item(id: number): ItemPriceMetadata | null;
+            /** One catalogue revision; [] if unavailable or it changes during the read. */
+            items(): readonly ItemPriceMetadata[];
+            price(id: number): ItemPrice | null;
         };
 
         const camera: {
@@ -2471,6 +2727,12 @@ interface PanelElement {
      * `titan.state.*` and `titan.queries.*`. No chaining, no setup —
      * just call.
      */
+    enum GeRequestPhase {
+        Queued = 0, Opening = 1, Selecting = 2, Quantity = 3, Pricing = 4,
+        Confirming = 5, Buying = 6, Cancelling = 7, Collecting = 8,
+        Completed = 9, Cancelled = 10, Failed = 11
+    }
+
     namespace utils {
         /**
          * Inventory state, query, and action helpers. Composes
@@ -2826,7 +3088,17 @@ interface PanelElement {
             lastHomeTeleportUsage(): Date;
             readonly isHomeTeleportOnCooldown: boolean;
             canCast(spell: MagicSpell): boolean;
+            /**
+             * Select the spell as a targeting source (WIDGET_TARGET), leaving
+             * the client awaiting a target. On its own this casts nothing.
+             */
             select(spell: MagicSpell): boolean;
+            /**
+             * Perform the spell's own Cast option: CC_OP against the catalog's
+             * menu entry. This is what a non-targeted spell such as a teleport
+             * needs. Use `castOn` for targeted spells and `select` for the
+             * "cast on ..." selection.
+             */
             cast(spell: MagicSpell): boolean;
             cast(spell: MagicSpell, actionIndex: number): boolean;
             cast(spell: MagicSpell, actionIndex: number, opcode: number): boolean;
@@ -2932,18 +3204,41 @@ interface PanelElement {
             unequipSlot(slot: number): boolean;
         };
 
-        /**
-         * Bank state, query, and action helpers. Mirrors
-         * `titan::utils::Bank::*` from
-         * [shared/titan/utils/bank.h](shared/titan/utils/bank.h).
-         * Added in SDK 44.
-         */
+        /** Host-driven shared GE queue, available directly from scripts and the JS shell.
+         * Keep enough coins in inventory/bank. No withdrawal or cache prediction occurs.
+         * Plugin disable/unload does not cancel requests; use abortRequest explicitly.
+         * Logout/account changes stop automation and leave existing offers for manual management. */
+        const ge: {
+            /** null means rejected/unsupported. Default: inventory, noted, autoOpen=false. */
+            addBuyToQueue(options: GeBuyOptions): bigint | null;
+            addBuyToQueue(itemId: number, quantity: number, autoOpen?: boolean): bigint | null;
+            /** Explicit unsupported stub. */
+            addSellToQueue(itemId: number, quantity: number): null;
+            request(id: bigint): GeRequest | null;
+            getRequests(): readonly GeRequest[];
+            getExchangeQueue(): readonly GeRequest[];
+            getQueueSize(): number;
+            isExchanging(): boolean;
+            getStatus(): string;
+            /** Abort and collect this request's partial purchase/refund. */
+            abortRequest(id: bigint): boolean;
+            /** Release a terminal handle. Pending requests cannot be released. */
+            release(id: bigint): boolean;
+            /** Requests cancellation of every pending request in the shared queue. */
+            clearExchangeQueue(): void;
+        };
+
+        /** Bank state, query, and actions. Mirrors titan::utils::Bank (SDK 44). */
         const bank: {
             /** True when the bank interface is open. */
             readonly isOpen: boolean;
             /** True when the GE inventory overlay is open. */
             readonly isGeOpen: boolean;
-            /** True when a search/amount dialog is open (Withdraw-X). */
+            /**
+             * True while the chatbox modal input line is visible -- the
+             * Withdraw-X "Enter amount:" prompt or the bank search's
+             * "Enter name:" prompt.
+             */
             readonly isSearchOpen: boolean;
             /** True when bank is in noted withdrawal mode. */
             readonly isNotedMode: boolean;
@@ -2990,6 +3285,33 @@ interface PanelElement {
             open(): boolean;
             /** Check if a bank is nearby. */
             isNearBank(distance?: number): boolean;
+        };
+
+        /**
+         * Bank deposit box state and action helpers. Mirrors
+         * `titan::utils::DepositBox::*` from
+         * [shared/titan/utils/deposit_box.h](shared/titan/utils/deposit_box.h).
+         * Every action is the interface's own component operation (CC_OP);
+         * the close X is a component operation on a dynamic child of the
+         * frame, so use `close()` rather than a raw `WIDGET_CLOSE` request.
+         * Added in SDK 133.
+         */
+        const depositBox: {
+            /** True while the deposit box interface is open. */
+            readonly isOpen: boolean;
+            /** True when the deposit quantity mode is "All". */
+            readonly isDepositAllSelected: boolean;
+
+            /** Close the deposit box through its frame's close X. */
+            close(): boolean;
+            /** Deposit the whole inventory. */
+            depositInventory(): boolean;
+            /** Deposit all worn equipment. */
+            depositWorn(): boolean;
+            /** Deposit the looting bag's contents. */
+            depositLootingBag(): boolean;
+            /** Select the "All" deposit quantity; true immediately when already selected. */
+            selectDepositAll(): boolean;
         };
     }
 
@@ -3567,9 +3889,10 @@ interface PanelElement {
         /**
          * Resolve the RUNTIME ItemDef for the given id. Game-thread calls may
          * invoke the native resolver on a live-table miss. Off-thread calls
-         * emit a rate-limited warning, check the live table without invoking
-         * native code, then fall back to raw cache metadata when absent (check
-         * `runtimeResolved`). Returns null when neither source contains the id.
+         * check the live table without invoking native code (a rate-limited
+         * warning fires only when that table misses), then fall back to raw
+         * cache metadata when absent (check `runtimeResolved`). Returns null
+         * when neither source contains the id.
          * Added in SDK 26.
          */
         function itemDef(id: number): ItemComposition | null;
